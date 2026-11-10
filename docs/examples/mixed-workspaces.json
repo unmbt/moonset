@@ -1,0 +1,42 @@
+{
+  "$schema": "../schema/config-v1.json",
+  "schemaVersion": 1,
+  "experimental": {
+    "mixedWorkspaces": {
+      "mode": "unified",
+      "workspaces": [
+        {
+          "id": "native",
+          "ecosystem": "moonbit",
+          "root": "native",
+          "manager": "moon",
+          "includeRoot": false
+        },
+        {
+          "id": "js",
+          "ecosystem": "npm",
+          "root": ".",
+          "manager": "pnpm",
+          "includeRoot": false
+        }
+      ],
+      "units": {
+        "moonbit:acme/engine": { "publish": false },
+        "npm:@acme/engine": {
+          "publisher": "npm",
+          "tagFormat": "npm/{name}@{version}"
+        }
+      },
+      "bridges": [
+        {
+          "consumer": "npm:@acme/engine",
+          "producer": "moonbit:acme/engine",
+          "kind": "build",
+          "bump": "patch",
+          "waitFor": "build"
+        }
+      ],
+      "lockfiles": "refresh"
+    }
+  }
+}

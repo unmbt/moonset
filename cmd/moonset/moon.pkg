@@ -1,0 +1,5 @@
+// import {
+//   "unmbt/moonset" @lib,
+// }
+
+pkgtype(kind: "executable")

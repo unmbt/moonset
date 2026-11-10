@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moonset.dev/schema/config-v1.json",
+  "title": "moonset configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "changelog": {
+      "oneOf": [
+        { "type": "boolean", "const": false },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generator"],
+          "properties": {
+            "generator": { "type": "string", "minLength": 1 },
+            "file": { "type": "string", "minLength": 1 },
+            "options": { "type": "object" }
+          }
+        }
+      ]
+    },
+    "commit": {
+      "oneOf": [
+        { "type": "boolean", "const": false },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["never", "add", "version", "both"] },
+            "addMessage": { "type": "string" },
+            "versionMessage": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "baseBranch": { "type": "string", "minLength": 1 },
+    "access": { "enum": ["public", "restricted"] },
+    "updateInternalDependencies": { "enum": ["never", "patch", "minor", "out-of-range"] },
+    "changedFilePatterns": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "fixed": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
+    "linked": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
+    "ignore": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "privatePackages": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "boolean" },
+        "tag": { "type": "boolean" },
+        "publish": { "type": "boolean" }
+      }
+    },
+    "pre": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "directory": { "type": "string", "minLength": 1 }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "useCalculatedVersion": { "type": "boolean" },
+        "prereleaseTemplate": { "type": "string", "minLength": 1 }
+      }
+    },
+    "tag": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "afterPublish": { "type": "boolean" },
+        "format": { "type": "string", "minLength": 1 },
+        "push": { "type": "boolean" }
+      }
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["moon", "command", "api"] },
+        "registry": { "type": "string", "minLength": 1 },
+        "dryRunFirst": { "type": "boolean" },
+        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "tokenEnv": { "type": "string", "minLength": 1 }
+      }
+    },
+    "format": { "oneOf": [{ "type": "boolean", "const": false }, { "enum": ["auto", "prettier", "oxfmt", "biome", "dprint"] }] },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo": { "type": "string" },
+        "links": { "type": "boolean" },
+        "thanks": { "type": "boolean" }
+      }
+    },
+    "experimental": {
+      "type": "object",
+      "properties": {
+        "mixedWorkspaces": { "$ref": "#/$defs/mixedWorkspaces" }
+      }
+    }
+  },
+  "$defs": {
+    "mixedWorkspaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "workspaces"],
+      "properties": {
+        "mode": { "enum": ["coexist", "unified"] },
+        "workspaces": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ecosystemWorkspace" }
+        },
+        "units": {
+          "type": "object",
+          "propertyNames": { "pattern": "^(moonbit|npm|cargo):[^\\s]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "publish": { "type": "boolean" },
+              "publisher": { "type": "string", "minLength": 1 },
+              "tagFormat": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "bridges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["consumer", "producer", "kind", "bump", "waitFor"],
+            "properties": {
+              "consumer": { "$ref": "#/$defs/unitId" },
+              "producer": { "$ref": "#/$defs/unitId" },
+              "kind": { "const": "build" },
+              "bump": { "enum": ["patch", "minor", "major"] },
+              "waitFor": { "enum": ["build", "publish"] }
+            }
+          }
+        },
+        "lockfiles": { "enum": ["refresh", "verify-only"] }
+      }
+    },
+    "unitId": {
+      "type": "string",
+      "pattern": "^(moonbit|npm|cargo):[^\\s]+$"
+    },
+    "ecosystemWorkspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ecosystem", "root", "manager", "includeRoot"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "ecosystem": { "enum": ["moonbit", "npm", "cargo"] },
+        "root": { "type": "string", "minLength": 1 },
+        "manager": { "enum": ["moon", "npm", "pnpm", "cargo"] },
+        "includeRoot": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "ecosystem": { "const": "moonbit" } } },
+          "then": { "properties": { "manager": { "const": "moon" } } }
+        },
+        {
+          "if": { "properties": { "ecosystem": { "const": "npm" } } },
+          "then": { "properties": { "manager": { "enum": ["npm", "pnpm"] } } }
+        },
+        {
+          "if": { "properties": { "ecosystem": { "const": "cargo" } } },
+          "then": { "properties": { "manager": { "const": "cargo" } } }
+        }
+      ]
+    }
+  }
+}
+
+
+
