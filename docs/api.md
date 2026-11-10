@@ -2,6 +2,20 @@
 
 > API 目标：让 MoonBit 库、CI action 和外部工具复用同一个模型与 planner。名称在实现前为设计名，发布时以生成的 `.mbti` 为准。
 
+Phase 1 实际包为 `unmbt/moonset/model`、`unmbt/moonset/engine`（无 I/O）、`unmbt/moonset/workspace`（core/async 读取）和 `unmbt/moonset/cli`。模块根包 re-export 常用模型和入口。当前接口为 alpha，不承诺完整 v1 API 已稳定。
+
+```text
+engine.parse_config(source, path?) -> Config
+engine.parse_changeset(source, id~, path~, mixed?) -> Changeset
+engine.parse_pre_state(source, path?) -> PreState
+engine.build_plan(snapshot, changesets, pre?, generated_at?) -> ReleasePlan
+engine.status_json(snapshot, plan, changeset_directory?) -> Json
+workspace.discover(cwd, config_path?, since?) -> LoadedWorkspace  // async
+cli.run(args_without_executable) -> Int                         // async
+```
+
+纯函数使用 `MoonsetError` 报告输入错误；I/O 层可能返回底层文件或进程错误，CLI 将其转换为结构化诊断及退出码。LoadedWorkspace 同时包含 snapshot、changesets、pre 和 changeset 目录。`build_plan` 不读取任何外部状态。下文接口表和 adapter traits 保留为后续阶段设计。
+
 ## 1. 公共包
 
 | 包 | 责任 | 稳定性 |
@@ -11,7 +25,7 @@
 | `@moonset/changelog` | 内置生成器、`ChangelogGenerator`、registry | v1 稳定 |
 | `@moonset/adapters` | Git、filesystem、publisher、clock 的接口和参考实现 | v1 实验，v2 稳定 |
 
-CLI 只调用 engine facade；不能复制 planner 逻辑。
+CLI 通过 workspace 读取输入，再调用同一个 engine planner；不能复制规划逻辑。
 
 ## 2. 核心函数形状
 

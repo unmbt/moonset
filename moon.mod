@@ -11,16 +11,21 @@
 
 name = "unmbt/moonset"
 
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 
 readme = "README.mbt.md"
 
-repository = ""
+repository = "https://github.com/unmbt/moonset"
 
 license = "MIT"
 
-keywords = []
+keywords = [ ]
 
 preferred_target = "native"
 
-description = ""
+description = "Spec-driven MoonBit workspace release planning"
+
+import {
+  "mizchi/semver@0.1.2",
+  "unmbt/moon-manifest@0.2.0-alpha.1",
+}

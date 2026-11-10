@@ -1,0 +1,178 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/model"
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/json",
+}
+
+// Values
+pub fn canonical_json(@json.Json) -> String
+
+pub fn diagnostic(String, String, path? : String, line? : Int32, column? : Int32, json_path? : String) -> Diagnostic
+
+pub fn fingerprint(@json.Json) -> String
+
+// Errors
+pub(all) suberror MoonsetError {
+  Invalid(Diagnostic)
+  Io(String)
+}
+
+// Types and methods
+#derive(Eq, @debug.Debug)
+pub(all) enum Bump {
+  None
+  Patch
+  Minor
+  Major
+}
+pub fn Bump::equal(Self, Self) -> Bool
+pub fn Bump::not_equal(Self, Self) -> Bool
+pub fn Bump::rank(Self) -> Int32
+pub fn Bump::text(Self) -> String
+pub fn Bump::to_repr(Self) -> @debug.Repr
+
+pub(all) struct Change {
+  unit_id : String
+  bump : Bump
+}
+
+pub(all) struct Changeset {
+  id : String
+  releases : Array[Change]
+  summary : String
+  path : String
+}
+pub fn Changeset::to_json(Self) -> @json.Json
+
+pub(all) struct Config {
+  fixed : Array[Array[String]]
+  linked : Array[Array[String]]
+  ignore : Array[String]
+  update_dependencies : Bump
+  update_dependents : String
+  changed_patterns : Array[String]
+  pre_file : String
+  mixed : Bool
+  raw : @json.Json
+}
+pub fn Config::default() -> Self
+
+pub(all) struct DependencyEdge {
+  producer : String
+  requirement : String
+  kind : DependencyKind
+  path : String
+  start : Int32
+  end : Int32
+}
+
+pub(all) struct DependencyIntent {
+  consumer : String
+  producer : String
+  path : String
+  old_requirement : String
+  new_requirement : String
+  start : Int32
+  end : Int32
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum DependencyKind {
+  Runtime
+  Build
+}
+pub fn DependencyKind::equal(Self, Self) -> Bool
+pub fn DependencyKind::not_equal(Self, Self) -> Bool
+pub fn DependencyKind::text(Self) -> String
+pub fn DependencyKind::to_repr(Self) -> @debug.Repr
+
+#derive(@debug.Debug)
+pub(all) struct Diagnostic {
+  code : String
+  message : String
+  path : String
+  line : Int32
+  column : Int32
+  json_path : String?
+}
+pub fn Diagnostic::to_json(Self) -> @json.Json
+pub fn Diagnostic::to_repr(Self) -> @debug.Repr
+
+pub(all) struct EcosystemWorkspace {
+  id : String
+  root : String
+  ecosystem : String
+  manager : String
+}
+
+pub(all) struct Ownership {
+  path : String
+  field : String
+  owner : String
+}
+
+pub(all) struct PreState {
+  mode : String
+  tag : String
+  initial_versions : Map[String, String]
+  next_numbers : Map[String, Int32]
+  consumed : Array[String]
+}
+pub fn PreState::to_json(Self) -> @json.Json
+
+pub(all) struct Release {
+  unit_id : String
+  old_version : String
+  new_version : String
+  level : Bump
+  reasons : Array[String]
+  changesets : Array[String]
+  publish : Bool
+}
+pub fn Release::to_json(Self) -> @json.Json
+
+pub(all) struct ReleasePlan {
+  fingerprint : String
+  releases : Array[Release]
+  dependency_updates : Array[DependencyIntent]
+  affected_paths : Array[String]
+  changesets : Array[Changeset]
+  next_pre_state : PreState?
+  warnings : Array[Diagnostic]
+  generated_at : String?
+}
+pub fn ReleasePlan::to_json(Self) -> @json.Json
+
+pub(all) struct ReleaseUnit {
+  id : String
+  native_name : String
+  ecosystem : String
+  workspace_id : String
+  root : String
+  manifest : String
+  version : String?
+  visibility : String
+  publish : Bool
+  dependencies : Array[DependencyEdge]
+}
+
+pub(all) struct WorkspaceSnapshot {
+  root : String
+  workspaces : Array[EcosystemWorkspace]
+  units : Array[ReleaseUnit]
+  ownership : Array[Ownership]
+  unmanaged : Array[String]
+  config : Config
+  sources : Map[String, String]
+  changed_files : Array[String]
+  warnings : Array[Diagnostic]
+  git_head : String?
+}
+pub fn WorkspaceSnapshot::to_json(Self) -> @json.Json
+
+// Type aliases
+pub type UnitId = String
+
+// Traits

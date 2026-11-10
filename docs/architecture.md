@@ -1,5 +1,7 @@
 # 系统架构
 
+Phase 1 的实际依赖为 `cmd/moonset → cli → workspace + engine → model`；workspace 使用 manifest/core/async，engine 只包含纯解析、验证、版本规则和规划，不依赖 workspace 或 async。根包是便捷 facade。以下图和 internal 布局描述后续完整架构，executor、publisher、generator 尚未实现。
+
 ## 1. 分层
 
 ```mermaid

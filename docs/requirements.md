@@ -40,10 +40,10 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 |---|---|---|---|
 | FR-001 | 初始化 | `init` 创建 `.changeset/`、默认 `config.json` 和 README；重复运行不覆盖用户文件，并给出可机器读取结果。 | Proposed |
 | FR-002 | 记录变更 | `add` 支持交互式和非交互式输入，生成唯一 Markdown changeset；支持 `major/minor/patch/none`，禁止未知包名和空摘要（除非显式 `--empty`）。 | Proposed |
-| FR-003 | 发现 workspace | 按 release domain 发现已授权的 workspace；MoonBit adapter 读取 `moon.work` 成员和单模块项目，输出稳定排序的 ReleaseUnit，区分编译包和发布模块。 | Proposed |
-| FR-004 | 解析 changeset | 解析 YAML front matter 和 Markdown 摘要，报告文件路径、行号、包名和版本类型；任何一个文件无效时规划失败且不写盘。 | Proposed |
-| FR-005 | 生成 release plan | 合并 changeset、fixed/linked 组、内部依赖和预发布状态，输出 old/new version、原因和受影响文件；同样输入必须得到同样计划。 | Proposed |
-| FR-006 | 查看状态 | `status` 显示待处理 changeset、预计版本、缺失 changeset 和配置错误；支持 `--since`、`--verbose`、`--output json`。 | Proposed |
+| FR-003 | 发现 workspace | 按 release domain 发现已授权的 workspace；MoonBit adapter 读取 `moon.work` 成员和单模块项目，输出稳定排序的 ReleaseUnit，区分编译包和发布模块。 | Implemented (MoonBit) |
+| FR-004 | 解析 changeset | 解析平面 YAML front matter 子集和 Markdown 摘要，报告文件路径、行号、包名和版本类型；任何一个文件无效时规划失败且不写盘。 | Implemented |
+| FR-005 | 生成 release plan | 合并 changeset、fixed/linked 组、内部依赖和预发布状态，输出 old/new version、原因和受影响文件；同样输入必须得到同样计划。 | Implemented (analysis) |
+| FR-006 | 查看状态 | `status` 显示待处理 changeset、预计版本、缺失 changeset 和配置错误；支持 `--since`、`--verbose`、`--output json`。 | Implemented |
 | FR-007 | 应用版本 | `version` 原子更新 `moon.mod`、相关依赖范围、各包 `CHANGELOG.md`，消费已应用 changeset，并保留可审阅 diff。 | Proposed |
 | FR-008 | 预发布 | `pre enter <tag>`、`pre exit` 管理 `.changeset/pre.json`；重复进入、错误退出和标签非法时给出明确错误。 | Proposed |
 | FR-009 | 发布 | `publish` 只发布计划中有新版本且允许发布的模块，支持 `--dry-run`、自定义 registry/publisher 和失败重试；默认不自动执行 `version`。 | Proposed |

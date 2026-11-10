@@ -20,7 +20,8 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
   "commit": { "mode": "never", "addMessage": "chore: add changeset", "versionMessage": "chore: release" },
   "baseBranch": "main",
   "access": "public",
-  "updateInternalDependencies": "out-of-range",
+  "updateInternalDependencies": "patch",
+  "updateInternalDependents": "out-of-range",
   "changedFilePatterns": ["**"],
   "fixed": [],
   "linked": [],
@@ -43,7 +44,8 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 | `commit` | object/false | `mode` 为 `never`、`add`、`version`、`both`；默认不自动提交。 |
 | `baseBranch` | string | `status --since` 和 Action 默认比较分支。 |
 | `access` | `public/restricted` | 传给 publisher 的可见性请求；最终由 registry 权限决定。 |
-| `updateInternalDependencies` | `never/patch/minor/out-of-range` | 依赖者何时更新版本范围。 |
+| `updateInternalDependencies` | `patch/minor` | 已参与发布的单元更新依赖声明时，上游变更的最低级别；越界时始终更新。默认 patch。 |
+| `updateInternalDependents` | `out-of-range/always` | 是否把尚未参与发布的依赖者带入 patch 发布；默认仅越界时带入。 |
 | `fixed` | string[][] | 每组包共享同一目标版本。支持精确名字，glob 在 v1.1 冻结。 |
 | `linked` | string[][] | 一组包共享版本线，但没有变更时不强制发布。 |
 | `ignore` | string[] | 暂时跳过的包；若与非 ignore 包存在必须联动的依赖，规划失败。 |
@@ -65,7 +67,7 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
   "baseBranch": "main",
   "access": "public",
   "fixed": [["unmbt/core", "unmbt/cli"]],
-  "linked": [["unmbt/plugins/*"]],
+  "linked": [["unmbt/plugin-a", "unmbt/plugin-b"]],
   "updateInternalDependencies": "patch",
   "privatePackages": { "version": true, "tag": false, "publish": false },
   "changelog": {
@@ -82,11 +84,13 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 
 - 默认值必须在 `Config::default` 中集中定义，不能散落到命令实现。
 - CLI flag 覆盖配置，但不能把安全检查静默关闭；如 `--allow-uncommitted` 必须出现在 plan 和日志中。
-- `fixed`、`linked`、`ignore` 的 glob 展开在 workspace 快照上完成，输出中记录实际匹配包。
+- Phase 1 的 `fixed`、`linked`、`ignore` 仅接受精确名称；glob 返回 unsupported-capability。`changedFilePatterns` 支持 `*`、`**`、`?`，相对模块目录匹配。
 - `changelog` 和 `publisher` 的自定义名称只能引用注册的 MoonBit API 或显式允许的外部命令。
 - 配置错误在任何写操作前报告；错误消息包含 JSON path，例如 `$.tag.format`。
 
 ## 6. 混合 workspace（实验草案）
+
+Phase 1 接受 MoonBit-only 的显式 coexist 分区；同目录 JS/Cargo 文件报告 unmanaged。显式声明 npm/Cargo workspace、unified 模式或非空 bridges 会报能力错误。其他执行阶段字段只做配置验证，不执行生成器、格式化器或 publisher。缺失默认配置时采用默认值；显式指定不存在的配置时报错。
 
 详见 [混合 workspace 设计](mixed-workspaces.md) 和 [完整配置示例](examples/mixed-workspaces.json)。该扩展已加入本地 JSON Schema，以便验证文档形状；通过 schema 不代表 CLI 已实现该能力。
 

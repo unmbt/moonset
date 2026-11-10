@@ -2,6 +2,10 @@
 
 测试跟随 SDD 需求 ID 命名，避免只测试实现细节。
 
+Phase 1 实际验证：`moon test --target native`（engine 解析/规划 golden 与 workspace 临时目录/Git 集成）、`moon run scripts/cli-integration.mbtx`（真实可执行文件黑盒），以及 `moon run scripts/embed-schema.mbtx --check`（编译内置 schema 与文档一致）。`.github/workflows/ci.yml` 在 Windows/Linux/macOS 固定 MoonBit 0.10.20 执行 check/test/build、CLI、格式与接口检查。
+
+这些测试覆盖 FR-003/004/005/006，FR-011/012/016 的 Phase 1 子集，以及 FR-018/019/023 的共存边界。后续 init/version/publish、npm adapter 和 App 的测试矩阵尚未宣称通过。
+
 ## 1. 测试层次
 
 | 层次 | 内容 | 依赖 | 典型命令 |

@@ -2,7 +2,7 @@
 
 > Roadmap 只描述可交付能力，不承诺日历日期。每个阶段完成后必须满足退出条件，才能进入下一阶段。
 
-## Phase 0 — 规格与探针（当前）
+## Phase 0 — 规格与探针（已建立基线）
 
 交付：需求、命令契约、配置、数据模型、架构、API、自动化和 ADR；建立最小 fixtures 和工具链探针。
 
@@ -14,6 +14,8 @@
 - 补充评审 [混合 workspace 设计](mixed-workspaces.md) 与 ADR-006，明确共存分区和统一管理；不把“可换 publisher”当成已经支持混合 workspace。
 
 ## Phase 1 — 核心读模型与规划器
+
+实现已落地；验收命令与边界见 [Phase 1 契约](phase-1-contract.md)。完整发布流程完成前保持 alpha。共享 manifest 依赖采用经过三平台 CI 的 0.2.0 alpha；`native-toolchain` 不属于此阶段依赖。
 
 交付：workspace discovery、无损 manifest 读取、changeset parser、config loader、SemVer、依赖图和纯 release planner；实现 `status` 与 `publish-plan`。
 
