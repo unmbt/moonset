@@ -32,6 +32,13 @@
 解析：UTF-8/BOM/CRLF、重复字段、无效 front matter、空 changeset。
 规划：单模块、依赖链/环、版本组、ignore、MVS、两种传播策略、预发布、稳定输出。
 集成：工作目录/HEAD 隔离、分叉历史、重命名、无效 ref、退出码、文件覆盖保护、失败无写入。
-CI：Windows/Linux/macOS native check/test/build；生成接口、格式、schemaVersion 1 契约检查。
+CI：Windows/Linux/macOS ARM64 native check/test/build；macOS 使用 `macos-15` runner，不支持 Intel macOS。生成接口、格式、schemaVersion 1 契约检查。
 
 共享库先发布 alpha 并从注册表验证安装；moonset 稳定版等待完整发布工作流，不随 Phase 1 发布。
+
+## 验证记录（2026-11-11）
+
+- 工具链：`moon 0.1.20261104`、`moonc v0.10.20+65efd5b93`；CI 固定对应 compiler/core 版本。
+- `moon-manifest@0.2.0-alpha.2` 已通过 [三平台 CI](https://github.com/unmbt/moon-manifest/actions/runs/42852107505) 并完成 [注册表发布](https://github.com/unmbt/moon-manifest/actions/runs/42855197053)。Moonset 已从注册表下载并固定此依赖。
+- 本地 native check（`--deny-warn`）、22 项测试、CLI 黑盒集成均通过。脚本模式的 core/async 实验性提示仍由工具链输出。
+- Moonset 的 [三平台验收](https://github.com/unmbt/moonset/actions/runs/42852123221) 包含 native check/test/release build、CLI 集成、schema 同步、格式及公共接口检查；依赖升级后由同一 workflow 再次验证。

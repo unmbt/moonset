@@ -271,7 +271,7 @@ Asynchrony and processes build on `moonbitlang/core/async`; program names and ar
 
 | Phase | Theme | Status |
 |:-:|---|:-:|
-| 0 | Specification & probes | 🌗 In progress |
+| 0 | Specification & probes | Baseline established |
 | 1 | Core read model & planner (`status` · `publish-plan`) | alpha implemented |
 | 2 | Contribution workflow (`init` · `add` · `pre`) | ⏳ |
 | 3 | Versioning & changelog (`version` · `tag`) | ⏳ |
