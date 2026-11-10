@@ -1,0 +1,23 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/workspace"
+
+import {
+  "unmbt/moonset/model",
+}
+
+// Values
+pub async fn discover(String, config_path? : String, since? : String) -> LoadedWorkspace
+
+// Errors
+
+// Types and methods
+pub(all) struct LoadedWorkspace {
+  snapshot : @model.WorkspaceSnapshot
+  changesets : Array[@model.Changeset]
+  pre : @model.PreState?
+  changeset_directory : String
+}
+
+// Type aliases
+
+// Traits

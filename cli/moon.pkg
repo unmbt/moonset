@@ -1,0 +1,19 @@
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/model",
+  "unmbt/moonset/engine",
+  "unmbt/moonset/workspace",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/stdio",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/env",
+  "moonbitlang/core/path",
+}
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async",
+    "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/stdio",
+  ],
+)

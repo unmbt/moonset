@@ -10,7 +10,7 @@ A refined versioning & changelog companion for MoonBit workspaces
 
 <br/>
 
-![Status](https://img.shields.io/badge/status-SDD%20Draft%200.1-8A7FBA?style=flat-square)
+![Status](https://img.shields.io/badge/status-Phase%201%20alpha-8A7FBA?style=flat-square)
 ![MoonBit](https://img.shields.io/badge/MoonBit-native-3B82F6?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square)
 ![Inspired by](https://img.shields.io/badge/inspired%20by-Changesets-F59E0B?style=flat-square)
@@ -33,8 +33,16 @@ A refined versioning & changelog companion for MoonBit workspaces
 它专为 MoonBit 生态量身打造——理解 `moon.mod` 与 workspace，尊重 Mooncakes 的发布流程，亦为 Git、GitHub Actions 与 GitHub App 预留了优雅的接入之处。
 
 > [!NOTE]
-> **当前状态：规格先行（Spec-Driven Design）。**
-> 本仓库目前处于 SDD 基线阶段，需求、命令契约、配置、架构与 API 均已成文，实现将依路线图逐阶段落地。下文所述命令为**设计契约**，尚未全部可用。
+> **当前状态：Phase 1 alpha。**
+> 已实现 MoonBit workspace 发现、changeset/config 解析、纯发布规划、`status` 和 `publish-plan`。其余命令仍为后续阶段设计；JS/Cargo adapter 尚未接入。详见 [Phase 1 契约](docs/phase-1-contract.md)。
+
+```sh
+moon run cmd/moonset -- status --json
+moon run cmd/moonset -- publish-plan --pretty
+moon run cmd/moonset -- status --since main --json
+```
+
+`publish-plan` 输出不可执行的分析计划；不会改版本或发布。`--since` 使用已提交的 HEAD 快照，空 changeset 可以放行 PR 检查。
 
 ### 理念
 
@@ -126,8 +134,8 @@ moonset/
 
 | 阶段 | 主题 | 状态 |
 |:-:|---|:-:|
-| 0 | 规格与探针 | 🌗 进行中 |
-| 1 | 核心读模型与规划器（`status` · `publish-plan`） | ⏳ |
+| 0 | 规格与探针 | 已建立基线 |
+| 1 | 核心读模型与规划器（`status` · `publish-plan`） | alpha 已实现 |
 | 2 | 贡献工作流（`init` · `add` · `pre`） | ⏳ |
 | 3 | 版本与 Changelog（`version` · `tag`） | ⏳ |
 | 4 | 发布与官方自动化（`pack` · `publish`） | ⏳ |
@@ -170,8 +178,8 @@ A fine package is measured not only by the elegance of its code, but by the clar
 Crafted for the MoonBit ecosystem, it understands `moon.mod` and workspaces, respects the Mooncakes publishing flow, and leaves graceful extension points for Git, GitHub Actions and GitHub Apps.
 
 > [!NOTE]
-> **Current status: specification first (Spec-Driven Design).**
-> The repository is at its SDD baseline — requirements, command contracts, configuration, architecture and APIs are written down, and implementation will arrive phase by phase along the roadmap. The commands below are **design contracts**; not all of them are available yet.
+> **Current status: Phase 1 alpha.**
+> MoonBit workspace discovery, changeset/config parsing, pure release planning, `status`, and `publish-plan` are implemented. Other commands and JS/Cargo adapters remain future contracts. Plans are analysis-only and cannot execute releases.
 
 ### Philosophy
 
@@ -263,8 +271,8 @@ Asynchrony and processes build on `moonbitlang/core/async`; program names and ar
 
 | Phase | Theme | Status |
 |:-:|---|:-:|
-| 0 | Specification & probes | 🌗 In progress |
-| 1 | Core read model & planner (`status` · `publish-plan`) | ⏳ |
+| 0 | Specification & probes | Baseline established |
+| 1 | Core read model & planner (`status` · `publish-plan`) | alpha implemented |
 | 2 | Contribution workflow (`init` · `add` · `pre`) | ⏳ |
 | 3 | Versioning & changelog (`version` · `tag`) | ⏳ |
 | 4 | Publishing & official automation (`pack` · `publish`) | ⏳ |

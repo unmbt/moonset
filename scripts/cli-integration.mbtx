@@ -1,0 +1,95 @@
+----
+import {
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/core/path",
+  "moonbitlang/core/json",
+}
+----
+async fn write(root : String, path : String, text : String) -> Unit {
+  let file = @path.Path(root).join(@path.Path(path)).to_string()
+  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_exist=true)
+  @fs.write_text(file, text)
+}
+
+async fn git(root : String, args : Array[String]) -> String {
+  let result = @shell.Cmd("git", args, cwd=root).output()
+  if result.exit_code() != 0 { fail("git " + args.join(" ") + ": " + result.stderr()) }
+  result.stdout().trim().to_owned()
+}
+
+async fn invoke(binary : String, root : String, args : Array[String], expected : Int) -> Json {
+  let result = @shell.Cmd(binary, ["--cwd", root] + args).output()
+  guard result.exit_code() == expected else {
+    fail("Expected exit \{expected}, got \{result.exit_code()}: \{result.stderr()}\n\{result.stdout()}")
+  }
+  @json.parse(result.stdout())
+}
+
+async fn main {
+  @shell.Cmd("moon", ["build", "--target", "native"]).run()
+  let project = @env.current_dir().unwrap()
+  let artifact = @path.Path(project).join(@path.Path("_build/native/debug/build/cmd/moonset/moonset")).to_string()
+  let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
+  let root = @fs.tmpdir(prefix="moonset-cli-")
+  defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
+  ignore(git(root, ["init", "-b", "main"]))
+  ignore(git(root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(root, ["config", "user.email", "moonset@example.invalid"]))
+  let manifest = "name = \"acme/app\"\nversion = \"0.1.0\"\n"
+  write(root, "moon.mod", manifest)
+  write(root, ".changeset/config.json", "{}")
+  write(root, ".changeset/pending.md", "---\nacme/app: minor\n---\nExisting release")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "base"]))
+  let base = git(root, ["rev-parse", "HEAD"])
+  ignore(git(root, ["switch", "-c", "feature"]))
+  write(root, "src/main.mbt", "// feature")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "code without changeset"]))
+  let missing = invoke(binary, root, ["status", "--since", base, "--json"], 1)
+  assert_true(missing is { "errors": [{ "code": "missing-changeset", .. }], .. })
+  write(root, ".changeset/empty.md", "---\r\n---\r\nNo release required")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "empty changeset"]))
+  let passing = invoke(binary, root, ["status", "--since", base, "--output", "json"], 0)
+  assert_true(passing is { "hasRelease": False, "errors": [], "changesets": [{ "id": "empty", .. }], .. })
+  ignore(git(root, ["mv", ".changeset/empty.md", ".changeset/renamed.md"]))
+  ignore(git(root, ["commit", "-m", "rename changeset"]))
+  ignore(git(root, ["switch", "main"]))
+  write(root, "base-only.txt", "unrelated base branch change")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "base diverges"]))
+  ignore(git(root, ["switch", "feature"]))
+  write(root, "moon.mod", "invalid dirty manifest")
+  let before = git(root, ["status", "--porcelain"])
+  let head = invoke(binary, root, ["status", "--since", "main", "--json"], 0)
+  assert_true(head is { "changesets": [{ "id": "renamed", .. }], "warnings": [{ "code": "uncommitted-excluded", .. }], .. })
+  assert_eq(git(root, ["status", "--porcelain"]), before)
+  let invalid_ref = invoke(binary, root, ["status", "--since", "missing-reference", "--json"], 3)
+  assert_true(invalid_ref is { "errors": [{ "code": "external-error", .. }], .. })
+  let invalid_input = invoke(binary, root, ["status", "--json"], 2)
+  assert_true(invalid_input is { "errors": [{ "path": "moon.mod", .. }], .. })
+  let output = @path.Path(root).join(@path.Path("plan.json")).to_string()
+  ignore(invoke(binary, root, ["publish-plan", "--output", output], 2))
+  assert_true(!@fs.exists(output))
+  write(root, "moon.mod", manifest)
+  let regular = invoke(binary, root, ["status", "--json"], 0)
+  assert_true(regular is { "releases": [{ "newVersion": "0.2.0", .. }], .. })
+  ignore(invoke(binary, root, ["publish-plan", "--output", "moon.mod"], 2))
+  ignore(invoke(binary, root, ["publish-plan", "--output", "src/main.mbt"], 2))
+  assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("src/main.mbt")).to_string()), "// feature")
+  assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()), manifest)
+  let exported = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output, "--pretty"]).output()
+  if exported.exit_code() != 0 { fail("export: " + exported.stdout() + exported.stderr()) }
+  assert_eq(exported.stdout(), "")
+  assert_true(@json.parse(@fs.read_text(output)) is { "stage": "analysis", "executable": False, "schemaVersion": 1, .. })
+  let replaced = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output]).output()
+  if replaced.exit_code() != 0 { fail(replaced.stderr()) }
+  let first = invoke(binary, root, ["publish-plan"], 0)
+  let second = invoke(binary, root, ["publish-plan"], 0)
+  assert_eq(first, second)
+  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, exits, JSON and no-write checks passed")
+}

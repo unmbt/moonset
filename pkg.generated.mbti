@@ -1,0 +1,46 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset"
+
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/model",
+  "unmbt/moonset/workspace",
+}
+
+// Values
+pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
+
+pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
+
+pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
+
+pub fn parse_config(String, path? : String) -> @model.Config raise @model.MoonsetError
+
+pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
+
+pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+pub using @model {type Changeset}
+
+pub using @model {type Diagnostic}
+
+pub using @workspace {type LoadedWorkspace}
+
+pub using @model {type MoonsetError}
+
+pub using @model {type PreState}
+
+pub using @model {type ReleasePlan}
+
+pub using @model {type ReleaseUnit}
+
+pub type UnitId = String
+
+pub using @model {type WorkspaceSnapshot}
+
+// Traits

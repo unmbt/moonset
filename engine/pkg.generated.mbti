@@ -1,0 +1,36 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/engine"
+
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/model",
+}
+
+// Values
+pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
+
+pub fn canonical_id(String) -> String
+
+pub fn matches_pattern(String, String) -> Bool
+
+pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
+
+pub fn parse_config(String, path? : String) -> @model.Config raise @model.MoonsetError
+
+pub fn parse_json(String, String) -> @json.Json raise @model.MoonsetError
+
+pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
+
+pub fn relevant_changes(@model.WorkspaceSnapshot, changeset_directory? : String) -> Array[String]
+
+pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+pub fn version_matches(String, String) -> Bool raise @model.MoonsetError
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

@@ -1,5 +1,11 @@
 # 数据模型
 
+## Phase 1 已实现模型
+
+精确接口见 `model/pkg.generated.mbti`。当前 `UnitId` 是经过输入边界规范化的 String 别名；`DependencyEdge` 保留生产者、声明版本、依赖种类与原始字节跨度，`Ownership` 记录字段所有者。MoonBit 模块依赖是 runtime；构建桥暂不执行。
+
+`ReleasePlan` 当前是不可执行的 analysis 计划：`releases`、`dependencyUpdates`、`affectedPaths`、`changesets`、`nextPreState`、`warnings`。`generatedAt` 由调用方注入且不参与指纹。指纹覆盖快照、原始输入、有效配置、依赖与 pre 状态，使用确定性的 FNV-1a 64（仅分析标识，不能作为未来执行授权或安全校验）。对象键使用 MoonBit String 的稳定 shortlex 排序；数组使用固定排序。下面的 FileEdit、ArtifactIntent、PublishResult 属于后续阶段模型。
+
 ## 1. 核心实体
 
 ```text

@@ -1,5 +1,7 @@
 # CLI 命令契约
 
+Phase 1 已提供 `status`、`publish-plan`、`--help`、`--version`。其余子命令仍为后续阶段契约。当前程序不带子命令时返回用法错误，不隐式执行尚未实现的 add。
+
 命令先解析配置所属 release domain，再发现其中的生态 workspace；可用全局 `--cwd` 定位，`--config` 显式选择分区。默认输出面向人类，`--output json` 或命令专属 `--json` 输出版本化 JSON。所有命令支持 `--help`、`--version`、`--quiet`，写操作支持 `--dry-run`（如果有意义）。混合模式契约见 [混合 workspace 设计](mixed-workspaces.md)，目前尚未实现。
 
 ## 命令总览
@@ -63,13 +65,13 @@ moonset add [--package name ...] [--type major|minor|patch|none]
 moonset status [--since ref] [--verbose] [--output human|json]
 ```
 
-输出 workspace、待处理 changeset、预计 release、无 changeset 的 changed package、被 ignore/private 策略过滤的包和配置警告。`--since` 只对 Git 中从 ref 到当前 HEAD 新增的 changeset 和变更文件计算。
+输出 workspace、待处理 changeset、预计 release 和诊断。不带 `--since` 时读取工作目录的全部待处理 changeset，无需 Git 仓库或干净工作区。`--since ref` 比较 `merge-base(ref, HEAD)..HEAD`，只读取 HEAD 已提交快照，以及范围内新增、修改或重命名后仍存在的 changeset；未提交内容明确警告并排除。不自动 fetch，也不默认比较 baseBranch。
 
 JSON 顶层固定：`schemaVersion`、`workspace`、`changesets`、`releases`、`warnings`、`errors`、`hasChanges`、`hasRelease`。字段新增只能向后兼容。
 
 混合结果包含各生态 workspace、UnitId、unmanaged 项、bridge 传播原因、字段所有权和 adapter capability。未实现的 JS/Cargo adapter 不得默默跳过被配置的目标。
 
-退出码：没有 release 且检测到需要发布的 changed package 时为 `1`；没有需要发布的 changed package 为 `0`；解析或配置错误为 `2`。
+退出码：范围内存在相关文件变化但没有任何 changeset 时为 `1`；空 changeset 可明确放行，且不逐模块强制覆盖。正常为 `0`，解析或配置错误为 `2`，I/O/Git 错误为 `3`。JSON 模式 stdout 只包含 JSON，stderr 用于诊断。
 
 ## `publish-plan`
 
@@ -77,7 +79,11 @@ JSON 顶层固定：`schemaVersion`、`workspace`、`changesets`、`releases`、
 moonset publish-plan [--since ref] [--output path|-] [--pretty]
 ```
 
-只构建并序列化 release plan，不读注册表、不改文件、不创建 Git 引用。`--output -` 写 stdout；指定文件使用原子替换。该命令是 Action、App 和第三方发布器的稳定输入。
+只构建并序列化 release plan，不读注册表、不创建 Git 引用。省略输出或 `--output -` 写 stdout；指定文件才写盘，校验成功后在同目录创建独占临时文件并原子替换。输入文件、清单和 changeset/Git 目录禁止覆盖。
+
+Phase 1 输出固定 `schemaVersion: 1`、`stage: "analysis"`、`executable: false`，包含发布、依赖声明更新和预发布下一状态意图。没有可执行文件补丁、Changelog 或 artifact；不能把这个 JSON 交给发布器直接执行。此命令不执行 status 的缺少 changeset 策略检查。
+
+已存在的输出文件必须是 moonset v1 analysis JSON，才允许替换；其他已有文件不会覆盖。相对输出路径以 `--cwd` 为基准。
 
 ## `version`
 
