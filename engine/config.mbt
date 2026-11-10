@@ -3,7 +3,12 @@ pub fn parse_json(
   source : String,
   path : String,
 ) -> Json raise @model.MoonsetError {
-  @json.parse(source, reject_duplicate_keys=true) catch {
+  let input = if source.has_prefix("\uFEFF") {
+    " " + source[1:].to_owned()
+  } else {
+    source
+  }
+  @json.parse(input, reject_duplicate_keys=true) catch {
     error => {
       let (line, column) = match error {
         @json.DuplicateKey(pos, _)

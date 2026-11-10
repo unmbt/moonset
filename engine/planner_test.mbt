@@ -191,3 +191,22 @@ test "JSON v1 is analysis-only with stable output and injected time" {
     },
   )
 }
+
+///|
+test "public planner validates field ownership and canonical identities" {
+  let first = unit("acme/a")
+  let duplicate : @model.ReleaseUnit = {
+    ..unit("acme/b"),
+    manifest: first.manifest,
+  }
+  let wrong_id : @model.ReleaseUnit = { ..first, id: "npm:@acme/a", }
+  for ws in [snapshot([first, duplicate]), snapshot([wrong_id])] {
+    let rejected = try {
+      ignore(@engine.build_plan(ws, []))
+      false
+    } catch {
+      _ => true
+    }
+    assert_true(rejected)
+  }
+}

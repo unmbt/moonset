@@ -46,9 +46,20 @@ pub fn build_plan(
 ) -> @model.ReleasePlan raise @model.MoonsetError {
   let config = snapshot.config
   let units : Map[String, @model.ReleaseUnit] = Map([])
+  let manifest_owners : Map[String, String] = Map([])
   let ids = snapshot.units.map(x => x.id)
   ids.sort()
   for unit in snapshot.units {
+    if unit.id != "moonbit:" + unit.native_name {
+      invalid(
+        "UnitId does not match the MoonBit module identity",
+        path=unit.manifest,
+      )
+    }
+    if manifest_owners.contains(unit.manifest) {
+      invalid("Multiple version owners for manifest", path=unit.manifest)
+    }
+    manifest_owners[unit.manifest] = unit.id
     if units.contains(unit.id) {
       invalid("Duplicate unit: " + unit.id, path=unit.manifest)
     }
@@ -80,6 +91,14 @@ pub fn build_plan(
     units[unit.id] = unit
   }
   let marks : Map[String, Int32] = Map([])
+  let fields : Map[String, String] = Map([])
+  for ownership in snapshot.ownership {
+    let key = ownership.path + "\u0000" + ownership.field
+    if fields.contains(key) || !units.contains(ownership.owner) {
+      invalid("Conflicting or unknown field owner", path=ownership.path)
+    }
+    fields[key] = ownership.owner
+  }
   for id in ids {
     visit(id, units, marks, [])
   }

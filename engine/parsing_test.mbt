@@ -40,6 +40,10 @@ test "config defaults split declaration updates from dependents" {
   let config = @engine.parse_config("{}")
   assert_eq(config.update_dependencies, @model.Patch)
   assert_eq(config.update_dependents, "out-of-range")
+  assert_eq(
+    @engine.parse_config("\uFEFF{\r\n\"schemaVersion\": 1\r\n}").update_dependents,
+    "out-of-range",
+  )
   let config = @engine.parse_config(
     "{\"updateInternalDependents\":\"always\",\"updateInternalDependencies\":\"minor\"}",
   )
