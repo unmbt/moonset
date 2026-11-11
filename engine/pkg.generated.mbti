@@ -11,6 +11,8 @@ pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @mod
 
 pub fn canonical_id(String) -> String
 
+pub fn format_changeset(@model.ChangesetDraft) -> String raise @model.MoonsetError
+
 pub fn matches_pattern(String, String) -> Bool
 
 pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
@@ -24,6 +26,8 @@ pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.M
 pub fn relevant_changes(@model.WorkspaceSnapshot, changeset_directory? : String) -> Array[String]
 
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+pub fn validate_changeset_draft(@model.ChangesetDraft) -> Unit raise @model.MoonsetError
 
 pub fn version_matches(String, String) -> Bool raise @model.MoonsetError
 

@@ -141,6 +141,41 @@ pub fn parse_config(
     Array(_) as xs => strings(xs)
     _ => defaults.changed_patterns
   }
+  let formatter = match property(raw, "formatter") {
+    String(s) => s
+    _ => defaults.formatter
+  }
+  if !["builtin", "prettier", "oxfmt", "biome", "dprint"].contains(formatter) {
+    invalid(
+      "Unsupported formatter: " + formatter,
+      path~,
+      code="unsupported-capability",
+    )
+  }
+  if formatter != "builtin" {
+    invalid(
+      "External formatters are not implemented in Phase 2",
+      path~,
+      code="unsupported-capability",
+    )
+  }
+  let changelog = match property(raw, "changelog") {
+    String(s) => s
+    { "generator": String(s), .. } => s
+    _ => defaults.changelog
+  }
+  let github = match property(raw, "changelog") {
+    { "repo": String(s), .. } => Some(s)
+    _ => None
+  }
+  let access = match property(raw, "access") {
+    String(s) => s
+    _ => defaults.access
+  }
+  let base_branch = match property(raw, "baseBranch") {
+    String(s) => s
+    _ => defaults.base_branch
+  }
   for pattern in changed_patterns {
     if pattern.contains("[") ||
       pattern.contains("{") ||
@@ -173,6 +208,11 @@ pub fn parse_config(
       _ => defaults.pre_file
     },
     mixed: mixed != Json::null(),
+    formatter,
+    changelog,
+    github,
+    access,
+    base_branch,
     raw,
   }
 }

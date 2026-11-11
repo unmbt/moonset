@@ -9,6 +9,14 @@ priv struct Options {
   pretty : Bool
   quiet : Bool
   verbose : Bool
+  force : Bool
+  package_name : String?
+  bump : String?
+  summary : String?
+  empty : Bool
+  id : String?
+  initial_version : Bool
+  pre_action : String?
 }
 
 ///|
@@ -27,6 +35,15 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut pretty = false
   let mut quiet = false
   let mut verbose = false
+  let mut force = false
+  let mut format = "human"
+  let mut package_ : String? = None
+  let mut bump : String? = None
+  let mut summary : String? = None
+  let mut empty = false
+  let mut id : String? = None
+  let mut initial_version = false
+  let mut pre_action : String? = None
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -38,8 +55,20 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       "--pretty" => pretty = true
       "--quiet" | "-q" => quiet = true
       "--verbose" => verbose = true
+      "--force" => force = true
+      "--empty" => empty = true
+      "--no-format" => ()
+      "--initial-version" => initial_version = true
       "--no-color" => ()
-      "--cwd" | "--config" | "--since" | "--output" => {
+      "--cwd"
+      | "--config"
+      | "--since"
+      | "--output"
+      | "--format"
+      | "--package"
+      | "--type"
+      | "--summary"
+      | "--id" => {
         if i >= args.length() {
           usage_error("Missing value for " + arg)
         }
@@ -49,16 +78,24 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
           "--cwd" => cwd = value
           "--config" => config = Some(value)
           "--since" => since = Some(value)
-          _ => output = value
+          "--output" => output = value
+          "--format" => format = value
+          "--package" => package_ = Some(value)
+          "--type" => bump = Some(value)
+          "--summary" => summary = Some(value)
+          _ => id = Some(value)
         }
       }
       _ => {
-        if arg.has_prefix("-") ||
-          (command != "" && command != "help" && command != "version-info") {
+        if arg.has_prefix("-") {
           usage_error("Unknown argument: " + arg)
         }
         if command == "" {
           command = arg
+        } else if command == "pre" && pre_action is None {
+          pre_action = Some(arg)
+        } else {
+          usage_error("Unexpected argument: " + arg)
         }
       }
     }
@@ -72,8 +109,32 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     }
   } else if command == "publish-plan" {
     json = true
-  } else if command != "help" && command != "version-info" {
-    usage_error("Phase 1 implements status and publish-plan; use --help")
+  } else if !["help", "version-info", "init", "add", "pre"].contains(command) {
+    usage_error("Unknown command: " + command)
   }
-  { command, cwd, config, since, json, output, pretty, quiet, verbose, }
+  if format != "human" && format != "json" {
+    usage_error("--format expects human or json")
+  }
+  if format == "json" {
+    json = true
+  }
+  {
+    command,
+    cwd,
+    config,
+    since,
+    json,
+    output,
+    pretty,
+    quiet,
+    verbose,
+    force,
+    package_name: package_,
+    bump,
+    summary,
+    empty,
+    id,
+    initial_version,
+    pre_action,
+  }
 }

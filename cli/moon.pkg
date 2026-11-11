@@ -8,6 +8,10 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
+  "mizchi/tui",
+  "mizchi/tui/vnode",
+  "mizchi/tui/render",
+  "mizchi/tui/io",
 }
 
 options(

@@ -127,6 +127,11 @@ pub(all) struct Config {
   changed_patterns : Array[String]
   pre_file : String
   mixed : Bool
+  formatter : String
+  changelog : String
+  github : String?
+  access : String
+  base_branch : String
   raw : Json
 }
 
@@ -141,8 +146,20 @@ pub fn Config::default() -> Config {
     changed_patterns: ["**"],
     pre_file: ".changeset/pre.json",
     mixed: false,
+    formatter: "builtin",
+    changelog: "builtin",
+    github: None,
+    access: "public",
+    base_branch: "main",
     raw: Json::empty_object(),
   }
+}
+
+///|
+/// A changeset assembled by the CLI before it is formatted and written.
+pub(all) struct ChangesetDraft {
+  releases : Array[Change]
+  summary : String
 }
 
 ///|

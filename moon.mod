@@ -27,5 +27,6 @@ description = "Spec-driven MoonBit workspace release planning"
 
 import {
   "mizchi/semver@0.1.2",
+  "mizchi/tui@0.10.2",
   "unmbt/moon-manifest@0.2.0-alpha.2",
 }
