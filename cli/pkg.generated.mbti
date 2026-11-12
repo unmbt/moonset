@@ -2,6 +2,7 @@
 package "unmbt/moonset/cli"
 
 import {
+  "moonbitlang/core/debug",
   "unmbt/moonset/model",
 }
 
@@ -18,6 +19,12 @@ pub fn render_confirmation(String, Array[@model.Change]) -> String
 
 pub fn render_package_page(Array[String], Array[String], SelectState) -> String
 
+pub fn tui_begin() -> Unit
+
+pub fn tui_cleanup() -> Unit
+
+pub fn tui_key(String) -> TuiKey
+
 pub async fn run(Array[String]) -> Int32
 
 // Errors
@@ -31,6 +38,7 @@ pub(all) struct SelectState {
 }
 pub fn SelectState::new(Int32) -> Self
 
+#derive(Eq, @debug.Debug)
 pub(all) enum TuiKey {
   Up
   Down
@@ -43,6 +51,9 @@ pub(all) enum TuiKey {
   Cancel
   Char(String)
 }
+pub fn TuiKey::equal(Self, Self) -> Bool
+pub fn TuiKey::not_equal(Self, Self) -> Bool
+pub fn TuiKey::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 
