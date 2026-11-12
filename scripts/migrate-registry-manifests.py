@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 def migrate(root: Path) -> None:
+    migrated = 0
     for manifest in root.rglob("moon.mod.json"):
         data = json.loads(manifest.read_text(encoding="utf-8"))
         target = manifest.with_name("moon.mod")
@@ -25,6 +26,8 @@ def migrate(root: Path) -> None:
             lines.append(f'\nsource = "{data["source"]}"')
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         manifest.unlink()
+        migrated += 1
+    print(f"migrated {migrated} registry manifests")
 
 
 if __name__ == "__main__":

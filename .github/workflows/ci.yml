@@ -25,16 +25,10 @@ jobs:
       - name: Prefetch and migrate legacy registry packages
         shell: bash
         run: |
-          for attempt in $(seq 1 30); do
-            if moon check --target native --deny-warn; then
-              exit 0
-            fi
+          for attempt in $(seq 1 12); do
+            moon check --target native --deny-warn && break || true
             python scripts/migrate-registry-manifests.py
-            if ! find .mooncakes -name moon.mod.json -print -quit | grep -q .; then
-              break
-            fi
           done
-          exit 1
       - run: moon check --target native --deny-warn
       - run: moon test --target native
       - run: moon build --target native --release
