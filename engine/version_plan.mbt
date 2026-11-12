@@ -188,7 +188,7 @@ fn add_edit(
     owner,
     before_hash: edit_hash(before),
     after_text: after,
-    atomic: true,
+    atomic_write: true,
   })
 }
 

@@ -134,7 +134,7 @@ pub fn FileEdit::to_json(self : FileEdit) -> Json {
     "owner": self.owner,
     "beforeHash": self.before_hash,
     "afterText": self.after_text,
-    "atomic": self.atomic,
+    "atomic": self.atomic_write,
   }
 }
 

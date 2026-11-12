@@ -6,7 +6,7 @@ pub(all) struct FileEdit {
   owner : String
   before_hash : String
   after_text : String
-  atomic : Bool
+  atomic_write : Bool
 }
 
 ///|
