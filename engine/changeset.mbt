@@ -121,3 +121,43 @@ pub fn parse_changeset(
     summary: lines[closing + 1:].to_owned().join("\n").trim().to_owned(),
   }
 }
+
+///|
+/// Validate and format a draft using Moonset's stable front matter format.
+pub fn format_changeset(
+  draft : @model.ChangesetDraft,
+) -> String raise @model.MoonsetError {
+  let summary = draft.summary.trim().to_owned()
+  if summary == "" {
+    invalid("Changeset summary cannot be empty")
+  }
+  if summary.contains("\u0000") {
+    invalid("Changeset summary contains NUL")
+  }
+  let seen : Map[String, Bool] = Map([])
+  let lines = draft.releases.map(change => {
+    let id = canonical_id(change.unit_id)
+    if id == "" ||
+      id.contains("\n") ||
+      id.contains("\r") ||
+      (id.contains(":") && id[0] == ':') {
+      invalid("Invalid UnitId: " + id)
+    }
+    if seen.contains(id) {
+      invalid("Duplicate changeset unit: " + id)
+    }
+    seen[id] = true
+    id + ": " + change.bump.text()
+  })
+  if lines.is_empty() {
+    invalid("At least one release is required")
+  }
+  "---\n" + lines.join("\n") + "\n---\n\n" + summary + "\n"
+}
+
+///|
+pub fn validate_changeset_draft(
+  draft : @model.ChangesetDraft,
+) -> Unit raise @model.MoonsetError {
+  ignore(format_changeset(draft))
+}

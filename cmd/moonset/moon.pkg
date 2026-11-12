@@ -10,6 +10,8 @@ import {
   "moonbitlang/core/async",
 }
 
+supported_targets = "native"
+
 options(
   "allow-experimental-packages": [ "moonbitlang/core/async" ],
 )

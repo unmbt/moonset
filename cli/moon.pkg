@@ -8,7 +8,12 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
+  "mizchi/tui",
+  "mizchi/tui/render",
+  "mizchi/tui/io",
 }
+
+supported_targets = "native"
 
 options(
   "allow-experimental-packages": [

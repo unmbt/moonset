@@ -1,7 +1,8 @@
-name: Phase 1 checks
+name: Phase 2 checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -20,6 +21,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: moon update
+      # Package archives are downloaded lazily by `moon check`, so migrate
+      # after each preflight download until the dependency graph is complete.
+      - name: Prefetch and migrate legacy registry packages
+        shell: bash
+        run: |
+          for attempt in $(seq 1 12); do
+            moon check --target native --deny-warn && break || true
+            python scripts/migrate-registry-manifests.py
+          done
       - run: moon check --target native --deny-warn
       - run: moon test --target native
       - run: moon build --target native --release

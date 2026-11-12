@@ -1,6 +1,6 @@
 # CLI 命令契约
 
-Phase 1 已提供 `status`、`publish-plan`、`--help`、`--version`。其余子命令仍为后续阶段契约。当前程序不带子命令时返回用法错误，不隐式执行尚未实现的 add。
+Phase 2 提供 `init`、`add`、`pre enter|exit|status`，并保留 `status`、`publish-plan`、`--help`、`--version`。
 
 命令先解析配置所属 release domain，再发现其中的生态 workspace；可用全局 `--cwd` 定位，`--config` 显式选择分区。默认输出面向人类，`--output json` 或命令专属 `--json` 输出版本化 JSON。所有命令支持 `--help`、`--version`、`--quiet`，写操作支持 `--dry-run`（如果有意义）。混合模式契约见 [混合 workspace 设计](mixed-workspaces.md)，目前尚未实现。
 
@@ -163,4 +163,12 @@ moonset tag [--dry-run] [--push] [--force] [--format template]
 错误输出包含稳定 `code`、短消息、建议和可选 `path`/`line`/`column`。脚本不应依赖 message 文本。
 
 
+
+# Phase 2 workflow
+
+`moonset init` creates `.changeset/config.json`, `README.md`, and `.gitignore`
+without overwriting existing files. `moonset add --package moonbit:org/name
+--type patch --summary "..."` writes a stable Markdown changeset; pass
+`--json` for machine readable output. `moonset pre enter|exit|status` manages
+the Moonset `active`/`exit` pre-release state.
 

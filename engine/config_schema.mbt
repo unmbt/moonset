@@ -43,6 +43,7 @@ let config_schema_text : String =
   #|    },
   #|    "baseBranch": { "type": "string", "minLength": 1 },
   #|    "access": { "enum": ["public", "restricted"] },
+  #|    "formatter": { "enum": ["builtin", "prettier", "oxfmt", "biome", "dprint"] },
   #|    "updateInternalDependencies": { "enum": ["patch", "minor"] },
   #|    "updateInternalDependents": { "enum": ["out-of-range", "always"] },
   #|    "changedFilePatterns": { "type": "array", "items": { "type": "string", "minLength": 1 } },

@@ -1,12 +1,59 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "unmbt/moonset/cli"
 
+import {
+  "moonbitlang/core/debug",
+  "unmbt/moonset/model",
+}
+
 // Values
+pub fn edit_summary(String, TuiKey) -> (String, Bool, Bool)
+
+pub fn reduce_choice(Int32, Int32, TuiKey) -> (Int32, Bool, Bool)
+
+pub fn reduce_select(SelectState, TuiKey) -> SelectState
+
+pub fn render_bump_page(String, String, Int32) -> String
+
+pub fn render_confirmation(String, Array[@model.Change]) -> String
+
+pub fn render_package_page(Array[String], Array[String], SelectState) -> String
+
 pub async fn run(Array[String]) -> Int32
+
+pub fn tui_begin() -> Unit
+
+pub fn tui_cleanup() -> Unit
+
+pub fn tui_key(String) -> TuiKey
 
 // Errors
 
 // Types and methods
+pub(all) struct SelectState {
+  cursor : Int32
+  selected : Array[Bool]
+  cancelled : Bool
+  confirmed : Bool
+}
+pub fn SelectState::new(Int32) -> Self
+
+#derive(Eq, @debug.Debug)
+pub(all) enum TuiKey {
+  Up
+  Down
+  Left
+  Right
+  Enter
+  Space
+  Backspace
+  Delete
+  Cancel
+  Char(String)
+}
+pub fn TuiKey::equal(Self, Self) -> Bool
+pub fn TuiKey::not_equal(Self, Self) -> Bool
+pub fn TuiKey::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

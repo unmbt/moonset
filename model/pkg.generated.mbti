@@ -46,6 +46,11 @@ pub(all) struct Changeset {
 }
 pub fn Changeset::to_json(Self) -> @json.Json
 
+pub(all) struct ChangesetDraft {
+  releases : Array[Change]
+  summary : String
+}
+
 pub(all) struct Config {
   fixed : Array[Array[String]]
   linked : Array[Array[String]]
@@ -55,6 +60,11 @@ pub(all) struct Config {
   changed_patterns : Array[String]
   pre_file : String
   mixed : Bool
+  formatter : String
+  changelog : String
+  github : String?
+  access : String
+  base_branch : String
   raw : @json.Json
 }
 pub fn Config::default() -> Self
