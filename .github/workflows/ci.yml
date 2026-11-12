@@ -1,4 +1,4 @@
-name: Phase 1 checks
+name: Phase 2 checks
 on:
   push:
   pull_request:
@@ -20,6 +20,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: moon update
+      # mizchi/tui@0.10.2 currently pulls packages that still publish the
+      # legacy moon.mod.json metadata format.
+      - name: Migrate legacy registry package manifests
+        run: python scripts/migrate-registry-manifests.py
       - run: moon check --target native --deny-warn
       - run: moon test --target native
       - run: moon build --target native --release

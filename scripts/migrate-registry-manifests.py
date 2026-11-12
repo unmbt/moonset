@@ -1,0 +1,31 @@
+"""Convert legacy registry moon.mod.json metadata for the current Moon toolchain."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+
+def migrate(root: Path) -> None:
+    for manifest in root.rglob("moon.mod.json"):
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        target = manifest.with_name("moon.mod")
+        imports = data.get("deps", {})
+        lines = [f'name = "{data["name"]}"']
+        if data.get("version"):
+            lines.append(f'\nversion = "{data["version"]}"')
+        if imports:
+            lines.extend(["\nimport {"])
+            lines.extend(f'  "{name}@{version}",' for name, version in imports.items())
+            lines.append("}")
+        if data.get("preferred-target"):
+            lines.append(f'\npreferred_target = "{data["preferred-target"]}"')
+        if data.get("source"):
+            lines.append(f'\nsource = "{data["source"]}"')
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        manifest.unlink()
+
+
+if __name__ == "__main__":
+    migrate(Path(os.environ.get("MOONCAKES_DIR", ".mooncakes")))
