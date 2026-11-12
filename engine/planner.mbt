@@ -366,8 +366,7 @@ pub fn build_plan(
           unit.ecosystem == "moonbit" &&
           !dep.requirement.has_prefix("workspace:") &&
           !dep.requirement.has_prefix("file:") &&
-          !dep.requirement.has_prefix("link:") &&
-          (dep.start > 0 || dep.end > 0) {
+          !dep.requirement.has_prefix("link:") {
           if !version_matches(dep.requirement, target) ||
             levels[dep.producer].rank() >= config.update_dependencies.rank() {
             dependency_updates.push({
