@@ -1,6 +1,6 @@
 # 需求规格
 
-> 状态：Draft 0.1。需求已按 SDD 编号，第一阶段实现前需将相关条目改为 Accepted。
+> 状态：Draft 0.1；Phase 3 版本计划、内置 changelog、混合 workspace 和 tag 相关条目已进入实现验证。
 
 ## 1. 问题与目标
 

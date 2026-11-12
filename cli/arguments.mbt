@@ -17,6 +17,15 @@ priv struct Options {
   id : String?
   initial_version : Bool
   pre_action : String?
+  dry_run : Bool
+  no_changelog : Bool
+  no_commit : Bool
+  recover : Bool
+  snapshot : String?
+  tag_push : Bool
+  tag_force : Bool
+  tag_format : String
+  yes : Bool
 }
 
 ///|
@@ -44,6 +53,15 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut id : String? = None
   let mut initial_version = false
   let mut pre_action : String? = None
+  let mut dry_run = false
+  let mut no_changelog = false
+  let mut no_commit = false
+  let mut recover = false
+  let mut snapshot : String? = None
+  let mut tag_push = false
+  let mut tag_force = false
+  let mut tag_format = ""
+  let mut yes = false
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -56,6 +74,12 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       "--quiet" | "-q" => quiet = true
       "--verbose" => verbose = true
       "--force" => force = true
+      "--dry-run" => dry_run = true
+      "--no-changelog" => no_changelog = true
+      "--no-commit" => no_commit = true
+      "--recover" => recover = true
+      "--push" => tag_push = true
+      "--yes" => yes = true
       "--empty" => empty = true
       "--no-format" => ()
       "--initial-version" => initial_version = true
@@ -68,7 +92,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       | "--package"
       | "--type"
       | "--summary"
-      | "--id" => {
+      | "--id"
+      | "--snapshot" => {
         if i >= args.length() {
           usage_error("Missing value for " + arg)
         }
@@ -83,6 +108,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
           "--package" => package_ = Some(value)
           "--type" => bump = Some(value)
           "--summary" => summary = Some(value)
+          "--snapshot" => snapshot = Some(value)
           _ => id = Some(value)
         }
       }
@@ -109,8 +135,14 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     }
   } else if command == "publish-plan" {
     json = true
-  } else if !["help", "version-info", "init", "add", "pre"].contains(command) {
+  } else if ![
+      "help", "version-info", "init", "add", "pre", "version", "tag", "git-tag",
+    ].contains(command) {
     usage_error("Unknown command: " + command)
+  }
+  if command == "tag" || command == "git-tag" {
+    tag_format = format
+    format = "human"
   }
   if format != "human" && format != "json" {
     usage_error("--format expects human or json")
@@ -136,5 +168,14 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     id,
     initial_version,
     pre_action,
+    dry_run,
+    no_changelog,
+    no_commit,
+    recover,
+    snapshot,
+    tag_push,
+    tag_force: force,
+    tag_format,
+    yes,
   }
 }
