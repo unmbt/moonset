@@ -2,6 +2,13 @@
 
 > 状态：Draft 0.1；Phase 3 版本计划、内置 changelog、混合 workspace 和 tag 相关条目已进入实现验证。
 
+### 开发验证约束
+
+本项目的本地验证必须复用 CI 的严格告警策略：提交前运行
+`moon check --target native --deny-warn`。新增或修改测试后还应运行
+`moon test --target native --deny-warn`；若当前 MoonBit 工具链不接受 test 的
+`--deny-warn` 参数，必须至少运行严格 check，并记录工具链限制和替代命令。
+
 ## 1. 问题与目标
 
 MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，但现有版本修改、变更记录、发布和 Git 标签流程分散在人工脚本中。moonset 要把“贡献者记录变更意图”和“维护者生成可审阅发布计划”连接起来，同时保留 MoonBit 清单的格式和注释。

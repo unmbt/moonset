@@ -45,7 +45,7 @@ async fn safe_remove(path : String) -> Unit raise @model.MoonsetError {
 /// Convert the host UTC millisecond clock to the stable YYYY-MM-DD form used
 /// by the builtin changelog generator.
 fn utc_date(milliseconds : UInt64) -> String {
-  let days = reinterpret_as_int64(milliseconds) / 86400000L
+  let days = milliseconds.reinterpret_as_int64() / 86400000L
   let z = days + 719468L
   let era = if z >= 0L { z / 146097L } else { (z - 146096L) / 146097L }
   let doe = z - era * 146097L
