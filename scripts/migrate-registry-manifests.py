@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -27,6 +28,14 @@ def migrate(root: Path) -> None:
         target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         manifest.unlink()
         migrated += 1
+    css = root / "mizchi" / "css" / "src"
+    if css.exists():
+        for source in css.rglob("*"):
+            if source.suffix in {".mbt", ".mbti"}:
+                text = source.read_text(encoding="utf-8")
+                rewritten = re.sub(r"\bFloat\b", "CssFloat", text)
+                if rewritten != text:
+                    source.write_text(rewritten, encoding="utf-8")
     print(f"migrated {migrated} registry manifests")
 
 
