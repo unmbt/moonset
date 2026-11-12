@@ -1,5 +1,7 @@
 import {
   "unmbt/moonset/model",
   "mizchi/semver",
+  "unmbt/moon-manifest" @manifest,
   "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
 }

@@ -8,6 +8,7 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
+  "moonbitlang/core/async/shell",
   "mizchi/tui",
   "mizchi/tui/render",
   "mizchi/tui/io",
@@ -20,5 +21,6 @@ options(
     "moonbitlang/core/async",
     "moonbitlang/core/async/fs",
     "moonbitlang/core/async/stdio",
+    "moonbitlang/core/async/shell",
   ],
 )

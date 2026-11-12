@@ -132,6 +132,18 @@ pub(all) struct Config {
   github : String?
   access : String
   base_branch : String
+  private_version : Bool
+  private_tag : Bool
+  private_publish : Bool
+  changelog_file : String
+  tag_create : Bool
+  tag_after_publish : Bool
+  tag_format : String
+  tag_push : Bool
+  lockfiles : String
+  mixed_workspaces : Array[MixedWorkspaceSpec]
+  bridges : Array[Bridge]
+  unit_overrides : Map[String, UnitOverride]
   raw : Json
 }
 
@@ -151,6 +163,18 @@ pub fn Config::default() -> Config {
     github: None,
     access: "public",
     base_branch: "main",
+    private_version: false,
+    private_tag: false,
+    private_publish: false,
+    changelog_file: "CHANGELOG.md",
+    tag_create: true,
+    tag_after_publish: true,
+    tag_format: "auto",
+    tag_push: false,
+    lockfiles: "refresh",
+    mixed_workspaces: [],
+    bridges: [],
+    unit_overrides: Map([]),
     raw: Json::empty_object(),
   }
 }

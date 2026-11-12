@@ -1,6 +1,13 @@
 # 需求规格
 
-> 状态：Draft 0.1。需求已按 SDD 编号，第一阶段实现前需将相关条目改为 Accepted。
+> 状态：Draft 0.1；Phase 3 版本计划、内置 changelog、混合 workspace 和 tag 相关条目已进入实现验证。
+
+### 开发验证约束
+
+本项目的本地验证必须复用 CI 的严格告警策略：提交前运行
+`moon check --target native --deny-warn`。新增或修改测试后还应运行
+`moon test --target native --deny-warn`；若当前 MoonBit 工具链不接受 test 的
+`--deny-warn` 参数，必须至少运行严格 check，并记录工具链限制和替代命令。
 
 ## 1. 问题与目标
 

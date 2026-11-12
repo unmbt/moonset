@@ -36,11 +36,13 @@
 - 重复 `init` 不覆盖文件，`add` 生成 ID 不冲突。
 - CI 能使用 `status --since` 判断是否需要 changeset。
 
-## Phase 3 — 版本与 Changelog
+## Phase 3 — 版本与 Changelog（实现中：核心流程已落地）
 
 交付：`version`、内置 changelog 生成器、依赖范围更新、fixed/linked/private 策略、原子写盘、`tag`。
 
 退出条件：
+
+- 当前已实现 version-plan、内置 changelog、MoonBit/npm 版本编辑、release state、journal 恢复和 tag CLI；锁文件 staging 与真实 registry 发布仍属于后续增量。
 
 - 版本前后所有 manifest 的语法仍可被 MoonBit 解析。
 - 失败演练后工作区可按恢复指令回到一致状态。
