@@ -45,7 +45,7 @@ async fn safe_remove(path : String) -> Unit raise @model.MoonsetError {
 /// Convert the host UTC millisecond clock to the stable YYYY-MM-DD form used
 /// by the builtin changelog generator.
 fn utc_date(milliseconds : UInt64) -> String {
-  let days = milliseconds.to_int64() / 86400000L
+  let days = reinterpret_as_int64(milliseconds) / 86400000L
   let z = days + 719468L
   let era = if z >= 0L { z / 146097L } else { (z - 146096L) / 146097L }
   let doe = z - era * 146097L
@@ -708,6 +708,7 @@ async fn write_plan(
 
 ///|
 async fn execute(options : Options) -> Int32 {
+  let _ = options.no_commit
   if options.command == "help" {
     println(
       "moonset Phase 3\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--no-changelog] [--recover]\n  tag|git-tag [--dry-run] [--push] [--force] [--format template]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",

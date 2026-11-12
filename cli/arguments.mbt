@@ -59,7 +59,6 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut recover = false
   let mut snapshot : String? = None
   let mut tag_push = false
-  let mut tag_force = false
   let mut tag_format = ""
   let mut yes = false
   let mut i = 0
