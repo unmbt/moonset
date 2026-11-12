@@ -136,39 +136,56 @@ async fn add_command(options : Options) -> Int32 {
   0
 }
 
-async fn interactive_add(options : Options, loaded : @workspace.LoadedWorkspace) -> Int32 {
+///|
+async fn interactive_add(
+  options : Options,
+  loaded : @workspace.LoadedWorkspace,
+) -> Int32 {
   let labels = loaded.snapshot.units.map(x => x.id)
-  let versions = loaded.snapshot.units.map(x => x.version.unwrap_or("unversioned"))
+  let versions = loaded.snapshot.units.map(x => {
+    x.version.unwrap_or("unversioned")
+  })
   let mut state = SelectState::new(labels.length())
   tui_begin()
   defer tui_cleanup()
   let mut done = false
   while !done && !state.cancelled {
-    @tui.print_raw("\u001b[2J\u001b[H" + render_package_page(labels, versions, state) + "\n")
-    let key = tui_key(await @tui.read_key())
+    @tui.print_raw(
+      "\u001b[2J\u001b[H" + render_package_page(labels, versions, state) + "\n",
+    )
+    let key = tui_key(@tui.read_key())
     state = reduce_select(state, key)
     done = state.confirmed
   }
-  if state.cancelled || !state.confirmed { return 130 }
+  if state.cancelled || !state.confirmed {
+    return 130
+  }
   let selected = []
   for i, chosen in state.selected {
     if chosen {
       selected.push(@model.Change::{ unit_id: labels[i], bump: @model.Patch, })
     }
   }
-  if selected.is_empty() { return 2 }
+  if selected.is_empty() {
+    return 2
+  }
   @tui.print_raw("\u001b[2J\u001b[H? Enter a summary for this change\n")
   let mut summary = ""
   let mut submitted = false
   while !submitted {
     @tui.print_raw("  " + summary + "\u001b[K\r")
-    let key = tui_key(await @tui.read_key())
+    let key = tui_key(@tui.read_key())
     let (next, confirm, cancel) = edit_summary(summary, key)
     summary = next
-    if cancel { return 130 }
+    if cancel {
+      return 130
+    }
     submitted = confirm
   }
-  let text = @engine.format_changeset(@model.ChangesetDraft::{ releases: selected, summary, })
+  let text = @engine.format_changeset(@model.ChangesetDraft::{
+    releases: selected,
+    summary,
+  })
   let original = options.id.unwrap_or("change-" + @env.now().to_string())
   let path = @path.Path(loaded.snapshot.root)
     .join(@path.Path(loaded.changeset_directory))

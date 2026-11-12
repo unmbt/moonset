@@ -15,6 +15,12 @@ pub(all) enum TuiKey {
 }
 
 ///|
+pub extend TuiKey with Eq::{equal, not_equal}
+
+///|
+pub extend TuiKey with Debug::{to_repr}
+
+///|
 pub(all) struct SelectState {
   cursor : Int32
   selected : Array[Bool]
