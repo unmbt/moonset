@@ -20,10 +20,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: moon update
-      # mizchi/tui@0.10.2 currently pulls packages that still publish the
-      # legacy moon.mod.json metadata format.
-      - name: Migrate legacy registry package manifests
-        run: python scripts/migrate-registry-manifests.py
+      # Package archives are downloaded lazily by `moon check`, so migrate
+      # after each preflight download until the dependency graph is complete.
+      - name: Prefetch and migrate legacy registry packages
+        shell: bash
+        run: |
+          for attempt in $(seq 1 30); do
+            if moon check --target native --deny-warn; then
+              exit 0
+            fi
+            python scripts/migrate-registry-manifests.py
+            if ! find .mooncakes -name moon.mod.json -print -quit | grep -q .; then
+              break
+            fi
+          done
+          exit 1
       - run: moon check --target native --deny-warn
       - run: moon test --target native
       - run: moon build --target native --release
