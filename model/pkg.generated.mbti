@@ -28,6 +28,18 @@ pub(all) struct ApplyResult {
 }
 pub fn ApplyResult::to_json(Self) -> @json.Json
 
+pub(all) struct ArtifactIntent {
+  id : String
+  unit_id : String
+  version : String
+  target : String
+  required : Bool
+  source_commit : String?
+  expected_hash : String?
+  path : String?
+}
+pub fn ArtifactIntent::to_json(Self) -> @json.Json
+
 pub(all) struct Bridge {
   consumer : String
   producer : String
@@ -178,6 +190,18 @@ pub(all) struct Ownership {
   owner : String
 }
 
+pub(all) struct PackResult {
+  artifact_id : String
+  unit_id : String
+  version : String
+  target : String
+  archive_path : String
+  source_commit : String?
+  content_hash : String
+  verified : Bool
+}
+pub fn PackResult::to_json(Self) -> @json.Json
+
 pub(all) struct PreState {
   mode : String
   tag : String
@@ -186,6 +210,54 @@ pub(all) struct PreState {
   consumed : Array[String]
 }
 pub fn PreState::to_json(Self) -> @json.Json
+
+pub(all) struct PublishResult {
+  schema_version : Int32
+  plan_id : String
+  dry_run : Bool
+  complete : Bool
+  statuses : Array[PublishStatus]
+  recovery_path : String?
+}
+pub fn PublishResult::to_json(Self) -> @json.Json
+
+#derive(Eq, @debug.Debug)
+pub(all) enum PublishState {
+  Pending
+  Preflighted
+  Published
+  Skipped
+  Failed
+  Blocked
+}
+pub fn PublishState::equal(Self, Self) -> Bool
+pub fn PublishState::not_equal(Self, Self) -> Bool
+pub fn PublishState::text(Self) -> String
+pub fn PublishState::to_repr(Self) -> @debug.Repr
+
+pub(all) struct PublishStatus {
+  plan_id : String
+  unit_id : String
+  version : String
+  target : String
+  registry : String
+  state : PublishState
+  digest : String?
+  external_id : String?
+  message : String?
+}
+pub fn PublishStatus::to_json(Self) -> @json.Json
+
+pub(all) struct PublishTarget {
+  unit_id : String
+  version : String
+  target : String
+  registry : String
+  publisher : String
+  artifact_id : String?
+  required : Bool
+}
+pub fn PublishTarget::to_json(Self) -> @json.Json
 
 pub(all) struct Release {
   unit_id : String

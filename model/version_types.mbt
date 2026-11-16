@@ -96,3 +96,83 @@ pub(all) struct UnitOverride {
   publisher : String?
   tag_format : String?
 }
+
+///|
+/// A declared build or distribution artifact for a release target.
+pub(all) struct ArtifactIntent {
+  id : String
+  unit_id : UnitId
+  version : String
+  target : String
+  required : Bool
+  source_commit : String?
+  expected_hash : String?
+  path : String?
+}
+
+///|
+/// Result produced by an ecosystem pack adapter.
+pub(all) struct PackResult {
+  artifact_id : String
+  unit_id : UnitId
+  version : String
+  target : String
+  archive_path : String
+  source_commit : String?
+  content_hash : String
+  verified : Bool
+}
+
+///|
+/// One independently publishable target.
+pub(all) struct PublishTarget {
+  unit_id : UnitId
+  version : String
+  target : String
+  registry : String
+  publisher : String
+  artifact_id : String?
+  required : Bool
+}
+
+///|
+#derive(Eq, Debug)
+pub(all) enum PublishState {
+  Pending
+  Preflighted
+  Published
+  Skipped
+  Failed
+  Blocked
+}
+
+///|
+pub extend PublishState with Eq::{equal, not_equal}
+
+///|
+pub extend PublishState with Debug::{to_repr}
+
+///|
+/// Durable per-target result used for retries and audit output.
+pub(all) struct PublishStatus {
+  plan_id : String
+  unit_id : UnitId
+  version : String
+  target : String
+  registry : String
+  state : PublishState
+  digest : String?
+  external_id : String?
+  message : String?
+}
+
+///|
+/// Aggregate result for a publish invocation.
+pub(all) struct PublishResult {
+  schema_version : Int32
+  plan_id : String
+  dry_run : Bool
+  complete : Bool
+  statuses : Array[PublishStatus]
+  recovery_path : String?
+}

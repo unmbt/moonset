@@ -36,22 +36,22 @@
 - 重复 `init` 不覆盖文件，`add` 生成 ID 不冲突。
 - CI 能使用 `status --since` 判断是否需要 changeset。
 
-## Phase 3 — 版本与 Changelog（实现中：核心流程已落地）
+## Phase 3 — 版本与 Changelog（实现中：核心流程与锁文件 staging 已接入）
 
 交付：`version`、内置 changelog 生成器、依赖范围更新、fixed/linked/private 策略、原子写盘、`tag`。
 
 退出条件：
 
-- 当前已实现 version-plan、内置 changelog、MoonBit/npm 版本编辑、release state、journal 恢复和 tag CLI；锁文件 staging 与真实 registry 发布仍属于后续增量。
+- 当前已实现 version-plan、内置 changelog、MoonBit/npm 版本编辑、release state、journal 恢复、tag CLI，以及 npm/pnpm 隔离 staging 锁文件更新与 `verify-only`。
 
 - 版本前后所有 manifest 的语法仍可被 MoonBit 解析。
 - 失败演练后工作区可按恢复指令回到一致状态。
 - 生成的 changelog 有稳定格式、日期和链接策略。
 - 接入 npm/pnpm workspace discovery、JSON 编辑和锁文件 staging；用混合计划验证 bridge、fixed/linked、private 发布禁令和跨生态 tag/changelog 冲突（FR-018 至 FR-021）。
 
-## Phase 4 — 发布与官方自动化
+## Phase 4 — 发布与官方自动化（实现中）
 
-交付：`pack`、`publish`、Mooncakes publisher、GitHub Actions 示例、OIDC/令牌文档、发布状态和重试。
+交付：`pack`、`publish`、Mooncakes/npm 命令适配基线、GitHub Actions 示例、逐目标状态和重试。
 
 退出条件：
 

@@ -72,6 +72,16 @@ fn absolute(root : String, relative_path : String) -> String {
 }
 
 ///|
+/// Windows exposes npm/pnpm through command shims; invoke them directly.
+fn package_manager_program(name : String) -> String {
+  if @env.get_env_var("ComSpec") is Some(_) && (name == "npm" || name == "pnpm") {
+    name + ".cmd"
+  } else {
+    name
+  }
+}
+
+///|
 async fn recover_version(root : String) -> Int32 raise @model.MoonsetError {
   let journal_path = absolute(root, ".moonset/version-journal.json")
   if !safe_exists(journal_path) {
@@ -168,6 +178,207 @@ async fn apply_version_plan(
 }
 
 ///|
+/// Copy the relevant source tree to an isolated temporary staging directory.
+async fn copy_staging_tree(source : String, destination : String) -> Unit {
+  safe_mkdir(destination)
+  for entry in @fs.readdir(source, include_hidden=true) {
+    if [".git", "node_modules", ".mooncakes", "_build", "target", ".moonset"].contains(
+        entry,
+      ) {
+      continue
+    }
+    let from = absolute(source, entry)
+    let to = absolute(destination, entry)
+    let kind = @fs.kind(from)
+    if kind == @fs.Directory {
+      copy_staging_tree(from, to)
+    } else if kind == @fs.Regular {
+      safe_mkdir(@path.Path(to).dirname().to_string())
+      @fs.write_binary(to, @fs.read_binary(from))
+    }
+  }
+}
+
+///|
+/// Apply planned edits in staging and produce lockfile edits with manager validation.
+async fn stage_lockfiles(
+  root : String,
+  loaded : @workspace.LoadedWorkspace,
+  plan : @model.VersionPlan,
+) -> @model.VersionPlan {
+  let npm_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
+    x.ecosystem == "npm"
+  })
+  if npm_workspaces.is_empty() {
+    return plan
+  }
+  let stage = @fs.tmpdir(prefix="moonset-lock-stage-")
+  defer (@fs.rmdir(stage, recursive=true, allow_missing=true) catch { _ => () })
+  copy_staging_tree(root, stage)
+  for edit in plan.edits {
+    let target = absolute(stage, edit.path)
+    if edit.kind == "changeset" && edit.after_text == "" {
+      safe_remove(target)
+    } else {
+      safe_mkdir(@path.Path(target).dirname().to_string())
+      safe_write(target, edit.after_text)
+    }
+  }
+  let lock_edits : Array[@model.FileEdit] = []
+  for workspace in npm_workspaces {
+    let workspace_root = if workspace.root == "." { "" } else { workspace.root }
+    let package_path = if workspace_root == "" {
+      "package.json"
+    } else {
+      workspace_root + "/package.json"
+    }
+    let package_json = @json.parse(safe_read(absolute(stage, package_path))) catch {
+      _ =>
+        raise @model.Invalid(
+          @model.diagnostic(
+            "invalid-package",
+            "Cannot parse package manager manifest",
+            path=package_path,
+          ),
+        )
+    }
+    let manager_value = match package_json {
+      { "packageManager": String(value), .. } => value
+      _ =>
+        raise @model.Invalid(
+          @model.diagnostic(
+            "package-manager-required",
+            "package.json must declare an exact packageManager version",
+            path=package_path,
+          ),
+        )
+    }
+    let expected_prefix = workspace.manager + "@"
+    if !manager_value.has_prefix(expected_prefix) {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "package-manager-conflict",
+          "packageManager does not match the configured workspace manager",
+          path=package_path,
+        ),
+      )
+    }
+    let version_parts = manager_value[expected_prefix.length():]
+      .to_owned()
+      .split("+")
+      .collect()
+    let exact_version = version_parts[0].to_owned()
+    if exact_version == "" || !exact_version.contains(".") {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "package-manager-required",
+          "packageManager must contain an exact version",
+          path=package_path,
+        ),
+      )
+    }
+    let manager_program = package_manager_program(workspace.manager)
+    let version_probe = @shell.Cmd(
+      manager_program,
+      ["--version"],
+      cwd=absolute(stage, workspace_root),
+    ).output()
+    if version_probe.exit_code() != 0 ||
+      version_probe.stdout().trim().to_owned() != exact_version {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "package-manager-version",
+          "Installed " +
+          workspace.manager +
+          " does not match packageManager " +
+          exact_version,
+          path=package_path,
+        ),
+      )
+    }
+    let args = if workspace.manager == "pnpm" {
+      ["install", "--lockfile-only", "--ignore-scripts", "--offline"]
+    } else {
+      ["install", "--package-lock-only", "--ignore-scripts", "--offline"]
+    }
+    let install = @shell.Cmd(
+      manager_program,
+      args,
+      cwd=absolute(stage, workspace_root),
+    ).output()
+    if install.exit_code() != 0 {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-stage-failed",
+          "Package manager could not resolve lockfile offline: " +
+          install.stderr(),
+          path=package_path,
+        ),
+      )
+    }
+    let lock_path = if workspace.manager == "pnpm" {
+      if workspace_root == "" {
+        "pnpm-lock.yaml"
+      } else {
+        workspace_root + "/pnpm-lock.yaml"
+      }
+    } else if workspace_root == "" {
+      "package-lock.json"
+    } else {
+      workspace_root + "/package-lock.json"
+    }
+    let generated_path = absolute(stage, lock_path)
+    if !safe_exists(generated_path) {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-missing",
+          "Package manager did not produce its declared lockfile",
+          path=lock_path,
+        ),
+      )
+    }
+    let after = safe_read(generated_path)
+    let source_path = absolute(root, lock_path)
+    let before = if safe_exists(source_path) {
+      safe_read(source_path)
+    } else {
+      ""
+    }
+    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-out-of-date",
+          "Generated lockfile differs in verify-only mode",
+          path=lock_path,
+        ),
+      )
+    }
+    if before != after {
+      lock_edits.push({
+        path: lock_path,
+        kind: "lockfile",
+        owner: workspace.id,
+        before_hash: @model.fingerprint(Json::string(before)),
+        after_text: after,
+        atomic_write: true,
+      })
+    }
+  }
+  if loaded.snapshot.config.lockfiles == "verify-only" {
+    return plan
+  }
+  let edits = plan.edits + lock_edits
+  {
+    ..plan,
+    edits,
+    fingerprint: @model.fingerprint({
+      "base": plan.fingerprint,
+      "lockfiles": lock_edits.map(x => x.to_json()),
+    }),
+  }
+}
+
+///|
 async fn version_command(options : Options) -> Int32 {
   if options.recover {
     return recover_version(options.cwd)
@@ -189,7 +400,7 @@ async fn version_command(options : Options) -> Int32 {
     loaded.changesets,
     pre?=loaded.pre,
   )
-  let plan = @engine.build_version_plan(
+  let raw_plan = @engine.build_version_plan(
     loaded.snapshot,
     analysis,
     @model.VersionOptions::{
@@ -199,6 +410,7 @@ async fn version_command(options : Options) -> Int32 {
     },
     generated_at=utc_date(@env.now()),
   )
+  let plan = stage_lockfiles(loaded.snapshot.root, loaded, raw_plan)
   let rendered = if options.pretty {
     plan.to_json().stringify(indent=2)
   } else {
@@ -387,6 +599,340 @@ async fn tag_command(options : Options) -> Int32 {
     println("Created " + names.join(", "))
   }
   0
+}
+
+///|
+/// Execute the native pack adapter and return a machine-readable result.
+async fn pack_command(options : Options) -> Int32 {
+  let loaded = @workspace.discover(options.cwd, config_path?=options.config)
+  let results : Array[Json] = []
+  for unit in loaded.snapshot.units {
+    match unit.version {
+      None => ()
+      Some(version) => {
+        if options.dry_run && unit.ecosystem == "moonbit" {
+          let result : @model.PackResult = {
+            artifact_id: unit.id + "@" + version,
+            unit_id: unit.id,
+            version,
+            target: "source",
+            archive_path: "",
+            source_commit: loaded.snapshot.git_head,
+            content_hash: "",
+            verified: false,
+          }
+          results.push(result.to_json())
+          continue
+        }
+        let cwd = absolute(loaded.snapshot.root, unit.root)
+        let args = if unit.ecosystem == "moonbit" {
+          ["package", "--frozen"]
+        } else if options.dry_run {
+          ["pack", "--dry-run", "--ignore-scripts", "--json"]
+        } else {
+          ["pack", "--ignore-scripts", "--json"]
+        }
+        let program = if unit.ecosystem == "moonbit" {
+          "moon"
+        } else {
+          package_manager_program("npm")
+        }
+        let output = @shell.Cmd(program, args, cwd~).output()
+        if output.exit_code() != 0 {
+          raise @model.Io(
+            program + " pack failed for " + unit.id + ": " + output.stderr(),
+          )
+        }
+        let packed = @json.parse(output.stdout()) catch { _ => Json::null() }
+        let (archive, content_hash) = match packed {
+          Array(
+            [
+              {
+                "filename": String(filename),
+                "integrity": String(integrity),
+                ..
+              },
+              ..,
+            ]
+          ) => (filename, integrity)
+          _ => ("", "")
+        }
+        let result : @model.PackResult = {
+          artifact_id: unit.id + "@" + version,
+          unit_id: unit.id,
+          version,
+          target: "source",
+          archive_path: archive,
+          source_commit: loaded.snapshot.git_head,
+          content_hash,
+          verified: unit.ecosystem == "npm" &&
+          archive != "" &&
+          content_hash != "",
+        }
+        results.push(result.to_json())
+      }
+    }
+  }
+  let result : Json = {
+    "schemaVersion": 1,
+    "dryRun": options.dry_run,
+    "results": results,
+  }
+  if options.json {
+    println(@model.canonical_json(result))
+  } else {
+    println("Packed " + results.length().to_string() + " artifacts")
+  }
+  0
+}
+
+///|
+/// Publish versioned units with durable per-target status.
+async fn publish_command(options : Options) -> Int32 {
+  let loaded = @workspace.discover(options.cwd, config_path?=options.config)
+  let state_path = absolute(loaded.snapshot.root, ".moonset/release-state.json")
+  if !safe_exists(state_path) {
+    usage_error("No release state exists; run version first")
+  }
+  let state = @json.parse(safe_read(state_path)) catch {
+    _ =>
+      raise @model.Invalid(
+        @model.diagnostic("usage", "Release state is not valid JSON"),
+      )
+  }
+  guard state
+    is { "planFingerprint": String(plan_id), "releases": Array(items), .. } else {
+    raise @model.Invalid(
+      @model.diagnostic("usage", "Release state has an invalid shape"),
+    )
+  }
+  let statuses : Array[Json] = []
+  let completed : Map[String, Bool] = Map([])
+  let previous_path = absolute(
+    loaded.snapshot.root,
+    ".moonset/publish-state.json",
+  )
+  if safe_exists(previous_path) {
+    let previous = @json.parse(safe_read(previous_path)) catch {
+      _ => Json::null()
+    }
+    match previous {
+      {
+        "planId": String(previous_plan),
+        "statuses": Array(previous_statuses),
+        ..
+      } if previous_plan == plan_id =>
+        for previous_status in previous_statuses {
+          match previous_status {
+            {
+              "unitId": String(previous_unit),
+              "version": String(previous_version),
+              "target": String(previous_target),
+              "state": String("published"),
+              ..
+            } =>
+              completed[previous_unit +
+              "@" +
+              previous_version +
+              "/" +
+              previous_target] = true
+            _ => ()
+          }
+          statuses.push(previous_status)
+        }
+      _ => ()
+    }
+  }
+  let mut failed = false
+  let targets : Array[(String, String, String, String)] = []
+  for item in items {
+    guard item
+      is {
+        "unitId": String(unit_id),
+        "newVersion": String(version),
+        "publish": True,
+        ..
+      } else {
+      continue
+    }
+    if options.only is Some(only) && only != unit_id {
+      continue
+    }
+    if completed.contains(unit_id + "@" + version + "/source") {
+      continue
+    }
+    let mut unit : @model.ReleaseUnit? = None
+    for candidate in loaded.snapshot.units {
+      if candidate.id == unit_id {
+        unit = Some(candidate)
+      }
+    }
+    match unit {
+      None => {
+        failed = true
+        statuses.push({
+          "unitId": unit_id,
+          "version": version,
+          "target": "source",
+          "state": "blocked",
+          "message": "unit not found",
+        })
+      }
+      Some(unit) => {
+        let cwd = absolute(loaded.snapshot.root, unit.root)
+        let program = if unit.ecosystem == "moonbit" {
+          "moon"
+        } else {
+          package_manager_program("npm")
+        }
+        let preflight_args = if unit.ecosystem == "moonbit" {
+          ["publish", "--dry-run"]
+        } else {
+          ["publish", "--dry-run", "--ignore-scripts"]
+        }
+        let preflight = @shell.Cmd(program, preflight_args, cwd~).output()
+        let ok = preflight.exit_code() == 0
+        if !ok {
+          failed = true
+        }
+        statuses.push({
+          "planId": plan_id,
+          "unitId": unit_id,
+          "version": version,
+          "target": "source",
+          "registry": if unit.ecosystem == "npm" {
+            "npm"
+          } else {
+            "mooncakes"
+          },
+          "state": if ok {
+            "preflighted"
+          } else {
+            "blocked"
+          },
+          "message": if ok {
+            Json::null()
+          } else {
+            Json::string(preflight.stderr())
+          },
+        })
+        if ok {
+          targets.push((unit_id, version, unit.ecosystem, cwd))
+        }
+      }
+    }
+  }
+  safe_mkdir(absolute(loaded.snapshot.root, ".moonset"))
+  safe_write(
+    absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
+    @model.canonical_json({
+      "schemaVersion": 1,
+      "planId": plan_id,
+      "statuses": statuses,
+    }) +
+    "\n",
+  )
+  if options.dry_run || failed {
+    let result : Json = {
+      "schemaVersion": 1,
+      "planId": plan_id,
+      "dryRun": options.dry_run,
+      "complete": false,
+      "statuses": statuses,
+    }
+    if options.json {
+      println(@model.canonical_json(result))
+    } else {
+      println(
+        if failed {
+          "Publish preflight failed"
+        } else {
+          "Publish preflight complete"
+        },
+      )
+    }
+    return if failed { 3 } else { 0 }
+  }
+  for (unit_id, version, ecosystem, cwd) in targets {
+    let program = if ecosystem == "moonbit" {
+      "moon"
+    } else {
+      package_manager_program("npm")
+    }
+    let args = if ecosystem == "moonbit" {
+      ["publish"]
+    } else {
+      ["publish", "--ignore-scripts"]
+    }
+    let output = @shell.Cmd(program, args, cwd~).output()
+    let ok = output.exit_code() == 0
+    if !ok {
+      failed = true
+    }
+    statuses.push({
+      "planId": plan_id,
+      "unitId": unit_id,
+      "version": version,
+      "target": "source",
+      "registry": if ecosystem == "npm" {
+        "npm"
+      } else {
+        "mooncakes"
+      },
+      "state": if ok {
+        "published"
+      } else {
+        "failed"
+      },
+      "message": if ok {
+        Json::null()
+      } else {
+        Json::string(output.stderr())
+      },
+    })
+    safe_write(
+      absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
+      @model.canonical_json({
+        "schemaVersion": 1,
+        "planId": plan_id,
+        "statuses": statuses,
+      }) +
+      "\n",
+    )
+  }
+  safe_mkdir(absolute(loaded.snapshot.root, ".moonset"))
+  safe_write(
+    absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
+    @model.canonical_json({
+      "schemaVersion": 1,
+      "planId": plan_id,
+      "statuses": statuses,
+    }) +
+    "\n",
+  )
+  let result : Json = {
+    "schemaVersion": 1,
+    "planId": plan_id,
+    "dryRun": options.dry_run,
+    "complete": !failed,
+    "statuses": statuses,
+  }
+  if options.json {
+    println(@model.canonical_json(result))
+  } else {
+    println(
+      if failed {
+        "Publish failed; see .moonset/publish-state.json"
+      } else {
+        "Publish complete"
+      },
+    )
+  }
+  if failed {
+    3
+  } else {
+    0
+  }
 }
 
 ///|
@@ -711,7 +1257,7 @@ async fn execute(options : Options) -> Int32 {
   let _ = options.no_commit
   if options.command == "help" {
     println(
-      "moonset Phase 3\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--no-changelog] [--recover]\n  tag|git-tag [--dry-run] [--push] [--force] [--format template]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
+      "moonset Phase 4\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--no-changelog] [--recover]\n  pack [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--format template]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
     )
     return 0
   }
@@ -733,6 +1279,12 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "tag" || options.command == "git-tag" {
     return tag_command(options)
+  }
+  if options.command == "pack" {
+    return pack_command(options)
+  }
+  if options.command == "publish" {
+    return publish_command(options)
   }
   let loaded = @workspace.discover(
     options.cwd,

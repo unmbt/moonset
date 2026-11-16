@@ -1,6 +1,6 @@
 # CLI 命令契约
 
-Phase 2 提供 `init`、`add`、`pre enter|exit|status`，并保留 `status`、`publish-plan`、`--help`、`--version`。
+Phase 4 提供 `pack`、`publish`、`tag` 以及此前的 changeset、版本和状态命令。
 
 命令先解析配置所属 release domain，再发现其中的生态 workspace；可用全局 `--cwd` 定位，`--config` 显式选择分区。默认输出面向人类，`--output json` 或命令专属 `--json` 输出版本化 JSON。所有命令支持 `--help`、`--version`、`--quiet`，写操作支持 `--dry-run`（如果有意义）。混合模式契约见 [混合 workspace 设计](mixed-workspaces.md)，目前尚未实现。
 
@@ -114,7 +114,7 @@ moonset pre status
 ## `pack`
 
 ```text
-moonset pack [--package name ...] [--frozen] [--dry-run]
+moonset pack [--package name ...] [--frozen] [--dry-run] [--json]
 ```
 
 对需要发布的单元调用相应 pack adapter。MoonBit 使用 `moon package`；JS 使用选定且固定版本的 npm/pnpm profile。捕获来源 commit、UnitId、版本、平台、归档路径和校验值；生成的 `dist/package.json` 与源码清单保持绑定。生命周期脚本由明确的打包阶段执行，查询命令不执行它们。
@@ -122,8 +122,8 @@ moonset pack [--package name ...] [--frozen] [--dry-run]
 ## `publish`
 
 ```text
-moonset publish [--dry-run] [--registry name] [--tag dist-tag]
-  [--only name ...] [--yes] [--no-tag] [--retry count]
+moonset publish [--dry-run] [--registry name] [--only name]
+  [--yes] [--retry count] [--json]
 ```
 
 发布前重新读取 workspace 和版本，校验存在 release commit 或显式 `--allow-uncommitted`。单生态默认 publisher 是 `moon publish`：先对全部目标执行 `--dry-run`，确认成功后才执行真实发布。混合模式按 UnitId/target 选择 publisher，并验证全部必需产物；不把 JS 单元传给 moon。真实发布不自动运行 `version`。

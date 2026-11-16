@@ -196,6 +196,86 @@ pub fn ApplyResult::to_json(self : ApplyResult) -> Json {
 }
 
 ///|
+pub fn ArtifactIntent::to_json(self : ArtifactIntent) -> Json {
+  {
+    "id": self.id,
+    "unitId": self.unit_id,
+    "version": self.version,
+    "target": self.target,
+    "required": self.required,
+    "sourceCommit": nullable(self.source_commit),
+    "expectedHash": nullable(self.expected_hash),
+    "path": nullable(self.path),
+  }
+}
+
+///|
+pub fn PackResult::to_json(self : PackResult) -> Json {
+  {
+    "artifactId": self.artifact_id,
+    "unitId": self.unit_id,
+    "version": self.version,
+    "target": self.target,
+    "archivePath": self.archive_path,
+    "sourceCommit": nullable(self.source_commit),
+    "contentHash": self.content_hash,
+    "verified": self.verified,
+  }
+}
+
+///|
+pub fn PublishTarget::to_json(self : PublishTarget) -> Json {
+  {
+    "unitId": self.unit_id,
+    "version": self.version,
+    "target": self.target,
+    "registry": self.registry,
+    "publisher": self.publisher,
+    "artifactId": nullable(self.artifact_id),
+    "required": self.required,
+  }
+}
+
+///|
+pub fn PublishState::text(self : PublishState) -> String {
+  match self {
+    Pending => "pending"
+    Preflighted => "preflighted"
+    Published => "published"
+    Skipped => "skipped"
+    Failed => "failed"
+    Blocked => "blocked"
+  }
+}
+
+///|
+pub fn PublishStatus::to_json(self : PublishStatus) -> Json {
+  {
+    "planId": self.plan_id,
+    "unitId": self.unit_id,
+    "version": self.version,
+    "target": self.target,
+    "registry": self.registry,
+    "state": self.state.text(),
+    "digest": nullable(self.digest),
+    "externalId": nullable(self.external_id),
+    "message": nullable(self.message),
+  }
+}
+
+///|
+pub fn PublishResult::to_json(self : PublishResult) -> Json {
+  {
+    "schemaVersion": self.schema_version,
+    "planId": self.plan_id,
+    "dryRun": self.dry_run,
+    "complete": self.complete,
+    "statuses": self.statuses.map(x => x.to_json()),
+    "recoveryPath": nullable(self.recovery_path),
+  }
+}
+
+///|
 /// Stable compact JSON: object keys sorted, arrays retain their semantic order.
 pub fn canonical_json(value : Json) -> String {
   match value {

@@ -26,6 +26,7 @@ priv struct Options {
   tag_force : Bool
   tag_format : String
   yes : Bool
+  only : String?
 }
 
 ///|
@@ -61,6 +62,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut tag_push = false
   let mut tag_format = ""
   let mut yes = false
+  let mut only : String? = None
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -79,6 +81,14 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       "--recover" => recover = true
       "--push" => tag_push = true
       "--yes" => yes = true
+      "--only" => {
+        if i >= args.length() {
+          usage_error("Missing value for " + arg)
+        }
+        let value = args[i]
+        i += 1
+        only = Some(value)
+      }
       "--empty" => empty = true
       "--no-format" => ()
       "--initial-version" => initial_version = true
@@ -136,6 +146,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     json = true
   } else if ![
       "help", "version-info", "init", "add", "pre", "version", "tag", "git-tag",
+      "pack", "publish",
     ].contains(command) {
     usage_error("Unknown command: " + command)
   }
@@ -176,5 +187,6 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     tag_force: force,
     tag_format,
     yes,
+    only,
   }
 }

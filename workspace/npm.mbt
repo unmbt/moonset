@@ -253,9 +253,14 @@ async fn discover_npm_workspace(
         _ => ()
       }
     }
-    let publish = match overrides.get(id) {
-      Some({ publish: Some(value), .. }) => value
-      _ => !private
+    // npm's native private=true prohibition cannot be overridden by moonset policy.
+    let publish = if private {
+      false
+    } else {
+      match overrides.get(id) {
+        Some({ publish: Some(value), .. }) => value
+        _ => true
+      }
     }
     units.push({
       id,

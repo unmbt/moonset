@@ -4,7 +4,7 @@
 
 Phase 1 实际验证：`moon test --target native`（engine 解析/规划 golden 与 workspace 临时目录/Git 集成）、`moon run scripts/cli-integration.mbtx`（真实可执行文件黑盒），以及 `moon run scripts/embed-schema.mbtx --check`（编译内置 schema 与文档一致）。`.github/workflows/ci.yml` 在 Windows/Linux/macOS 固定 MoonBit 0.10.20 执行 check/test/build、CLI、格式与接口检查。
 
-这些测试覆盖 FR-003/004/005/006，FR-011/012/016 的 Phase 1 子集，以及 FR-018/019/023 的共存边界。后续 init/version/publish、npm adapter 和 App 的测试矩阵尚未宣称通过。
+这些测试覆盖 FR-003/004/005/006、Phase 2/3 CLI 基线和 FR-018/019/023 的共存边界。Phase 4 的 registry、平台产物与跨目标续跑还需 fake adapter 集成矩阵验证；GitHub App 不属于 Phase 4。
 
 ## 1. 测试层次
 

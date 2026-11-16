@@ -1,0 +1,97 @@
+name: moonset release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changeset-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
+      - run: moon build --target native --release
+      - run: ./_build/native/release/build/cmd/moonset/moonset status --since="${{ github.event.pull_request.base.sha }}" --output json > status.json
+      - uses: actions/upload-artifact@v4
+        with: { name: moonset-status, path: status.json }
+
+  build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
+      - run: moon build --target native --release
+      - run: ./_build/native/release/build/cmd/moonset/moonset pack --dry-run --json > pack.json
+      - uses: actions/upload-artifact@v4
+        with: { name: moonset-pack, path: pack.json }
+
+  publish-mooncakes:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: moonset-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
+      - run: moon build --target native --release
+      # Replace the example UnitId with a configured MoonBit release target.
+      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only moonbit:org/library --dry-run --yes --json > publish-preflight.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only moonbit:org/library --yes --json
+        env:
+          MOONCAKES_TOKEN: ${{ secrets.MOONCAKES_TOKEN }}
+
+  publish-npm:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: moonset-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
+      - run: moon build --target native --release
+      # Replace the example UnitId with a configured npm release target.
+      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only npm:@org/library --dry-run --yes --json > publish-preflight.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only npm:@org/library --yes --json
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  tag:
+    needs: [publish-mooncakes, publish-npm]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
+      - run: moon build --target native --release
+      - run: ./_build/native/release/build/cmd/moonset/moonset tag --push --yes
