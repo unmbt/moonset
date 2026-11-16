@@ -33,6 +33,7 @@
 - 文档示例中的 MoonBit API 必须用当前工具链验证；本版本基线见 [参考实现评估](references.md)。
 - 实现一个阶段前，维护 `requirements.md` 的状态；实现后补上验证命令和测试编号。
 - 本地开发提交前必须使用与 CI 相同的严格检查：`moon check --target native --deny-warn`；同时运行受影响的 `moon test --target native --deny-warn`（若工具链不支持 test 的该参数，则至少执行前一条 check）。普通不带 `--deny-warn` 的检查不能作为 CI 通过依据。
+- 本地依赖验证前先执行 `moon update` 和 `python scripts/migrate-registry-manifests.py`，迁移 `.mooncakes` 内惰性下载的旧 `moon.mod.json` 清单以及工具链不兼容的第三方 `Float` 标识符；严格检查若又拉取旧格式包，重复迁移后再检查。脚本只改本机缓存，不提交缓存文件。
 
 ## 状态标记
 

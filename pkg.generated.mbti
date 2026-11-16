@@ -10,6 +10,8 @@ import {
 // Values
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String) -> @model.VersionPlan raise @model.MoonsetError
+
 pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
 
 pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
@@ -18,6 +20,8 @@ pub fn parse_config(String, path? : String) -> @model.Config raise @model.Moonse
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
+pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset], Array[@model.DependencyIntent], String) -> String
+
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
 // Errors
@@ -25,9 +29,15 @@ pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_direc
 // Types and methods
 
 // Type aliases
+pub using @model {type ApplyResult}
+
+pub using @model {type ChangelogEntry}
+
 pub using @model {type Changeset}
 
 pub using @model {type Diagnostic}
+
+pub using @model {type FileEdit}
 
 pub using @workspace {type LoadedWorkspace}
 
@@ -37,9 +47,17 @@ pub using @model {type PreState}
 
 pub using @model {type ReleasePlan}
 
+pub using @model {type ReleaseState}
+
 pub using @model {type ReleaseUnit}
 
+pub using @model {type TagIntent}
+
 pub type UnitId = String
+
+pub using @model {type VersionOptions}
+
+pub using @model {type VersionPlan}
 
 pub using @model {type WorkspaceSnapshot}
 

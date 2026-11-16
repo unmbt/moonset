@@ -8,6 +8,10 @@
 `moon check --target native --deny-warn`。新增或修改测试后还应运行
 `moon test --target native --deny-warn`；若当前 MoonBit 工具链不接受 test 的
 `--deny-warn` 参数，必须至少运行严格 check，并记录工具链限制和替代命令。
+本地依赖验证前执行 `moon update` 与
+`python scripts/migrate-registry-manifests.py`；Moon 会延迟下载 registry 包，
+若严格检查报告旧 `moon.mod.json`，重新运行迁移脚本后再检查。迁移只针对
+`.mooncakes` 缓存，不将缓存文件纳入提交。
 
 ## 1. 问题与目标
 

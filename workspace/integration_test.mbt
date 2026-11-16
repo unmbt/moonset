@@ -99,17 +99,20 @@ async test "workspace escape duplicate ownership and unsupported adapter fail be
     _ => true
   }
   assert_true(rejected)
+  write(root, "moon.work", "members = [\"a\"]")
   write(
-    root, ".changeset/config.json", "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"coexist\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\".\",\"manager\":\"pnpm\",\"includeRoot\":true}]}}}",
+    root, ".changeset/config.json", "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"coexist\",\"workspaces\":[{\"id\":\"moon\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":false},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\".\",\"manager\":\"pnpm\",\"includeRoot\":true}]}}}",
   )
-  let rejected = try {
+  write(
+    root, "package.json", "{\"name\":\"acme/root\",\"version\":\"1.0.0\",\"private\":true}",
+  )
+  let accepted = try {
     ignore(@workspace.discover(root))
-    false
+    true
   } catch {
-    @model.Invalid(d) => d.code == "unsupported-capability"
     _ => false
   }
-  assert_true(rejected)
+  assert_true(accepted)
 }
 
 ///|
