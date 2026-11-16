@@ -20,6 +20,21 @@ pub(all) suberror MoonsetError {
 }
 
 // Types and methods
+pub(all) struct ApplyResult {
+  applied : Bool
+  rolled_back : Bool
+  journal : String?
+  state : ReleaseState?
+}
+pub fn ApplyResult::to_json(Self) -> @json.Json
+
+pub(all) struct Bridge {
+  consumer : String
+  producer : String
+  bump : Bump
+  wait_for : String
+}
+
 #derive(Eq, @debug.Debug)
 pub(all) enum Bump {
   None
@@ -37,6 +52,16 @@ pub(all) struct Change {
   unit_id : String
   bump : Bump
 }
+
+pub(all) struct ChangelogEntry {
+  unit_id : String
+  version : String
+  date : String
+  section : String
+  text : String
+  path : String
+}
+pub fn ChangelogEntry::to_json(Self) -> @json.Json
 
 pub(all) struct Changeset {
   id : String
@@ -65,6 +90,18 @@ pub(all) struct Config {
   github : String?
   access : String
   base_branch : String
+  private_version : Bool
+  private_tag : Bool
+  private_publish : Bool
+  changelog_file : String
+  tag_create : Bool
+  tag_after_publish : Bool
+  tag_format : String
+  tag_push : Bool
+  lockfiles : String
+  mixed_workspaces : Array[MixedWorkspaceSpec]
+  bridges : Array[Bridge]
+  unit_overrides : Map[String, UnitOverride]
   raw : @json.Json
 }
 pub fn Config::default() -> Self
@@ -117,6 +154,24 @@ pub(all) struct EcosystemWorkspace {
   manager : String
 }
 
+pub(all) struct FileEdit {
+  path : String
+  kind : String
+  owner : String
+  before_hash : String
+  after_text : String
+  atomic_write : Bool
+}
+pub fn FileEdit::to_json(Self) -> @json.Json
+
+pub(all) struct MixedWorkspaceSpec {
+  id : String
+  ecosystem : String
+  root : String
+  manager : String
+  include_root : Bool
+}
+
 pub(all) struct Ownership {
   path : String
   field : String
@@ -155,6 +210,15 @@ pub(all) struct ReleasePlan {
 }
 pub fn ReleasePlan::to_json(Self) -> @json.Json
 
+pub(all) struct ReleaseState {
+  plan_fingerprint : String
+  source_head : String?
+  releases : Array[Release]
+  tags : Array[TagIntent]
+  consumed_changesets : Array[String]
+}
+pub fn ReleaseState::to_json(Self) -> @json.Json
+
 pub(all) struct ReleaseUnit {
   id : String
   native_name : String
@@ -167,6 +231,39 @@ pub(all) struct ReleaseUnit {
   publish : Bool
   dependencies : Array[DependencyEdge]
 }
+
+pub(all) struct TagIntent {
+  unit_id : String
+  version : String
+  name : String
+}
+pub fn TagIntent::to_json(Self) -> @json.Json
+
+pub(all) struct UnitOverride {
+  publish : Bool?
+  publisher : String?
+  tag_format : String?
+}
+
+pub(all) struct VersionOptions {
+  dry_run : Bool
+  no_changelog : Bool
+  snapshot_tag : String?
+}
+
+pub(all) struct VersionPlan {
+  schema_version : Int32
+  stage : String
+  executable : Bool
+  fingerprint : String
+  edits : Array[FileEdit]
+  changelogs : Array[ChangelogEntry]
+  tags : Array[TagIntent]
+  consumed_changesets : Array[String]
+  analysis : ReleasePlan
+  generated_at : String?
+}
+pub fn VersionPlan::to_json(Self) -> @json.Json
 
 pub(all) struct WorkspaceSnapshot {
   root : String

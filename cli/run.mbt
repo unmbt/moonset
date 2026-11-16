@@ -4,6 +4,392 @@ async fn stderr(message : String) -> Unit {
 }
 
 ///|
+async fn safe_exists(path : String) -> Bool raise @model.MoonsetError {
+  @fs.exists(path) catch {
+    error => raise @model.Io(error.to_string())
+  }
+}
+
+///|
+async fn safe_read(path : String) -> String raise @model.MoonsetError {
+  @fs.read_text(path) catch {
+    error => raise @model.Io(error.to_string())
+  }
+}
+
+///|
+async fn safe_write(
+  path : String,
+  text : String,
+) -> Unit raise @model.MoonsetError {
+  @fs.write_text(path, text) catch {
+    error => raise @model.Io(error.to_string())
+  }
+}
+
+///|
+async fn safe_mkdir(path : String) -> Unit raise @model.MoonsetError {
+  @fs.mkdir(path, recursive=true, allow_exist=true) catch {
+    error => raise @model.Io(error.to_string())
+  }
+}
+
+///|
+async fn safe_remove(path : String) -> Unit raise @model.MoonsetError {
+  @fs.remove(path, allow_missing=true) catch {
+    error => raise @model.Io(error.to_string())
+  }
+}
+
+///|
+/// Convert the host UTC millisecond clock to the stable YYYY-MM-DD form used
+/// by the builtin changelog generator.
+fn utc_date(milliseconds : UInt64) -> String {
+  let days = milliseconds.reinterpret_as_int64() / 86400000L
+  let z = days + 719468L
+  let era = if z >= 0L { z / 146097L } else { (z - 146096L) / 146097L }
+  let doe = z - era * 146097L
+  let yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
+  let year0 = yoe + era * 400L
+  let doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
+  let month0 = (5L * doy + 2L) / 153L
+  let day = doy - (153L * month0 + 2L) / 5L + 1L
+  let month = month0 + (if month0 < 10L { 3L } else { -9L })
+  let year = year0 + (if month <= 2L { 1L } else { 0L })
+  let pad = fn(value : Int64) -> String {
+    if value < 10L {
+      "0" + value.to_string()
+    } else {
+      value.to_string()
+    }
+  }
+  year.to_string() + "-" + pad(month) + "-" + pad(day)
+}
+
+///|
+fn absolute(root : String, relative_path : String) -> String {
+  @path.Path(root).join(@path.Path(relative_path)).to_string()
+}
+
+///|
+async fn recover_version(root : String) -> Int32 raise @model.MoonsetError {
+  let journal_path = absolute(root, ".moonset/version-journal.json")
+  if !safe_exists(journal_path) {
+    usage_error("No version journal exists")
+  }
+  let json = @json.parse(safe_read(journal_path)) catch {
+    _ =>
+      raise @model.Invalid(
+        @model.diagnostic("usage", "Version journal is not valid JSON"),
+      )
+  }
+  guard json is { "entries": Array(entries), .. } else {
+    raise @model.Invalid(
+      @model.diagnostic("usage", "Version journal has an invalid shape"),
+    )
+  }
+  for item in entries {
+    match item {
+      { "path": String(path), "existed": True, "content": String(content), .. } => {
+        let target = absolute(root, path)
+        safe_mkdir(@path.Path(target).dirname().to_string())
+        safe_write(target, content)
+      }
+      { "path": String(path), "existed": False, "content": String(_), .. } =>
+        safe_remove(absolute(root, path))
+      _ => usage_error("Version journal contains an invalid entry")
+    }
+  }
+  safe_remove(journal_path)
+  println("Recovered version files from " + journal_path)
+  0
+}
+
+///|
+async fn apply_version_plan(
+  root : String,
+  plan : @model.VersionPlan,
+) -> Unit raise @model.MoonsetError {
+  let originals : Array[Json] = []
+  for edit in plan.edits {
+    let target = absolute(root, edit.path)
+    let existed = safe_exists(target)
+    let current = if existed { safe_read(target) } else { "" }
+    if @model.fingerprint(Json::string(current)) != edit.before_hash {
+      usage_error("Stale version plan input: " + edit.path)
+    }
+    originals.push({ "path": edit.path, "existed": existed, "content": current })
+  }
+  let journal_dir = absolute(root, ".moonset")
+  let journal_path = absolute(root, ".moonset/version-journal.json")
+  safe_mkdir(journal_dir)
+  safe_write(
+    journal_path,
+    @model.canonical_json({
+      "planFingerprint": plan.fingerprint,
+      "entries": originals,
+    }) +
+    "\n",
+  )
+  try {
+    let mut index = 0
+    for edit in plan.edits {
+      let target = absolute(root, edit.path)
+      if edit.kind == "changeset" && edit.after_text == "" {
+        safe_remove(target)
+      } else {
+        let temporary = target + ".moonset-" + index.to_string() + ".tmp"
+        safe_mkdir(@path.Path(target).dirname().to_string())
+        safe_write(temporary, edit.after_text)
+        @fs.rename(temporary, target, replace=true)
+      }
+      index += 1
+    }
+    safe_remove(journal_path)
+  } catch {
+    error => {
+      for original in originals {
+        match original {
+          {
+            "path": String(path),
+            "existed": True,
+            "content": String(content),
+            ..
+          } => safe_write(absolute(root, path), content)
+          { "path": String(path), "existed": False, .. } =>
+            safe_remove(absolute(root, path))
+          _ => ()
+        }
+      }
+      safe_remove(journal_path)
+      raise @model.Io(error.to_string())
+    }
+  }
+}
+
+///|
+async fn version_command(options : Options) -> Int32 {
+  if options.recover {
+    return recover_version(options.cwd)
+  }
+  let loaded = @workspace.discover(
+    options.cwd,
+    config_path?=options.config,
+    since?=options.since,
+  )
+  if loaded.snapshot.config.changelog != "builtin" {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "unsupported-capability", "Phase 3 only supports the builtin changelog generator",
+      ),
+    )
+  }
+  let analysis = @engine.build_plan(
+    loaded.snapshot,
+    loaded.changesets,
+    pre?=loaded.pre,
+  )
+  let plan = @engine.build_version_plan(
+    loaded.snapshot,
+    analysis,
+    @model.VersionOptions::{
+      dry_run: options.dry_run,
+      no_changelog: options.no_changelog,
+      snapshot_tag: options.snapshot,
+    },
+    generated_at=utc_date(@env.now()),
+  )
+  let rendered = if options.pretty {
+    plan.to_json().stringify(indent=2)
+  } else {
+    @model.canonical_json(plan.to_json())
+  }
+  if options.dry_run || options.json {
+    println(rendered)
+  }
+  if options.dry_run {
+    return 0
+  }
+  if plan.edits.is_empty() {
+    if !options.quiet && !options.json {
+      println("No releases")
+    }
+    return 0
+  }
+  apply_version_plan(loaded.snapshot.root, plan)
+  if !options.quiet && !options.json {
+    println("Applied " + plan.edits.length().to_string() + " version edits")
+  }
+  0
+}
+
+///|
+async fn git_result(
+  root : String,
+  args : Array[String],
+) -> (Int32, String, String) {
+  let output = @shell.Cmd("git", args, cwd=root).output()
+  (output.exit_code(), output.stdout(), output.stderr())
+}
+
+///|
+fn formatted_tag(intent : @model.TagIntent, template : String) -> String {
+  if template == "" {
+    return intent.name
+  }
+  let parts = intent.unit_id.split(":").collect()
+  let ecosystem = if parts.length() > 0 {
+    parts[0].to_owned()
+  } else {
+    "moonbit"
+  }
+  let name = if intent.unit_id.find(":") is Some(index) {
+    intent.unit_id[index + 1:].to_owned()
+  } else {
+    intent.unit_id
+  }
+  template
+  .replace_all(old="{ecosystem}", new=ecosystem)
+  .replace_all(old="{name}", new=name)
+  .replace_all(old="{version}", new=intent.version)
+}
+
+///|
+async fn tag_command(options : Options) -> Int32 {
+  let loaded = @workspace.discover(options.cwd, config_path?=options.config)
+  let state_path = absolute(loaded.snapshot.root, ".moonset/release-state.json")
+  if !@fs.exists(state_path) {
+    usage_error("No release state exists; run version first")
+  }
+  let state = @json.parse(@fs.read_text(state_path)) catch {
+    _ =>
+      raise @model.Invalid(
+        @model.diagnostic("usage", "Release state is not valid JSON"),
+      )
+  }
+  guard state is { "tags": Array(items), .. } else {
+    raise @model.Invalid(
+      @model.diagnostic("usage", "Release state has no tag intents"),
+    )
+  }
+  let intents : Array[@model.TagIntent] = []
+  for item in items {
+    guard item
+      is {
+        "unitId": String(unit_id),
+        "version": String(version),
+        "name": String(name),
+        ..
+      } else {
+      usage_error("Release state contains an invalid tag intent")
+    }
+    intents.push({ unit_id, version, name, })
+  }
+  let configured_format = if options.tag_format == "" {
+    loaded.snapshot.config.tag_format
+  } else {
+    options.tag_format
+  }
+  let configured_format = if configured_format == "auto" {
+    ""
+  } else {
+    configured_format
+  }
+  for intent in intents {
+    let mut unit : @model.ReleaseUnit? = None
+    for candidate in loaded.snapshot.units {
+      if candidate.id == intent.unit_id {
+        unit = Some(candidate)
+      }
+    }
+    if unit is Some(value) &&
+      value.visibility == "private" &&
+      !loaded.snapshot.config.private_tag {
+      usage_error("Tagging private unit is disabled: " + intent.unit_id)
+    }
+  }
+  let names = intents.map(intent => formatted_tag(intent, configured_format))
+  for name in names {
+    if name == "" ||
+      name.contains(" ") ||
+      name.contains("..") ||
+      name.has_prefix("-") {
+      usage_error("Invalid Git tag name: " + name)
+    }
+  }
+  let (head_code, head_out, head_err) = git_result(loaded.snapshot.root, [
+    "rev-parse", "HEAD",
+  ])
+  if head_code != 0 {
+    raise @model.Io(head_err)
+  }
+  match state {
+    { "sourceHead": String(source_head), .. } if source_head != "" &&
+      source_head != head_out.trim().to_owned() =>
+      usage_error("Git HEAD changed since version plan was applied")
+    _ => ()
+  }
+  let (dirty_code, dirty_out, _) = git_result(loaded.snapshot.root, [
+    "status", "--porcelain",
+  ])
+  if dirty_code == 0 && dirty_out.trim() != "" {
+    usage_error("Working tree is dirty; commit version changes before tagging")
+  }
+  if options.dry_run || options.json {
+    let output : Json = {
+      "schemaVersion": 1,
+      "head": head_out.trim(),
+      "tags": names,
+      "dryRun": options.dry_run,
+    }
+    println(
+      if options.pretty {
+        output.stringify(indent=2)
+      } else {
+        @model.canonical_json(output)
+      },
+    )
+  }
+  if options.dry_run {
+    return 0
+  }
+  if options.tag_force && !options.yes {
+    usage_error("--force requires --yes for tag")
+  }
+  for name in names {
+    let (existing_code, _, _) = git_result(loaded.snapshot.root, [
+      "rev-parse",
+      "--verify",
+      "refs/tags/" + name,
+    ])
+    if existing_code == 0 && !options.tag_force {
+      usage_error("Tag already exists: " + name)
+    }
+    let args = if options.tag_force {
+      ["tag", "-f", name, "HEAD"]
+    } else {
+      ["tag", name, "HEAD"]
+    }
+    let (created_code, _, created_err) = git_result(loaded.snapshot.root, args)
+    if created_code != 0 {
+      raise @model.Io(created_err)
+    }
+    if options.tag_push {
+      let (pushed_code, _, pushed_err) = git_result(loaded.snapshot.root, [
+        "push", "origin", name,
+      ])
+      if pushed_code != 0 {
+        raise @model.Io(pushed_err)
+      }
+    }
+  }
+  if !options.quiet && !options.json {
+    println("Created " + names.join(", "))
+  }
+  0
+}
+
+///|
 async fn write_new_file(path : String, content : String) -> Bool {
   if @fs.exists(path) {
     return false
@@ -38,6 +424,15 @@ async fn init_command(options : Options) -> Int32 {
   let gitignore = @path.Path(dir).join(@path.Path(".gitignore")).to_string()
   if write_new_file(gitignore, "pre.json\n") {
     created.push(".changeset/.gitignore")
+  }
+  let state_dir = @path.Path(options.cwd)
+    .join(@path.Path(".moonset"))
+    .to_string()
+  let state_ignore = @path.Path(state_dir)
+    .join(@path.Path(".gitignore"))
+    .to_string()
+  if write_new_file(state_ignore, "version-journal.json\n") {
+    created.push(".moonset/.gitignore")
   }
   if options.json {
     println(@model.canonical_json({ "created": created, "config": config }))
@@ -313,9 +708,10 @@ async fn write_plan(
 
 ///|
 async fn execute(options : Options) -> Int32 {
+  let _ = options.no_commit
   if options.command == "help" {
     println(
-      "moonset Phase 2\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
+      "moonset Phase 3\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--no-changelog] [--recover]\n  tag|git-tag [--dry-run] [--push] [--force] [--format template]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
     )
     return 0
   }
@@ -331,6 +727,12 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "pre" {
     return pre_command(options)
+  }
+  if options.command == "version" {
+    return version_command(options)
+  }
+  if options.command == "tag" || options.command == "git-tag" {
+    return tag_command(options)
   }
   let loaded = @workspace.discover(
     options.cwd,

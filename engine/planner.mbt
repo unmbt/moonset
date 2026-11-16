@@ -50,7 +50,7 @@ pub fn build_plan(
   let ids = snapshot.units.map(x => x.id)
   ids.sort()
   for unit in snapshot.units {
-    if unit.id != "moonbit:" + unit.native_name {
+    if unit.id != unit.ecosystem + ":" + unit.native_name {
       invalid(
         "UnitId does not match the MoonBit module identity",
         path=unit.manifest,
@@ -63,7 +63,7 @@ pub fn build_plan(
     if units.contains(unit.id) {
       invalid("Duplicate unit: " + unit.id, path=unit.manifest)
     }
-    if unit.ecosystem != "moonbit" {
+    if unit.ecosystem != "moonbit" && unit.ecosystem != "npm" {
       invalid(
         "Unsupported ecosystem: " + unit.ecosystem,
         code="unsupported-capability",
@@ -83,9 +83,11 @@ pub fn build_plan(
           code="unsupported-capability",
         )
       }
-      ignore(parse_version(dep.requirement)) catch {
-        @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
-        error => raise error
+      if unit.ecosystem == "moonbit" {
+        ignore(parse_version(dep.requirement)) catch {
+          @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
+          error => raise error
+        }
       }
     }
     units[unit.id] = unit
@@ -105,6 +107,14 @@ pub fn build_plan(
   for id in config.fixed.flatten() + config.linked.flatten() + config.ignore {
     if !units.contains(id) {
       invalid("Unknown configured unit: " + id)
+    }
+  }
+  for bridge in config.bridges {
+    if !units.contains(bridge.consumer) || !units.contains(bridge.producer) {
+      invalid("Bridge references an unknown unit", code="invalid-bridge")
+    }
+    if bridge.consumer == bridge.producer {
+      invalid("Build bridge cannot point to itself", code="dependency-cycle")
     }
   }
   if pre is Some(state) {
@@ -153,6 +163,13 @@ pub fn build_plan(
       if config.ignore.contains(id) {
         continue
       }
+      if units[id].visibility == "private" && !config.private_version {
+        invalid(
+          "Private unit versioning is disabled by configuration: " + id,
+          path=cs.path,
+          code="private-policy",
+        )
+      }
       if pre is Some(state) &&
         state.mode == "active" &&
         state.consumed.contains(cs.id) {
@@ -182,6 +199,25 @@ pub fn build_plan(
       }
     }
   }
+  for bridge in config.bridges {
+    if levels.contains(bridge.producer) {
+      let current = levels.get(bridge.consumer).unwrap_or(@model.None)
+      if bridge.bump.rank() > current.rank() {
+        if config.ignore.contains(bridge.consumer) {
+          invalid(
+            "Build bridge propagation requires ignored unit: " + bridge.consumer,
+            code="unsupported-capability",
+          )
+        }
+        levels[bridge.consumer] = bridge.bump
+      }
+      add_reason(
+        reasons,
+        bridge.consumer,
+        "bridge:" + bridge.producer + ":" + bridge.wait_for,
+      )
+    }
+  }
   for ;; {
     let before = @model.canonical_json({
       "levels": levels.map((k, v) => (k, v.text())),
@@ -194,6 +230,26 @@ pub fn build_plan(
           parse_version(candidate).compare(parse_version(targets[id])) > 0 {
           targets[id] = candidate
         }
+      }
+    }
+    for bridge in config.bridges {
+      if levels.contains(bridge.producer) {
+        let current = levels.get(bridge.consumer).unwrap_or(@model.None)
+        if bridge.bump.rank() > current.rank() {
+          if config.ignore.contains(bridge.consumer) {
+            invalid(
+              "Build bridge propagation requires ignored unit: " +
+              bridge.consumer,
+              code="unsupported-capability",
+            )
+          }
+          levels[bridge.consumer] = bridge.bump
+        }
+        add_reason(
+          reasons,
+          bridge.consumer,
+          "bridge:" + bridge.producer + ":" + bridge.wait_for,
+        )
       }
     }
     for kind in ["fixed", "linked"] {
@@ -251,8 +307,12 @@ pub fn build_plan(
     for id in ids {
       for dep in units[id].dependencies {
         if targets.get(dep.producer) is Some(target) {
-          let outside = !version_matches(dep.requirement, target)
-          if outside || config.update_dependents == "always" {
+          let comparable = units[id].ecosystem == "moonbit" &&
+            !dep.requirement.has_prefix("workspace:") &&
+            !dep.requirement.has_prefix("file:") &&
+            !dep.requirement.has_prefix("link:")
+          let outside = comparable && !version_matches(dep.requirement, target)
+          if (outside || config.update_dependents == "always") && comparable {
             if config.ignore.contains(id) {
               invalid(
                 "Dependency propagation requires ignored unit: " + id,
@@ -302,7 +362,11 @@ pub fn build_plan(
       affected_paths.push(unit.manifest)
       for dep in unit.dependencies {
         if targets.get(dep.producer) is Some(target) &&
-          target != dep.requirement {
+          target != dep.requirement &&
+          unit.ecosystem == "moonbit" &&
+          !dep.requirement.has_prefix("workspace:") &&
+          !dep.requirement.has_prefix("file:") &&
+          !dep.requirement.has_prefix("link:") {
           if !version_matches(dep.requirement, target) ||
             levels[dep.producer].rank() >= config.update_dependencies.rank() {
             dependency_updates.push({
@@ -366,6 +430,18 @@ pub fn build_plan(
       "changedFilePatterns": config.changed_patterns,
       "preFile": config.pre_file,
       "mixed": config.mixed,
+      "privateVersion": config.private_version,
+      "privateTag": config.private_tag,
+      "privatePublish": config.private_publish,
+      "bridges": config.bridges.map(x => {
+        (
+          {
+            "consumer": x.consumer,
+            "producer": x.producer,
+            "bump": x.bump.text(),
+            "waitFor": x.wait_for,
+          } : Json)
+      }),
     },
     "dependencies": ids.map(id => {
       (

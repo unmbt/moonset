@@ -102,39 +102,99 @@ pub fn parse_config(
     }
   }
   let mixed = property(property(raw, "experimental"), "mixedWorkspaces")
+  let mixed_workspaces : Array[@model.MixedWorkspaceSpec] = []
+  let bridges : Array[@model.Bridge] = []
+  let unit_overrides : Map[String, @model.UnitOverride] = Map([])
   if mixed != Json::null() {
-    if property(mixed, "mode") != Json::string("coexist") {
-      invalid(
-        "Unified mixed-workspace planning is not implemented",
-        path~,
-        code="unsupported-capability",
-      )
-    }
-    if property(mixed, "bridges") is Array(bridges) && !bridges.is_empty() {
-      invalid(
-        "Build bridges require a later adapter phase",
-        path~,
-        code="unsupported-capability",
-      )
-    }
-    if property(mixed, "workspaces") is Array(workspaces) {
-      let ids : Map[String, Bool] = Map([])
-      for ws in workspaces {
-        if property(ws, "ecosystem") != Json::string("moonbit") {
-          invalid(
-            "Configured ecosystem adapter is unavailable: " +
-            property(ws, "ecosystem").stringify(),
-            path~,
-            code="unsupported-capability",
-          )
-        }
-        if property(ws, "id") is String(id) {
+    let ids : Map[String, Bool] = Map([])
+    match mixed {
+      { "workspaces": Array(workspaces), .. } =>
+        for ws in workspaces {
+          guard ws
+            is {
+              "id": String(id),
+              "ecosystem": String(ecosystem),
+              "root": String(root),
+              "manager": String(manager),
+              "includeRoot": include_root,
+              ..
+            } else {
+            invalid("Invalid mixed workspace declaration", path~)
+            continue
+          }
           if ids.contains(id) {
             invalid("Duplicate workspace ID: " + id, path~)
           }
+          if ecosystem == "cargo" {
+            invalid(
+              "Cargo adapter is not implemented in Phase 3",
+              path~,
+              code="unsupported-capability",
+            )
+          }
+          if !["moon", "npm", "pnpm"].contains(manager) {
+            invalid("Unsupported workspace manager: " + manager, path~)
+          }
           ids[id] = true
+          mixed_workspaces.push({
+            id,
+            ecosystem,
+            root,
+            manager,
+            include_root: include_root == Json::boolean(true),
+          })
         }
-      }
+      _ => invalid("Mixed workspaces require a workspaces array", path~)
+    }
+    match mixed {
+      { "bridges": Array(items), .. } =>
+        for item in items {
+          guard item
+            is {
+              "consumer": String(consumer),
+              "producer": String(producer),
+              "bump": String(bump),
+              "waitFor": String(wait_for),
+              ..
+            } else {
+            invalid("Invalid build bridge declaration", path~)
+            continue
+          }
+          let level = match bump {
+            "major" => @model.Major
+            "minor" => @model.Minor
+            "patch" => @model.Patch
+            _ => {
+              invalid("Bridge bump must be major, minor, or patch", path~)
+              @model.Patch
+            }
+          }
+          if !["build", "publish"].contains(wait_for) {
+            invalid("Bridge waitFor must be build or publish", path~)
+          }
+          bridges.push({ consumer, producer, bump: level, wait_for, })
+        }
+      _ => ()
+    }
+    match mixed {
+      { "units": Object(items), .. } =>
+        for id, value in items {
+          let publish = match property(value, "publish") {
+            True => Some(true)
+            False => Some(false)
+            _ => None
+          }
+          let publisher = match property(value, "publisher") {
+            String(name) => Some(name)
+            _ => None
+          }
+          let tag_format = match property(value, "tagFormat") {
+            String(format) => Some(format)
+            _ => None
+          }
+          unit_overrides[id] = { publish, publisher, tag_format, }
+        }
+      _ => ()
     }
   }
   let changed_patterns = match property(raw, "changedFilePatterns") {
@@ -164,6 +224,10 @@ pub fn parse_config(
     { "generator": String(s), .. } => s
     _ => defaults.changelog
   }
+  let changelog_file = match property(raw, "changelog") {
+    { "file": String(file), .. } => file
+    _ => defaults.changelog_file
+  }
   let github = match property(raw, "changelog") {
     { "repo": String(s), .. } => Some(s)
     _ => None
@@ -175,6 +239,30 @@ pub fn parse_config(
   let base_branch = match property(raw, "baseBranch") {
     String(s) => s
     _ => defaults.base_branch
+  }
+  let private_packages = property(raw, "privatePackages")
+  let private_version = property(private_packages, "version") ==
+    Json::boolean(true)
+  let private_tag = property(private_packages, "tag") == Json::boolean(true)
+  let private_publish = property(private_packages, "publish") ==
+    Json::boolean(true)
+  let tag = property(raw, "tag")
+  let tag_create = match property(tag, "create") {
+    False => false
+    _ => true
+  }
+  let tag_after_publish = match property(tag, "afterPublish") {
+    False => false
+    _ => true
+  }
+  let tag_format = match property(tag, "format") {
+    String(format) => format
+    _ => defaults.tag_format
+  }
+  let tag_push = property(tag, "push") == Json::boolean(true)
+  let lockfiles = match mixed {
+    { "lockfiles": String(mode), .. } => mode
+    _ => defaults.lockfiles
   }
   for pattern in changed_patterns {
     if pattern.contains("[") ||
@@ -213,6 +301,18 @@ pub fn parse_config(
     github,
     access,
     base_branch,
+    private_version,
+    private_tag,
+    private_publish,
+    changelog_file,
+    tag_create,
+    tag_after_publish,
+    tag_format,
+    tag_push,
+    lockfiles,
+    mixed_workspaces,
+    bridges,
+    unit_overrides,
     raw,
   }
 }

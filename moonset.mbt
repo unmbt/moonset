@@ -5,9 +5,11 @@
 ///|
 pub using @engine {
   build_plan,
+  build_version_plan,
   parse_changeset,
   parse_config,
   parse_pre_state,
+  render_builtin_changelog,
   status_json,
 }
 
@@ -22,6 +24,13 @@ pub using @model {
   type Changeset,
   type PreState,
   type ReleasePlan,
+  type VersionPlan,
+  type VersionOptions,
+  type FileEdit,
+  type ChangelogEntry,
+  type TagIntent,
+  type ReleaseState,
+  type ApplyResult,
   type Diagnostic,
   type MoonsetError,
 }

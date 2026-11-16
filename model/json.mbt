@@ -127,6 +127,75 @@ pub fn ReleasePlan::to_json(self : ReleasePlan) -> Json {
 }
 
 ///|
+pub fn FileEdit::to_json(self : FileEdit) -> Json {
+  {
+    "path": self.path,
+    "kind": self.kind,
+    "owner": self.owner,
+    "beforeHash": self.before_hash,
+    "afterText": self.after_text,
+    "atomic": self.atomic_write,
+  }
+}
+
+///|
+pub fn ChangelogEntry::to_json(self : ChangelogEntry) -> Json {
+  {
+    "unitId": self.unit_id,
+    "version": self.version,
+    "date": self.date,
+    "section": self.section,
+    "text": self.text,
+    "path": self.path,
+  }
+}
+
+///|
+pub fn TagIntent::to_json(self : TagIntent) -> Json {
+  { "unitId": self.unit_id, "version": self.version, "name": self.name }
+}
+
+///|
+pub fn VersionPlan::to_json(self : VersionPlan) -> Json {
+  {
+    "schemaVersion": self.schema_version,
+    "stage": self.stage,
+    "executable": self.executable,
+    "fingerprint": self.fingerprint,
+    "edits": self.edits.map(x => x.to_json()),
+    "changelogs": self.changelogs.map(x => x.to_json()),
+    "tags": self.tags.map(x => x.to_json()),
+    "consumedChangesets": self.consumed_changesets,
+    "analysis": self.analysis.to_json(),
+    "generatedAt": nullable(self.generated_at),
+  }
+}
+
+///|
+pub fn ReleaseState::to_json(self : ReleaseState) -> Json {
+  {
+    "planFingerprint": self.plan_fingerprint,
+    "sourceHead": nullable(self.source_head),
+    "releases": self.releases.map(x => x.to_json()),
+    "tags": self.tags.map(x => x.to_json()),
+    "consumedChangesets": self.consumed_changesets,
+  }
+}
+
+///|
+pub fn ApplyResult::to_json(self : ApplyResult) -> Json {
+  {
+    "applied": self.applied,
+    "rolledBack": self.rolled_back,
+    "journal": nullable(self.journal),
+    "state": match self.state {
+      Some(value) => value.to_json()
+      None => Json::null()
+    },
+  }
+}
+
+///|
 /// Stable compact JSON: object keys sorted, arrays retain their semantic order.
 pub fn canonical_json(value : Json) -> String {
   match value {

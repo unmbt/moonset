@@ -155,16 +155,19 @@ pub async fn discover(
           is {
             "id": String(id),
             "root": String(path),
+            "ecosystem": String(ecosystem),
             "includeRoot": include_root,
             ..
           } {
-          roots.push(
-            (
-              id,
-              relative(root, join(root, path)),
-              include_root == Json::boolean(true),
-            ),
-          )
+          if ecosystem == "moonbit" {
+            roots.push(
+              (
+                id,
+                relative(root, join(root, path)),
+                include_root == Json::boolean(true),
+              ),
+            )
+          }
         }
       }
     _ => roots.push(("main", "", reader.read("moon.work") is None))
@@ -292,6 +295,21 @@ pub async fn discover(
       ownership.push({ path: manifest, field: "version", owner: id, })
     }
   }
+  for spec in config.mixed_workspaces {
+    if spec.ecosystem == "npm" {
+      discover_npm_workspace(
+        reader,
+        root,
+        spec,
+        units,
+        workspaces,
+        ownership,
+        unmanaged,
+        seen,
+        config.unit_overrides,
+      )
+    }
+  }
   if units.is_empty() {
     fail_input("No managed MoonBit modules were discovered", path=root)
   }
@@ -325,7 +343,8 @@ pub async fn discover(
   for dir in inspection_roots {
     for file in ["package.json", "pnpm-workspace.yaml", "Cargo.toml"] {
       let path = slash(join(dir, file))
-      if !unmanaged.contains(path) && reader.read(path) is Some(_) {
+      let managed = units.any(unit => unit.manifest == path)
+      if !managed && !unmanaged.contains(path) && reader.read(path) is Some(_) {
         unmanaged.push(path)
       }
     }
@@ -333,6 +352,18 @@ pub async fn discover(
   units.sort_by((a, b) => a.id.compare(b.id))
   ownership.sort_by((a, b) => a.path.compare(b.path))
   unmanaged.sort()
+  // Version planning needs the current changelog and persisted release state
+  // in its immutable source snapshot so stale hashes can be checked before
+  // any write occurs.
+  for unit in units {
+    let changelog = if unit.root == "" {
+      "CHANGELOG.md"
+    } else {
+      slash(join(unit.root, "CHANGELOG.md"))
+    }
+    ignore(reader.read(changelog))
+  }
+  ignore(reader.read(".moonset/release-state.json"))
   let changesets = []
   for file in reader.files(changeset_directory) {
     let path = slash(join(changeset_directory, file))
