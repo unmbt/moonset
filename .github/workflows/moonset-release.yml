@@ -36,7 +36,7 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset status --since="${{ github.event.pull_request.base.sha }}" --output json > status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe status --since="${{ github.event.pull_request.base.sha }}" --output json > status.json
       - uses: actions/upload-artifact@v4
         with: { name: moonset-status, path: status.json }
 
@@ -63,7 +63,7 @@ jobs:
       - run: moon build --target native --release
       # A release commit must already contain the reviewed version state.
       - run: test -f .moonset/release-state.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset pack --dry-run --json > publish-plan.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe pack --dry-run --json > publish-plan.json
       - uses: actions/upload-artifact@v4
         with: { name: moonset-release-plan, path: publish-plan.json }
 
@@ -95,8 +95,8 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only "$MOONSET_UNIT" --dry-run --json > mooncakes-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only "$MOONSET_UNIT" --json > mooncakes-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --json > mooncakes-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --json > mooncakes-status.json
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: mooncakes-publish-status, path: mooncakes-status.json, if-no-files-found: ignore }
@@ -129,8 +129,8 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only "$MOONSET_UNIT" --dry-run --json > npm-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset publish --only "$MOONSET_UNIT" --json > npm-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --json > npm-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --json > npm-status.json
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: npm-publish-status, path: npm-status.json, if-no-files-found: ignore }
@@ -176,4 +176,4 @@ jobs:
             jq -e --arg unit "$unit" '.complete == true and any(.statuses[]; .unitId == $unit and .state == "published")' "$file" >/dev/null
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset tag --push --yes
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe tag --push --yes
