@@ -4,4 +4,7 @@ import {
   "unmbt/moon-manifest" @manifest,
   "moonbitlang/core/json",
   "moonbitlang/core/encoding/utf8",
+  "unmbt/moonset/changelog",
 }
+
+supported_targets = "native"

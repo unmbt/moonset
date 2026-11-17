@@ -103,25 +103,26 @@ pub fn render_builtin_changelog(
   dependency_updates : Array[@model.DependencyIntent],
   existing : String,
 ) -> String {
-  let features : Array[String] = []
-  let fixes : Array[String] = []
+  let lines : Array[@changelog.ReleaseLineContext] = []
   for changeset in changesets {
     for change in changeset.releases {
       if change.unit_id != unit_id {
         continue
       }
-      let section = section_for(change.bump)
-      if section == "" || changeset.summary == "" {
+      if section_for(change.bump) == "" || changeset.summary == "" {
         continue
       }
-      let item = "- " + changeset.summary.replace_all(old="\n", new="\n  ")
-      if section == "Features" {
-        if !features.contains(item) {
-          features.push(item)
-        }
-      } else if !fixes.contains(item) {
-        fixes.push(item)
-      }
+      lines.push({
+        changeset_id: changeset.id,
+        summary: changeset.summary,
+        unit_id,
+        bump: change.bump,
+        old_version: "",
+        new_version: version,
+        commit: None,
+        pull_request: None,
+        author: None,
+      })
     }
   }
   let dependencies : Array[String] = []
@@ -137,40 +138,65 @@ pub fn render_builtin_changelog(
       }
     }
   }
-  let sections : Array[String] = []
-  if !features.is_empty() {
-    sections.push("### Features\n\n" + features.join("\n") + "\n")
+  let context : @changelog.ChangelogContext = {
+    unit_id,
+    version,
+    date: version_date(date),
+    lines,
+    dependency_lines: dependencies.map(x => x[2:].to_owned()),
+    existing,
+    repository: None,
+    thanks: false,
   }
-  if !fixes.is_empty() {
-    sections.push("### Fixes\n\n" + fixes.join("\n") + "\n")
-  }
-  if !dependencies.is_empty() {
-    sections.push("### Dependencies\n\n" + dependencies.join("\n") + "\n")
-  }
-  let entry = "## " +
-    version +
-    " - " +
-    version_date(date) +
-    "\n\n" +
-    sections.join("\n")
-  if existing == "" {
-    return "# Changelog\n\n" + entry + "\n"
-  }
-  let normalized = existing.replace_all(old="\r\n", new="\n")
-  if normalized.has_prefix("# Changelog") {
-    match normalized.find("\n") {
-      Some(index) =>
-        normalized[:index + 1].to_owned() +
-        "\n" +
-        entry +
-        "\n" +
-        normalized[index + 1:].trim_start().to_owned() +
-        "\n"
-      None => normalized + "\n\n" + entry + "\n"
+  @changelog.render(@changelog.Builtin, context)
+}
+
+///|
+/// Render the configured generator while preserving the pure plan boundary.
+fn render_configured_changelog(
+  generator : String,
+  unit_id : String,
+  version : String,
+  date : String,
+  changesets : Array[@model.Changeset],
+  dependency_updates : Array[@model.DependencyIntent],
+  existing : String,
+  repository : String?,
+  registry : @changelog.GeneratorRegistry,
+) -> String raise @model.MoonsetError {
+  let lines : Array[@changelog.ReleaseLineContext] = []
+  for changeset in changesets {
+    for change in changeset.releases {
+      if change.unit_id == unit_id &&
+        change.bump != @model.None &&
+        changeset.summary != "" {
+        lines.push({
+          changeset_id: changeset.id,
+          summary: changeset.summary,
+          unit_id,
+          bump: change.bump,
+          old_version: "",
+          new_version: version,
+          commit: None,
+          pull_request: None,
+          author: None,
+        })
+      }
     }
-  } else {
-    "# Changelog\n\n" + entry + "\n\n" + normalized
   }
+  let dependencies = dependency_updates
+    .filter(x => x.consumer == unit_id)
+    .map(x => "`" + x.producer + "` updated to `" + x.new_requirement + "`.")
+  registry.render(generator, {
+    unit_id,
+    version,
+    date: version_date(date),
+    lines,
+    dependency_lines: dependencies,
+    existing,
+    repository,
+    thanks: generator == "github",
+  })
 }
 
 ///|
@@ -199,7 +225,9 @@ pub fn build_version_plan(
   analysis : @model.ReleasePlan,
   options : @model.VersionOptions,
   generated_at~ : String = "",
+  generators? : @changelog.GeneratorRegistry,
 ) -> @model.VersionPlan raise @model.MoonsetError {
+  let registry = generators.unwrap_or(@changelog.GeneratorRegistry::new())
   let date = version_date(generated_at)
   let edits : Array[@model.FileEdit] = []
   let changelogs : Array[@model.ChangelogEntry] = []
@@ -262,13 +290,16 @@ pub fn build_version_plan(
         )
       }
       let existing = snapshot.sources.get(path).unwrap_or("")
-      let text = render_builtin_changelog(
+      let text = render_configured_changelog(
+        snapshot.config.changelog,
         unit.id,
         release_version,
         date,
         analysis.changesets,
         analysis.dependency_updates,
         existing,
+        snapshot.config.github,
+        registry,
       )
       changelogs.push({
         unit_id: unit.id,

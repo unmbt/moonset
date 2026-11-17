@@ -34,3 +34,34 @@ pub using @model {
   type Diagnostic,
   type MoonsetError,
 }
+
+///|
+pub using @changelog {
+  type ChangelogContext,
+  type ReleaseLineContext,
+  type GeneratorKind,
+  type GeneratorRegistry,
+  generator_kind,
+  render,
+}
+
+///|
+pub using @changelog {trait ChangelogGenerator}
+
+///|
+pub using @adapters {
+  type JsonlRequest,
+  type JsonlResponse,
+  type PluginSpec,
+  type Capability,
+  type CapabilityReport,
+  type PublisherRegistry,
+  parse_request,
+  parse_response,
+  run_jsonl,
+  require_capability,
+  validate_conformance,
+}
+
+///|
+pub using @api {api_version}

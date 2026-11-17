@@ -3,16 +3,22 @@ package "unmbt/moonset"
 
 import {
   "moonbitlang/core/json",
+  "unmbt/moonset/adapters",
+  "unmbt/moonset/changelog",
   "unmbt/moonset/model",
   "unmbt/moonset/workspace",
 }
 
 // Values
+pub let api_version : String
+
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
-pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String) -> @model.VersionPlan raise @model.MoonsetError
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry) -> @model.VersionPlan raise @model.MoonsetError
 
 pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
+
+pub fn generator_kind(String) -> @changelog.GeneratorKind
 
 pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
 
@@ -20,9 +26,21 @@ pub fn parse_config(String, path? : String) -> @model.Config raise @model.Moonse
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
+pub fn parse_request(@json.Json) -> @adapters.JsonlRequest raise @model.MoonsetError
+
+pub fn parse_response(@json.Json) -> @adapters.JsonlResponse raise @model.MoonsetError
+
+pub fn render(@changelog.GeneratorKind, @changelog.ChangelogContext) -> String
+
 pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset], Array[@model.DependencyIntent], String) -> String
 
+pub fn require_capability(@adapters.CapabilityReport, @adapters.Capability) -> Unit raise @model.MoonsetError
+
+pub async fn run_jsonl(@adapters.PluginSpec, @adapters.JsonlRequest) -> @adapters.JsonlResponse raise @model.MoonsetError
+
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+pub fn validate_conformance(@adapters.CapabilityReport) -> Unit raise @model.MoonsetError
 
 // Errors
 
@@ -30,6 +48,12 @@ pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_direc
 
 // Type aliases
 pub using @model {type ApplyResult}
+
+pub using @adapters {type Capability}
+
+pub using @adapters {type CapabilityReport}
+
+pub using @changelog {type ChangelogContext}
 
 pub using @model {type ChangelogEntry}
 
@@ -39,11 +63,25 @@ pub using @model {type Diagnostic}
 
 pub using @model {type FileEdit}
 
+pub using @changelog {type GeneratorKind}
+
+pub using @changelog {type GeneratorRegistry}
+
+pub using @adapters {type JsonlRequest}
+
+pub using @adapters {type JsonlResponse}
+
 pub using @workspace {type LoadedWorkspace}
 
 pub using @model {type MoonsetError}
 
+pub using @adapters {type PluginSpec}
+
 pub using @model {type PreState}
+
+pub using @adapters {type PublisherRegistry}
+
+pub using @changelog {type ReleaseLineContext}
 
 pub using @model {type ReleasePlan}
 
@@ -60,5 +98,7 @@ pub using @model {type VersionOptions}
 pub using @model {type VersionPlan}
 
 pub using @model {type WorkspaceSnapshot}
+
+pub using @changelog {trait ChangelogGenerator}
 
 // Traits

@@ -1,0 +1,6 @@
+import {
+  "unmbt/moonset/api",
+  "unmbt/moonset/changelog",
+}
+
+supported_targets = "native"

@@ -3,13 +3,14 @@ package "unmbt/moonset/engine"
 
 import {
   "moonbitlang/core/json",
+  "unmbt/moonset/changelog",
   "unmbt/moonset/model",
 }
 
 // Values
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
-pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String) -> @model.VersionPlan raise @model.MoonsetError
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry) -> @model.VersionPlan raise @model.MoonsetError
 
 pub fn canonical_id(String) -> String
 

@@ -1,0 +1,62 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/changelog"
+
+import {
+  "unmbt/moonset/model",
+}
+
+// Values
+pub fn builtin_context(String, String, String, String, repository? : String, thanks? : Bool) -> ChangelogContext
+
+pub fn generator_kind(String) -> GeneratorKind
+
+pub fn render(GeneratorKind, ChangelogContext) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct ChangelogContext {
+  unit_id : String
+  version : String
+  date : String
+  lines : Array[ReleaseLineContext]
+  dependency_lines : Array[String]
+  existing : String
+  repository : String?
+  thanks : Bool
+}
+
+pub(all) enum GeneratorKind {
+  Builtin
+  Git
+  GitHub
+  External(String)
+}
+
+pub(all) struct GeneratorRegistry {
+  generators : Map[String, (ChangelogContext) -> String]
+}
+pub fn GeneratorRegistry::new() -> Self
+pub fn GeneratorRegistry::register(Self, String, (ChangelogContext) -> String) -> Unit
+pub fn[T : ChangelogGenerator] GeneratorRegistry::register_generator(Self, String, T) -> Unit
+pub fn GeneratorRegistry::render(Self, String, ChangelogContext) -> String raise @model.MoonsetError
+
+pub(all) struct ReleaseLineContext {
+  changeset_id : String
+  summary : String
+  unit_id : String
+  bump : @model.Bump
+  old_version : String
+  new_version : String
+  commit : String?
+  pull_request : String?
+  author : String?
+}
+
+// Type aliases
+
+// Traits
+pub(open) trait ChangelogGenerator {
+  fn name(Self) -> String
+  fn render(Self, ChangelogContext) -> String
+}
