@@ -1,0 +1,7 @@
+import {
+  "unmbt/moonset/model",
+  "unmbt/moonset/engine",
+  "unmbt/moonset/workspace",
+}
+
+supported_targets = "native"

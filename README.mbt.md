@@ -139,7 +139,7 @@ moonset/
 | 2 | 贡献工作流（`init` · `add` · `pre`） | ⏳ |
 | 3 | 版本与 Changelog（`version` · `tag`） | ⏳ |
 | 4 | 发布与官方自动化（`pack` · `publish`） | ⏳ |
-| 5 | 扩展生态（稳定 API 与插件协议） | ⏳ |
+| 5 | 扩展生态（稳定 API 与插件协议） | 首个切片实现中 |
 | 6 | GitHub App 与规模化治理 | ⏳ |
 
 每个阶段皆有明确的退出条件，详见 [Roadmap](docs/roadmap.md)。
@@ -276,7 +276,7 @@ Asynchrony and processes build on `moonbitlang/core/async`; program names and ar
 | 2 | Contribution workflow (`init` · `add` · `pre`) | ⏳ |
 | 3 | Versioning & changelog (`version` · `tag`) | ⏳ |
 | 4 | Publishing & official automation (`pack` · `publish`) | ⏳ |
-| 5 | Extension ecosystem (stable API & plugin protocol) | ⏳ |
+| 5 | Extension ecosystem (stable API & plugin protocol) | first slice in progress |
 | 6 | GitHub App & governance at scale | ⏳ |
 
 Each phase has explicit exit criteria — see the [Roadmap](docs/roadmap.md).

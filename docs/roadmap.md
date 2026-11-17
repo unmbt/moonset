@@ -60,7 +60,7 @@
 - CI 参考 workflow 通过 YAML lint 和最小权限审查。
 - MoonBit + npm 双目标发布和 native addon 平台包完成端到端验证；分离 build/publish DAG，支持按 target 续跑及凭据隔离（FR-022）。
 
-## Phase 5 — 扩展生态
+## Phase 5 — 扩展生态（实现中：首个切片）
 
 交付：`@moonset/api` 稳定接口、Git/GitHub changelog 生成器、JSONL generator/publisher 协议、第三方适配器示例。
 

@@ -2,4 +2,9 @@ import {
   "unmbt/moonset/model",
   "unmbt/moonset/engine",
   "unmbt/moonset/workspace",
+  "unmbt/moonset/changelog",
+  "unmbt/moonset/adapters",
+  "unmbt/moonset/api",
 }
+
+supported_targets = "native"

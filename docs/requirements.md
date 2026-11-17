@@ -61,10 +61,10 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 | FR-010 | 标签 | `tag` 根据当前版本创建确定性 Git 标签，支持单模块 `vX.Y.Z` 与 workspace `name@X.Y.Z`，支持预览和可选推送。 | Proposed |
 | FR-011 | 打包与计划 | `pack` 调用 MoonBit/npm 打包流程并输出带来源与摘要的 artifact JSON；`publish-plan` 输出不改盘的发布 JSON。 | Implemented (Phase 4 baseline) |
 | FR-012 | 配置 | `.changeset/config.json` 支持版本策略、fixed/linked、ignore、私有包、changelog、tag、publisher、GitHub 和格式化器；未知顶层字段默认报错。 | Proposed |
-| FR-013 | 自定义 changelog | 内置生成器覆盖纯文本、Git、GitHub 三类；MoonBit API 和受限 JSONL 进程协议都能提供自定义 release line。 | Proposed |
+| FR-013 | 自定义 changelog | 内置生成器覆盖纯文本、Git、GitHub 三类；MoonBit API 和受限 JSONL 进程协议都能提供自定义 release line。 | Partial (compile-time API and protocol runner; CLI JSONL routing pending) |
 | FR-014 | GitHub Action | 提供 PR 检查、版本 PR/提交、发布和标签四种可组合 job 的参考工作流；权限最小化，并支持 OIDC 或显式令牌。 | Proposed |
 | FR-015 | GitHub App | 定义 webhook、去重、评论和标签策略；机器人默认只读检查和评论，不直接改版本或发布。 | Proposed |
-| FR-016 | 编程 API | 核心模型、解析器、规划器、执行器和适配器接口有稳定的 MoonBit 公共包；I/O 通过注入接口可测试。 | Proposed |
+| FR-016 | 编程 API | 核心模型、解析器、规划器、执行器和适配器接口有稳定的 MoonBit 公共包；I/O 通过注入接口可测试。 | Partial (API v1 facade; adapter execution/conformance incomplete) |
 | FR-017 | 环境诊断 | `doctor` 只读检查 MoonBit、Git、workspace、配置、publisher 和必要权限，输出可修复建议。 | Proposed |
 | FR-018 | 混合 workspace 与所有权 | 同级、嵌套、同目录双清单均可表达；按声明发现 npm/pnpm 与 MoonBit 成员；工具清单、生成目录、嵌套仓库不被默认接管；重复所有权在写入前报错。 | Proposed |
 | FR-019 | 跨生态身份 | 使用生态前缀 UnitId；同名跨生态单元可区分；混合 changeset、选择器、pre 状态和计划使用相同 ID；旧记录迁移提供可审阅映射。 | Proposed |
@@ -72,7 +72,7 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 | FR-021 | 原生清单和锁文件 | adapter 在隔离 staging 使用精确 packageManager 版本校验/更新锁文件；`verify-only` 差异失败，不改写 `workspace:` 协议。 | Implemented (Phase 3 baseline) |
 | FR-022 | 构建产物与多目标发布 | pack/publish 输出 artifact 与逐 target 状态；真实发布先完成全部 preflight，失败续跑跳过已确认目标，不自动撤销成功版本。 | Implemented (Phase 4 baseline) |
 | FR-023 | 与已有工具共存 | Changesets 等工具和 moonset 分区管理，changeset/版本字段/锁文件只有一个写入者；不互相消费记录或静默迁移配置；跨分区关系只读导出。 | Proposed |
-| FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo/Tauri 作为后续适配，不宣称已支持。 | Proposed |
+| FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo/Tauri 作为后续适配，不宣称已支持。 | Partial (capability gate; full adapter operation traits pending) |
 
 ## 5. 非功能需求
 

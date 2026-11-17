@@ -388,10 +388,10 @@ async fn version_command(options : Options) -> Int32 {
     config_path?=options.config,
     since?=options.since,
   )
-  if loaded.snapshot.config.changelog != "builtin" {
+  if !["builtin", "git", "github"].contains(loaded.snapshot.config.changelog) {
     raise @model.Invalid(
       @model.diagnostic(
-        "unsupported-capability", "Phase 3 only supports the builtin changelog generator",
+        "unsupported-capability", "Changelog generator requires a registered API implementation or JSONL plugin",
       ),
     )
   }
