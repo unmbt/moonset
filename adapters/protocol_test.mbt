@@ -146,3 +146,24 @@ async test "JSONL plugin process succeeds and rejects malformed, oversized, time
   )
   assert_eq(run_plugin_fixture("crash", 30000, 1048576), Some("plugin-crashed"))
 }
+
+///|
+async test "publisher registry routes the three v1 publisher methods" {
+  let registry = @adapters.PublisherRegistry::new()
+  registry.register("fixture", {
+    program: "node",
+    args: ["fixtures/phase5-plugin.mjs", "success"],
+    cwd: None,
+    timeout_ms: 30000,
+    max_output_bytes: 1048576,
+    allowed_programs: ["node"],
+    environment: {
+      "PATH": @env.get_env_var("PATH").unwrap_or(""),
+      "SystemRoot": @env.get_env_var("SystemRoot").unwrap_or(""),
+    },
+  })
+  for protocol_method in ["preflight", "publish", "already-published"] {
+    let result = registry.execute("fixture", protocol_method, Json::null())
+    assert_true(result is { "accepted": True, .. })
+  }
+}
