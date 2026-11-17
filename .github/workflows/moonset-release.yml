@@ -36,7 +36,7 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe status --since="${{ github.event.pull_request.base.sha }}" --output json > status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe status --since "${{ github.event.pull_request.base.sha }}" --output json > status.json
       - uses: actions/upload-artifact@v4
         with: { name: moonset-status, path: status.json }
 
