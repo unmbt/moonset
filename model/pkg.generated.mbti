@@ -229,6 +229,7 @@ pub(all) enum PublishState {
   Skipped
   Failed
   Blocked
+  Unknown
 }
 pub fn PublishState::equal(Self, Self) -> Bool
 pub fn PublishState::not_equal(Self, Self) -> Bool

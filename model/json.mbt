@@ -245,6 +245,7 @@ pub fn PublishState::text(self : PublishState) -> String {
     Skipped => "skipped"
     Failed => "failed"
     Blocked => "blocked"
+    Unknown => "unknown"
   }
 }
 

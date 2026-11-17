@@ -26,7 +26,7 @@ priv struct Options {
   tag_force : Bool
   tag_format : String
   yes : Bool
-  only : String?
+  only : Array[String]
 }
 
 ///|
@@ -62,7 +62,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut tag_push = false
   let mut tag_format = ""
   let mut yes = false
-  let mut only : String? = None
+  let only : Array[String] = []
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -87,7 +87,15 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
         }
         let value = args[i]
         i += 1
-        only = Some(value)
+        for unit in value.split(",") {
+          let normalized = unit.trim().to_owned()
+          if normalized == "" {
+            usage_error("--only contains an empty UnitId")
+          }
+          if !only.contains(normalized) {
+            only.push(normalized)
+          }
+        }
       }
       "--empty" => empty = true
       "--no-format" => ()

@@ -144,6 +144,7 @@ pub(all) enum PublishState {
   Skipped
   Failed
   Blocked
+  Unknown
 }
 
 ///|

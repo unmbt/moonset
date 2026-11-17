@@ -708,6 +708,8 @@ async fn publish_command(options : Options) -> Int32 {
   }
   let statuses : Array[Json] = []
   let completed : Map[String, Bool] = Map([])
+  let uncertain : Map[String, Bool] = Map([])
+  let mut failed = false
   let previous_path = absolute(
     loaded.snapshot.root,
     ".moonset/publish-state.json",
@@ -728,14 +730,23 @@ async fn publish_command(options : Options) -> Int32 {
               "unitId": String(previous_unit),
               "version": String(previous_version),
               "target": String(previous_target),
-              "state": String("published"),
+              "state": String(previous_state),
               ..
             } =>
-              completed[previous_unit +
-              "@" +
-              previous_version +
-              "/" +
-              previous_target] = true
+              if previous_state == "published" {
+                completed[previous_unit +
+                "@" +
+                previous_version +
+                "/" +
+                previous_target] = true
+              } else if previous_state == "unknown" ||
+                previous_state == "publishing" {
+                uncertain[previous_unit +
+                "@" +
+                previous_version +
+                "/" +
+                previous_target] = true
+              }
             _ => ()
           }
           statuses.push(previous_status)
@@ -743,7 +754,6 @@ async fn publish_command(options : Options) -> Int32 {
       _ => ()
     }
   }
-  let mut failed = false
   let targets : Array[(String, String, String, String)] = []
   for item in items {
     guard item
@@ -755,10 +765,22 @@ async fn publish_command(options : Options) -> Int32 {
       } else {
       continue
     }
-    if options.only is Some(only) && only != unit_id {
+    if !options.only.is_empty() && !options.only.contains(unit_id) {
       continue
     }
     if completed.contains(unit_id + "@" + version + "/source") {
+      continue
+    }
+    if uncertain.contains(unit_id + "@" + version + "/source") {
+      failed = true
+      statuses.push({
+        "planId": plan_id,
+        "unitId": unit_id,
+        "version": version,
+        "target": "source",
+        "state": "blocked",
+        "message": "Previous publish outcome is unknown; verify the registry before retrying",
+      })
       continue
     }
     let mut unit : @model.ReleaseUnit? = None
@@ -864,6 +886,28 @@ async fn publish_command(options : Options) -> Int32 {
     } else {
       ["publish", "--ignore-scripts"]
     }
+    statuses.push({
+      "planId": plan_id,
+      "unitId": unit_id,
+      "version": version,
+      "target": "source",
+      "registry": if ecosystem == "npm" {
+        "npm"
+      } else {
+        "mooncakes"
+      },
+      "state": "publishing",
+      "message": Json::null(),
+    })
+    safe_write(
+      absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
+      @model.canonical_json({
+        "schemaVersion": 1,
+        "planId": plan_id,
+        "statuses": statuses,
+      }) +
+      "\n",
+    )
     let output = @shell.Cmd(program, args, cwd~).output()
     let ok = output.exit_code() == 0
     if !ok {
@@ -882,7 +926,7 @@ async fn publish_command(options : Options) -> Int32 {
       "state": if ok {
         "published"
       } else {
-        "failed"
+        "unknown"
       },
       "message": if ok {
         Json::null()

@@ -122,7 +122,7 @@ moonset pack [--package name ...] [--frozen] [--dry-run] [--json]
 ## `publish`
 
 ```text
-moonset publish [--dry-run] [--registry name] [--only name]
+moonset publish [--dry-run] [--registry name] [--only unit[,unit...]]
   [--yes] [--retry count] [--json]
 ```
 

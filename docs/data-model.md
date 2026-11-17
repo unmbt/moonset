@@ -99,7 +99,7 @@ mode: active | exit
 
 ### `PublishResult`
 
-每个 `(planId, unitId, version, target)` 一个结果：`published|skipped|already-published|failed|blocked`，包含 registry、artifact 摘要、attempts、externalId 和可恢复错误。token、完整命令行和 HTTP header 永不进入该类型；`blocked` 用于上游节点失败导致无法开始的目标。
+每个 `(planId, unitId, version, target)` 一个结果：`published|skipped|already-published|failed|blocked|unknown`，包含 registry、artifact 摘要、attempts、externalId 和可恢复错误。token、完整命令行和 HTTP header 永不进入该类型；`blocked` 用于上游节点失败导致无法开始的目标，`unknown` 表示进程中断或远端结果无法确认，禁止自动重发。
 
 ### `ArtifactIntent` / `PackResult`
 
