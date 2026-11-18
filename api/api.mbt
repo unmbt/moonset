@@ -16,6 +16,13 @@ pub using @model {
   type ApplyResult,
   type Diagnostic,
   type MoonsetError,
+  type GeneratorPluginConfig,
+  type DependencyKind,
+  type DependencyEdge,
+  type Ownership,
+  type ArtifactIntent,
+  type PackResult,
+  type PublishTarget,
 }
 
 ///|
@@ -34,3 +41,33 @@ pub using @engine {
 
 ///|
 pub using @workspace {discover, type LoadedWorkspace}
+
+///|
+/// Experimental operational adapter contracts and JSONL plugin protocol.
+pub using @adapters {
+  type Capability,
+  type CapabilityReport,
+  type AdapterRegistry,
+  type PluginSpec,
+  type JsonlRequest,
+  type JsonlResponse,
+  type FileHost,
+  type ProcessHost,
+  type RegistryHost,
+  run_jsonl,
+  generator_result,
+  trait DiscoveryPort,
+  trait RangePort,
+  trait OwnershipPort,
+  trait LockfilePort,
+  trait ArtifactPort,
+  trait PublisherPort,
+  trait OperationalAdapter,
+}
+
+///|
+pub using @changelog {
+  type ChangelogContext,
+  type GeneratorRegistry,
+  trait ChangelogGenerator,
+}

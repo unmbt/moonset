@@ -86,3 +86,4 @@
 - Node Changesets 的配置、插件运行时及目录互写兼容：暂不承诺。npm/pnpm 混合 workspace 的原生支持已纳入 Phase 3/4，不再整体推迟。
 - 任意动态 MoonBit 模块加载：由编译期 API 和 JSONL 协议覆盖，等工具链提供稳定模块加载机制后再评估。
 - 自动提交/推送：保留显式开关；默认让 CI 或维护者控制 Git 提交边界。
+| Phase 5 second slice | In progress: operational ports, external generators, npm/pnpm and Cargo workspace support; other Cargo registries and Tauri remain deferred. |

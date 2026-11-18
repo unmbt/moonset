@@ -82,6 +82,90 @@ fn package_manager_program(name : String) -> String {
 }
 
 ///|
+fn manager_for_unit(
+  snapshot : @model.WorkspaceSnapshot,
+  unit : @model.ReleaseUnit,
+) -> String {
+  for workspace in snapshot.workspaces {
+    if workspace.id == unit.workspace_id {
+      return workspace.manager
+    }
+  }
+  if unit.ecosystem == "cargo" {
+    "cargo"
+  } else if unit.ecosystem == "moonbit" {
+    "moon"
+  } else {
+    "npm"
+  }
+}
+
+///|
+fn workspace_root_for_unit(
+  snapshot : @model.WorkspaceSnapshot,
+  unit : @model.ReleaseUnit,
+) -> String {
+  for workspace in snapshot.workspaces {
+    if workspace.id == unit.workspace_id {
+      return workspace.root
+    }
+  }
+  unit.root
+}
+
+///|
+async fn binary_fingerprint(path : String) -> String {
+  let bytes = @fs.read_binary(path)
+  let mut hash : UInt64 = 14695981039346656037UL
+  for byte in bytes.iter() {
+    hash = (hash ^ byte.to_uint64()) * 1099511628211UL
+  }
+  "fnv1a64:" + hash.to_string(radix=16)
+}
+
+///|
+/// Query registry presence without exposing registry diagnostics in structured state.
+async fn registry_lookup(
+  ecosystem : String,
+  manager : String,
+  name : String,
+  version : String,
+  cwd : String,
+) -> String {
+  if ecosystem == "moonbit" {
+    return "absent"
+  }
+  let package_id = name + "@" + version
+  let (program, args) = if ecosystem == "cargo" {
+    ("cargo", ["info", package_id])
+  } else {
+    (
+      package_manager_program(manager),
+      ["view", package_id, "version", "--json"],
+    )
+  }
+  let output = @shell.Cmd(program, args, cwd~).output()
+  if output.exit_code() == 0 {
+    "present"
+  } else if ecosystem == "cargo" &&
+    (
+      output.stderr().contains("could not find") ||
+      output.stderr().contains("does not exist") ||
+      output.stderr().contains("not found")
+    ) {
+    "absent"
+  } else if ecosystem == "npm" &&
+    (
+      output.stderr().contains("E404") ||
+      output.stderr().contains("404 Not Found")
+    ) {
+    "absent"
+  } else {
+    "unknown"
+  }
+}
+
+///|
 async fn recover_version(root : String) -> Int32 raise @model.MoonsetError {
   let journal_path = absolute(root, ".moonset/version-journal.json")
   if !safe_exists(journal_path) {
@@ -209,7 +293,10 @@ async fn stage_lockfiles(
   let npm_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
     x.ecosystem == "npm"
   })
-  if npm_workspaces.is_empty() {
+  let cargo_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
+    x.ecosystem == "cargo"
+  })
+  if npm_workspaces.is_empty() && cargo_workspaces.is_empty() {
     return plan
   }
   let stage = @fs.tmpdir(prefix="moonset-lock-stage-")
@@ -364,6 +451,64 @@ async fn stage_lockfiles(
       })
     }
   }
+  for workspace in cargo_workspaces {
+    let workspace_root = if workspace.root == "." { "" } else { workspace.root }
+    let cwd = absolute(stage, workspace_root)
+    let generated = @shell.Cmd(
+      "cargo",
+      ["generate-lockfile", "--offline"],
+      cwd~,
+    ).output()
+    if generated.exit_code() != 0 {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-stage-failed",
+          "Cargo could not stage Cargo.lock: " + generated.stderr(),
+        ),
+      )
+    }
+    let lock_path = if workspace_root == "" {
+      "Cargo.lock"
+    } else {
+      workspace_root + "/Cargo.lock"
+    }
+    let generated_path = absolute(stage, lock_path)
+    if !safe_exists(generated_path) {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-missing",
+          "Cargo did not produce Cargo.lock",
+          path=lock_path,
+        ),
+      )
+    }
+    let after = safe_read(generated_path)
+    let source_path = absolute(root, lock_path)
+    let before = if safe_exists(source_path) {
+      safe_read(source_path)
+    } else {
+      ""
+    }
+    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "lockfile-out-of-date",
+          "Cargo.lock differs in verify-only mode",
+          path=lock_path,
+        ),
+      )
+    }
+    if before != after {
+      lock_edits.push({
+        path: lock_path,
+        kind: "lockfile",
+        owner: workspace.id,
+        before_hash: @model.fingerprint(Json::string(before)),
+        after_text: after,
+        atomic_write: true,
+      })
+    }
+  }
   if loaded.snapshot.config.lockfiles == "verify-only" {
     return plan
   }
@@ -388,29 +533,115 @@ async fn version_command(options : Options) -> Int32 {
     config_path?=options.config,
     since?=options.since,
   )
-  if !["builtin", "git", "github"].contains(loaded.snapshot.config.changelog) {
-    raise @model.Invalid(
-      @model.diagnostic(
-        "unsupported-capability", "Changelog generator requires a registered API implementation or JSONL plugin",
-      ),
-    )
-  }
+  let generators = @changelog.GeneratorRegistry::new()
+  let generator_name = loaded.snapshot.config.changelog
   let analysis = @engine.build_plan(
     loaded.snapshot,
     loaded.changesets,
     pre?=loaded.pre,
   )
+  let version_options : @model.VersionOptions = {
+    dry_run: options.dry_run,
+    no_changelog: options.no_changelog,
+    snapshot_tag: options.snapshot,
+  }
+  let texts : Map[String, String] = Map([])
+  let metadata : Map[String, Json] = Map([])
+  if !options.no_changelog &&
+    !["builtin", "git", "github"].contains(generator_name) {
+    let plugin = match loaded.snapshot.config.generators.get(generator_name) {
+      Some(plugin) => plugin
+      None =>
+        raise @model.Invalid(
+          @model.diagnostic(
+            "unsupported-capability",
+            "External changelog generator is not registered in plugins.generators: " +
+            generator_name,
+          ),
+        )
+    }
+    let environment : Map[String, String] = Map([])
+    for name in plugin.environment {
+      match @env.get_env_var(name) {
+        Some(value) => environment[name] = value
+        None => ()
+      }
+    }
+    let contexts = @engine.changelog_contexts(
+      loaded.snapshot,
+      analysis,
+      version_options,
+      generated_at=utc_date(@env.now()),
+    )
+    for context in contexts {
+      let response = @adapters.run_jsonl(
+        {
+          program: plugin.program,
+          args: plugin.args,
+          cwd: Some(loaded.snapshot.root),
+          timeout_ms: plugin.timeout_ms,
+          max_output_bytes: plugin.max_output_bytes,
+          allowed_programs: plugin.allowed_programs,
+          environment,
+        },
+        {
+          schema_version: 1,
+          protocol_method: "generate",
+          payload: {
+            "schemaVersion": 1,
+            "generator": generator_name,
+            "context": context.to_json(),
+          },
+        },
+      )
+      let (text, details) = @adapters.generator_result(response)
+      let key = context.unit_id + "\u0000" + context.version
+      texts[key] = text
+      metadata[key] = details
+    }
+    generators.register(generator_name, context => {
+      texts.get(context.unit_id + "\u0000" + context.version).unwrap_or("")
+    })
+  }
   let raw_plan = @engine.build_version_plan(
     loaded.snapshot,
     analysis,
-    @model.VersionOptions::{
-      dry_run: options.dry_run,
-      no_changelog: options.no_changelog,
-      snapshot_tag: options.snapshot,
-    },
+    version_options,
     generated_at=utc_date(@env.now()),
+    generators~,
   )
-  let plan = stage_lockfiles(loaded.snapshot.root, loaded, raw_plan)
+  let changelogs = raw_plan.changelogs.map(entry => {
+    let key = entry.unit_id + "\u0000" + entry.version
+    if texts.contains(key) {
+      {
+        ..entry,
+        generator: generator_name,
+        metadata: metadata.get(key).unwrap_or(Json::empty_object()),
+      }
+    } else {
+      entry
+    }
+  })
+  let enriched = if texts.is_empty() {
+    raw_plan
+  } else {
+    let generator_fingerprints : Array[Json] = changelogs.map(entry => {
+      let row : Json = {
+        "generator": entry.generator,
+        "unitId": entry.unit_id,
+        "version": entry.version,
+        "metadata": entry.metadata,
+        "text": entry.text,
+      }
+      row
+    })
+    let fingerprint = @model.fingerprint({
+      "base": raw_plan.fingerprint,
+      "generators": generator_fingerprints,
+    })
+    { ..raw_plan, changelogs, fingerprint, }
+  }
+  let plan = stage_lockfiles(loaded.snapshot.root, loaded, enriched)
   let rendered = if options.pretty {
     plan.to_json().stringify(indent=2)
   } else {
@@ -605,8 +836,10 @@ async fn tag_command(options : Options) -> Int32 {
 /// Execute the native pack adapter and return a machine-readable result.
 async fn pack_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
+  let adapter_registry = @adapters.AdapterRegistry::with_builtins()
   let results : Array[Json] = []
   for unit in loaded.snapshot.units {
+    adapter_registry.require(unit.ecosystem, @adapters.Artifact)
     match unit.version {
       None => ()
       Some(version) => {
@@ -627,6 +860,12 @@ async fn pack_command(options : Options) -> Int32 {
         let cwd = absolute(loaded.snapshot.root, unit.root)
         let args = if unit.ecosystem == "moonbit" {
           ["package", "--frozen"]
+        } else if unit.ecosystem == "cargo" {
+          if options.dry_run {
+            ["package", "--allow-dirty", "--dry-run"]
+          } else {
+            ["package", "--allow-dirty"]
+          }
         } else if options.dry_run {
           ["pack", "--dry-run", "--ignore-scripts", "--json"]
         } else {
@@ -634,8 +873,10 @@ async fn pack_command(options : Options) -> Int32 {
         }
         let program = if unit.ecosystem == "moonbit" {
           "moon"
+        } else if unit.ecosystem == "cargo" {
+          "cargo"
         } else {
-          package_manager_program("npm")
+          package_manager_program(manager_for_unit(loaded.snapshot, unit))
         }
         let output = @shell.Cmd(program, args, cwd~).output()
         if output.exit_code() != 0 {
@@ -643,19 +884,54 @@ async fn pack_command(options : Options) -> Int32 {
             program + " pack failed for " + unit.id + ": " + output.stderr(),
           )
         }
-        let packed = @json.parse(output.stdout()) catch { _ => Json::null() }
-        let (archive, content_hash) = match packed {
-          Array(
-            [
-              {
-                "filename": String(filename),
-                "integrity": String(integrity),
-                ..
-              },
-              ..,
-            ]
-          ) => (filename, integrity)
-          _ => ("", "")
+        let (archive, content_hash, verified) = if unit.ecosystem == "cargo" {
+          if options.dry_run {
+            ("", "", false)
+          } else {
+            let workspace_root = workspace_root_for_unit(loaded.snapshot, unit)
+            let relative_archive = (if workspace_root == "" {
+                ""
+              } else {
+                workspace_root + "/"
+              }) +
+              "target/package/" +
+              unit.native_name +
+              "-" +
+              version +
+              ".crate"
+            let archive_path = absolute(loaded.snapshot.root, relative_archive)
+            if safe_exists(archive_path) {
+              (archive_path, binary_fingerprint(archive_path), true)
+            } else {
+              raise @model.Invalid(
+                @model.diagnostic(
+                  "artifact-missing",
+                  "cargo package did not produce the expected .crate archive",
+                  path=relative_archive,
+                ),
+              )
+            }
+          }
+        } else {
+          let packed = @json.parse(output.stdout()) catch { _ => Json::null() }
+          let (filename, integrity) = match packed {
+            Array(
+              [
+                {
+                  "filename": String(filename),
+                  "integrity": String(integrity),
+                  ..
+                },
+                ..,
+              ]
+            ) => (filename, integrity)
+            _ => ("", "")
+          }
+          (
+            filename,
+            integrity,
+            unit.ecosystem == "npm" && filename != "" && integrity != "",
+          )
         }
         let result : @model.PackResult = {
           artifact_id: unit.id + "@" + version,
@@ -665,9 +941,7 @@ async fn pack_command(options : Options) -> Int32 {
           archive_path: archive,
           source_commit: loaded.snapshot.git_head,
           content_hash,
-          verified: unit.ecosystem == "npm" &&
-          archive != "" &&
-          content_hash != "",
+          verified,
         }
         results.push(result.to_json())
       }
@@ -690,6 +964,7 @@ async fn pack_command(options : Options) -> Int32 {
 /// Publish versioned units with durable per-target status.
 async fn publish_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
+  let adapter_registry = @adapters.AdapterRegistry::with_builtins()
   let state_path = absolute(loaded.snapshot.root, ".moonset/release-state.json")
   if !safe_exists(state_path) {
     usage_error("No release state exists; run version first")
@@ -705,6 +980,19 @@ async fn publish_command(options : Options) -> Int32 {
     raise @model.Invalid(
       @model.diagnostic("usage", "Release state has an invalid shape"),
     )
+  }
+  for item in items {
+    guard item is { "unitId": String(unit_id), "publish": True, .. } else {
+      continue
+    }
+    if !options.only.is_empty() && !options.only.contains(unit_id) {
+      continue
+    }
+    for unit in loaded.snapshot.units {
+      if unit.id == unit_id {
+        adapter_registry.require(unit.ecosystem, @adapters.Publish)
+      }
+    }
   }
   let statuses : Array[Json] = []
   let completed : Map[String, Bool] = Map([])
@@ -754,7 +1042,7 @@ async fn publish_command(options : Options) -> Int32 {
       _ => ()
     }
   }
-  let targets : Array[(String, String, String, String)] = []
+  let targets : Array[(String, String, String, String, String)] = []
   for item in items {
     guard item
       is {
@@ -802,13 +1090,62 @@ async fn publish_command(options : Options) -> Int32 {
       }
       Some(unit) => {
         let cwd = absolute(loaded.snapshot.root, unit.root)
+        let registry_state = registry_lookup(
+          unit.ecosystem,
+          manager_for_unit(loaded.snapshot, unit),
+          unit.native_name,
+          version,
+          cwd,
+        )
+        if registry_state == "present" {
+          statuses.push({
+            "planId": plan_id,
+            "unitId": unit_id,
+            "version": version,
+            "target": "source",
+            "registry": if unit.ecosystem == "cargo" {
+              "crates.io"
+            } else if unit.ecosystem == "npm" {
+              "npm"
+            } else {
+              "mooncakes"
+            },
+            "state": "published",
+            "message": "already published",
+          })
+          completed[unit_id + "@" + version + "/source"] = true
+          continue
+        }
+        if registry_state == "unknown" {
+          failed = true
+          statuses.push({
+            "planId": plan_id,
+            "unitId": unit_id,
+            "version": version,
+            "target": "source",
+            "registry": if unit.ecosystem == "cargo" {
+              "crates.io"
+            } else if unit.ecosystem == "npm" {
+              "npm"
+            } else {
+              "mooncakes"
+            },
+            "state": "blocked",
+            "message": "Could not determine whether the package is already published",
+          })
+          continue
+        }
         let program = if unit.ecosystem == "moonbit" {
           "moon"
+        } else if unit.ecosystem == "cargo" {
+          "cargo"
         } else {
-          package_manager_program("npm")
+          package_manager_program(manager_for_unit(loaded.snapshot, unit))
         }
         let preflight_args = if unit.ecosystem == "moonbit" {
           ["publish", "--dry-run"]
+        } else if unit.ecosystem == "cargo" {
+          ["publish", "--dry-run", "--allow-dirty"]
         } else {
           ["publish", "--dry-run", "--ignore-scripts"]
         }
@@ -824,6 +1161,8 @@ async fn publish_command(options : Options) -> Int32 {
           "target": "source",
           "registry": if unit.ecosystem == "npm" {
             "npm"
+          } else if unit.ecosystem == "cargo" {
+            "crates.io"
           } else {
             "mooncakes"
           },
@@ -835,11 +1174,19 @@ async fn publish_command(options : Options) -> Int32 {
           "message": if ok {
             Json::null()
           } else {
-            Json::string(preflight.stderr())
+            Json::string("Registry preflight failed")
           },
         })
         if ok {
-          targets.push((unit_id, version, unit.ecosystem, cwd))
+          targets.push(
+            (
+              unit_id,
+              version,
+              unit.ecosystem,
+              manager_for_unit(loaded.snapshot, unit),
+              cwd,
+            ),
+          )
         }
       }
     }
@@ -875,14 +1222,18 @@ async fn publish_command(options : Options) -> Int32 {
     }
     return if failed { 3 } else { 0 }
   }
-  for (unit_id, version, ecosystem, cwd) in targets {
+  for (unit_id, version, ecosystem, manager, cwd) in targets {
     let program = if ecosystem == "moonbit" {
       "moon"
+    } else if ecosystem == "cargo" {
+      "cargo"
     } else {
-      package_manager_program("npm")
+      package_manager_program(manager)
     }
     let args = if ecosystem == "moonbit" {
       ["publish"]
+    } else if ecosystem == "cargo" {
+      ["publish", "--allow-dirty"]
     } else {
       ["publish", "--ignore-scripts"]
     }
@@ -893,6 +1244,8 @@ async fn publish_command(options : Options) -> Int32 {
       "target": "source",
       "registry": if ecosystem == "npm" {
         "npm"
+      } else if ecosystem == "cargo" {
+        "crates.io"
       } else {
         "mooncakes"
       },
@@ -920,6 +1273,8 @@ async fn publish_command(options : Options) -> Int32 {
       "target": "source",
       "registry": if ecosystem == "npm" {
         "npm"
+      } else if ecosystem == "cargo" {
+        "crates.io"
       } else {
         "mooncakes"
       },
@@ -931,7 +1286,9 @@ async fn publish_command(options : Options) -> Int32 {
       "message": if ok {
         Json::null()
       } else {
-        Json::string(output.stderr())
+        Json::string(
+          "Publisher failed after invocation; verify registry state before retrying",
+        )
       },
     })
     safe_write(

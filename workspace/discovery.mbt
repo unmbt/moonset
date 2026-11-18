@@ -261,6 +261,7 @@ pub async fn discover(
           path: manifest,
           start: dep.span.start,
           end: dep.span.end,
+          target_condition: None,
         })
       let publish = match config.raw {
         {
@@ -283,6 +284,8 @@ pub async fn discover(
         workspace_id,
         root: member_path,
         manifest,
+        version_path: manifest,
+        version_field: "version",
         version: document.version(),
         visibility: if document.is_private() {
           "restricted"
@@ -308,10 +311,43 @@ pub async fn discover(
         seen,
         config.unit_overrides,
       )
+    } else if spec.ecosystem == "cargo" {
+      discover_cargo_workspace(
+        reader,
+        spec,
+        units,
+        workspaces,
+        ownership,
+        seen,
+        config.unit_overrides,
+      )
+    }
+  }
+  let cargo_version_paths : Map[String, Array[String]] = Map([])
+  for unit in units {
+    if unit.ecosystem == "cargo" {
+      let group = cargo_version_paths.get(unit.version_path).unwrap_or([])
+      group.push(unit.id)
+      cargo_version_paths[unit.version_path] = group
+    }
+  }
+  for _, group in cargo_version_paths {
+    if group.length() > 1 {
+      let occupied = config.fixed.flatten() + config.linked.flatten()
+      if group.any(id => occupied.contains(id)) {
+        if !config.fixed.any(existing => existing == group) {
+          fail_input(
+            "Cargo packages sharing workspace.package.version must share a fixed version group",
+            path=config_file,
+          )
+        }
+      } else {
+        config.fixed.push(group)
+      }
     }
   }
   if units.is_empty() {
-    fail_input("No managed MoonBit modules were discovered", path=root)
+    fail_input("No managed release units were discovered", path=root)
   }
   match config.raw {
     {

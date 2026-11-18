@@ -107,3 +107,10 @@ Phase 1 接受 MoonBit-only 的显式 coexist 分区；同目录 JS/Cargo 文件
 schema 可校验结构和 manager/生态配对；重复 workspace ID、路径越界、字段所有权、不存在的 UnitId、依赖环和 publisher 能力需要语义校验。`cargo` 在 schema 中保留，但在 Cargo adapter 发布前必须返回 unsupported capability。
 
 
+### External changelog generators
+
+External generators are registered under `plugins.generators` with an executable, argv, explicit executable allow-list, environment variable allow-list, timeout, and output limit. `changelog.generator` references the registration name. The process receives one JSONL `generate` request and must return one response whose `result.text` is the changelog; optional metadata participates in the version plan fingerprint. Plugins are trusted processes and do not receive an implicit OS sandbox.
+
+### Cargo workspaces
+
+An experimental mixed workspace can declare `ecosystem: "cargo"` and `manager: "cargo"`. Moonset discovers explicit Cargo workspace members, inherited `workspace.package.version`, path/workspace dependencies, target dependency sections, and `publish = false`. `pack` uses `cargo package --allow-dirty`; `publish` preflights with `cargo publish --dry-run` and targets crates.io. Other Cargo registries and Tauri remain deferred.

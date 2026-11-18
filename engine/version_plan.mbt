@@ -60,12 +60,26 @@ fn replace_byte_span(
 
 ///|
 fn dependency_literal(intent : @model.DependencyIntent) -> String {
+  if intent.producer.has_prefix("cargo:") {
+    return intent.new_requirement
+  }
   let producer = if intent.producer.has_prefix("moonbit:") {
     intent.producer[8:].to_owned()
   } else {
     intent.producer
   }
   quote_string(producer + "@" + intent.new_requirement)
+}
+
+///|
+fn common_prefix_length(left : String, right : String) -> Int32 {
+  let a = @utf8.encode(left)
+  let b = @utf8.encode(right)
+  let mut index = 0
+  while index < a.length() && index < b.length() && a[index] == b[index] {
+    index += 1
+  }
+  index
 }
 
 ///|
@@ -82,6 +96,30 @@ fn replace_json_string(
     }
     _ => source
   }
+}
+
+///|
+fn replace_toml_version(
+  source : String,
+  section : String,
+  version : String,
+) -> String {
+  let mut active = ""
+  let mut offset = 0
+  for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
+    let line = raw.to_owned()
+    let trimmed = line.trim().to_owned()
+    if trimmed.has_prefix("[") && trimmed.has_suffix("]") {
+      active = trimmed[1:trimmed.length() - 1].to_owned()
+    } else if active == section && trimmed.has_prefix("version = \"") {
+      let local_offset = line.find("\"").unwrap() + 1
+      let value_start = offset + local_offset
+      let end = source[value_start:].find("\"").unwrap()
+      return replace_byte_span(source, value_start, value_start + end, version)
+    }
+    offset += line.length() + 1
+  }
+  source
 }
 
 ///|
@@ -200,6 +238,70 @@ fn render_configured_changelog(
 }
 
 ///|
+/// Build the exact data-only contexts supplied to configured generators.
+pub fn changelog_contexts(
+  snapshot : @model.WorkspaceSnapshot,
+  analysis : @model.ReleasePlan,
+  options : @model.VersionOptions,
+  generated_at~ : String = "",
+) -> Array[@changelog.ChangelogContext] {
+  let contexts : Array[@changelog.ChangelogContext] = []
+  for release in analysis.releases {
+    let release_version = planned_version(
+      release.new_version,
+      options,
+      generated_at,
+    )
+    let mut selected : @model.ReleaseUnit? = None
+    for candidate in snapshot.units {
+      if candidate.id == release.unit_id {
+        selected = Some(candidate)
+      }
+    }
+    let unit = selected.unwrap()
+    let path = if unit.root == "" {
+      snapshot.config.changelog_file
+    } else {
+      unit.root + "/" + snapshot.config.changelog_file
+    }
+    let lines : Array[@changelog.ReleaseLineContext] = []
+    for changeset in analysis.changesets {
+      for change in changeset.releases {
+        if change.unit_id == unit.id &&
+          change.bump != @model.None &&
+          changeset.summary != "" {
+          lines.push({
+            changeset_id: changeset.id,
+            summary: changeset.summary,
+            unit_id: unit.id,
+            bump: change.bump,
+            old_version: release.old_version,
+            new_version: release_version,
+            commit: None,
+            pull_request: None,
+            author: None,
+          })
+        }
+      }
+    }
+    let dependencies = analysis.dependency_updates
+      .filter(x => x.consumer == unit.id)
+      .map(x => "`" + x.producer + "` updated to `" + x.new_requirement + "`. ")
+    contexts.push({
+      unit_id: unit.id,
+      version: release_version,
+      date: version_date(generated_at),
+      lines,
+      dependency_lines: dependencies,
+      existing: snapshot.sources.get(path).unwrap_or(""),
+      repository: snapshot.config.github,
+      thanks: snapshot.config.changelog == "github",
+    })
+  }
+  contexts
+}
+
+///|
 fn add_edit(
   edits : Array[@model.FileEdit],
   path : String,
@@ -246,10 +348,13 @@ pub fn build_version_plan(
       }
     }
     let unit = unit.unwrap()
-    let source = snapshot.sources.get(unit.manifest).unwrap_or("")
+    let version_path = unit.version_path
+    let source = snapshot.sources.get(version_path).unwrap_or("")
     let after_version = if unit.ecosystem == "moonbit" {
       let document = @manifest.parse(@manifest.Mod, source, path=unit.manifest)
       document.replace_string("version", release_version)
+    } else if unit.ecosystem == "cargo" {
+      replace_toml_version(source, unit.version_field, release_version)
     } else {
       replace_json_string(source, "version", release_version)
     }
@@ -262,8 +367,28 @@ pub fn build_version_plan(
         ),
       )
     }
-    add_edit(edits, unit.manifest, "manifest", unit.id, source, after_version)
-    changed_paths[unit.manifest] = unit.id
+    if changed_paths.get(version_path) is Some(_) {
+      let mut existing_edit : @model.FileEdit? = None
+      for candidate in edits {
+        if candidate.path == version_path && candidate.kind == "manifest" {
+          existing_edit = Some(candidate)
+        }
+      }
+      if existing_edit is Some(edit) && edit.after_text == after_version {
+        ()
+      } else {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "ownership-conflict",
+            "Multiple release units require different versions in one manifest",
+            path=version_path,
+          ),
+        )
+      }
+    } else {
+      add_edit(edits, version_path, "manifest", unit.id, source, after_version)
+      changed_paths[version_path] = unit.id
+    }
     let mixed = snapshot.units.any(x => x.ecosystem != "moonbit")
     let tag_name = if mixed {
       unit.ecosystem + "/" + unit.native_name + "@" + release_version
@@ -308,44 +433,85 @@ pub fn build_version_plan(
         section: "builtin",
         text,
         path,
+        generator: snapshot.config.changelog,
+        metadata: Json::empty_object(),
       })
       add_edit(edits, path, "changelog", unit.id, existing, text)
       changed_paths[path] = unit.id
     }
   }
+  let grouped_dependencies : Map[String, Array[@model.DependencyIntent]] = Map([])
   for intent in analysis.dependency_updates {
-    if edits.any(x => x.path == intent.path && x.kind == "dependency") {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "ownership-conflict",
-          "Multiple edits target the same manifest; dependency span merge is ambiguous",
-          path=intent.path,
-        ),
-      )
+    let group = grouped_dependencies.get(intent.path).unwrap_or([])
+    group.push(intent)
+    grouped_dependencies[intent.path] = group
+  }
+  for path in grouped_dependencies.keys().collect() {
+    let source = snapshot.sources.get(path).unwrap_or("")
+    let intents = grouped_dependencies[path]
+    intents.sort_by((a, b) => b.start.compare(a.start))
+    let mut manifest_index : Int32? = None
+    for index, edit in edits {
+      if edit.path == path && edit.kind == "manifest" {
+        manifest_index = Some(index)
+      }
     }
-    let source = snapshot.sources.get(intent.path).unwrap_or("")
-    let current = if intent.start >= 0 &&
-      intent.end <= @utf8.encode(source).length() {
-      @utf8.decode_lossy(@utf8.encode(source)[intent.start:intent.end])
-    } else {
-      ""
+    let mut after = match manifest_index {
+      Some(index) => edits[index].after_text
+      None => source
     }
-    if current == "" {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "stale-dependency-span",
-          "Dependency span is outside the manifest",
-          path=intent.path,
-        ),
-      )
+    let shift = match manifest_index {
+      Some(index) => {
+        let changed = edits[index].after_text
+        if common_prefix_length(source, changed) < intents.last().unwrap().start {
+          @utf8.encode(changed).length() - @utf8.encode(source).length()
+        } else {
+          0
+        }
+      }
+      None => 0
     }
-    let after = replace_byte_span(
-      source,
-      intent.start,
-      intent.end,
-      dependency_literal(intent),
-    )
-    add_edit(edits, intent.path, "dependency", intent.consumer, source, after)
+    let seen_spans : Map[String, Bool] = Map([])
+    for intent in intents {
+      let span_key = intent.start.to_string() + ":" + intent.end.to_string()
+      if seen_spans.contains(span_key) {
+        continue
+      }
+      seen_spans[span_key] = true
+      let source_bytes = @utf8.encode(source)
+      if intent.start < 0 ||
+        intent.end > source_bytes.length() ||
+        intent.start >= intent.end {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "stale-dependency-span",
+            "Dependency span is outside the manifest",
+            path~,
+          ),
+        )
+      }
+      let original = @utf8.decode_lossy(source_bytes[intent.start:intent.end])
+      let start = intent.start + shift
+      let end = start + intent.end - intent.start
+      let current_bytes = @utf8.encode(after)
+      if start < 0 ||
+        end > current_bytes.length() ||
+        @utf8.decode_lossy(current_bytes[start:end]) != original {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "stale-dependency-span",
+            "Dependency span changed before merging",
+            path~,
+          ),
+        )
+      }
+      after = replace_byte_span(after, start, end, dependency_literal(intent))
+    }
+    match manifest_index {
+      Some(index) => edits[index] = { ..edits[index], after_text: after, }
+      None =>
+        add_edit(edits, path, "dependency", intents[0].consumer, source, after)
+    }
   }
   let consumed = analysis.changesets.map(x => x.id)
   for changeset in analysis.changesets {

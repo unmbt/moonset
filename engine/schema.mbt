@@ -40,8 +40,10 @@ fn schema_issue(
       ("object", Object(_))
       | ("array", Array(_))
       | ("string", String(_))
+      | ("number", Number(_, ..))
       | ("boolean", True)
       | ("boolean", False) => true
+      ("integer", Number(number, ..)) => number == number.to_int().to_double()
       _ => false
     }
     if !valid {
@@ -49,6 +51,10 @@ fn schema_issue(
     }
   }
   match value {
+    Number(number, ..) =>
+      if property(schema, "minimum") is Number(minimum, ..) && number < minimum {
+        return Some(path + ": number is below minimum")
+      }
     Object(fields) => {
       if property(schema, "required") is Array(required) {
         for key in required {

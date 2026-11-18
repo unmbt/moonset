@@ -57,6 +57,63 @@ fn groups(value : Json) -> Array[Array[String]] {
 }
 
 ///|
+fn plugin_specs(value : Json) -> Map[String, @model.GeneratorPluginConfig] {
+  let result : Map[String, @model.GeneratorPluginConfig] = Map([])
+  match value {
+    Object(items) =>
+      for name, item in items {
+        match item {
+          {
+            "program": String(program),
+            "args": Array(args),
+            "allowedPrograms": Array(allowed),
+            "environment": Array(environment),
+            ..
+          } => {
+            let argv = args.filter_map(x => {
+              match x {
+                String(s) => Some(s)
+                _ => None
+              }
+            })
+            let programs = allowed.filter_map(x => {
+              match x {
+                String(s) => Some(s)
+                _ => None
+              }
+            })
+            let env = environment.filter_map(x => {
+              match x {
+                String(s) => Some(s)
+                _ => None
+              }
+            })
+            let timeout_ms = match property(item, "timeoutMs") {
+              Number(value, ..) => value.to_int()
+              _ => 30000
+            }
+            let max_output_bytes = match property(item, "maxOutputBytes") {
+              Number(value, ..) => value.to_int()
+              _ => 1048576
+            }
+            result[name] = {
+              program,
+              args: argv,
+              allowed_programs: programs,
+              environment: env,
+              timeout_ms,
+              max_output_bytes,
+            }
+          }
+          _ => ()
+        }
+      }
+    _ => ()
+  }
+  result
+}
+
+///|
 pub fn parse_config(
   source : String,
   path~ : String = ".changeset/config.json",
@@ -80,6 +137,20 @@ pub fn parse_config(
     )
   }
   let defaults = @model.Config::default()
+  let generators = plugin_specs(
+    property(property(raw, "plugins"), "generators"),
+  )
+  for name, plugin in generators {
+    if name.trim() == "" || !plugin.allowed_programs.contains(plugin.program) {
+      invalid("Generator executable must be explicitly allowed: " + name, path~)
+    }
+    if plugin.timeout_ms < 1 || plugin.max_output_bytes < 1 {
+      invalid(
+        "Generator timeout and output limit must be positive: " + name,
+        path~,
+      )
+    }
+  }
   let fixed = groups(property(raw, "fixed"))
   let linked = groups(property(raw, "linked"))
   let ignore = strings(property(raw, "ignore")).map(canonical_id)
@@ -125,14 +196,7 @@ pub fn parse_config(
           if ids.contains(id) {
             invalid("Duplicate workspace ID: " + id, path~)
           }
-          if ecosystem == "cargo" {
-            invalid(
-              "Cargo adapter is not implemented in Phase 3",
-              path~,
-              code="unsupported-capability",
-            )
-          }
-          if !["moon", "npm", "pnpm"].contains(manager) {
+          if !["moon", "npm", "pnpm", "cargo"].contains(manager) {
             invalid("Unsupported workspace manager: " + manager, path~)
           }
           ids[id] = true
@@ -313,6 +377,7 @@ pub fn parse_config(
     mixed_workspaces,
     bridges,
     unit_overrides,
+    generators,
     raw,
   }
 }

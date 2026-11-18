@@ -18,6 +18,8 @@ pub(all) struct ChangelogEntry {
   section : String
   text : String
   path : String
+  generator : String
+  metadata : Json
 }
 
 ///|

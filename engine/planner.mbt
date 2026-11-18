@@ -38,6 +38,67 @@ fn add_reason(
 }
 
 ///|
+fn ecosystem_range_matches(
+  ecosystem : String,
+  requirement : String,
+  target : String,
+) -> Bool raise @model.MoonsetError {
+  if ecosystem != "cargo" {
+    return version_matches(requirement, target)
+  }
+  if requirement == "*" {
+    return true
+  }
+  if requirement.contains(",") ||
+    requirement.contains("|") ||
+    requirement.contains(">") ||
+    requirement.contains("<") {
+    invalid(
+      "Unsupported Cargo version requirement: " + requirement,
+      code="unsupported-capability",
+    )
+  }
+  let base = requirement
+    .replace_all(old="^", new="")
+    .replace_all(old="~", new="")
+    .replace_all(old="=", new="")
+    .trim()
+    .to_owned()
+  if requirement.has_prefix("=") {
+    parse_version(base).compare(parse_version(target)) == 0
+  } else if requirement.has_prefix("~") {
+    let expected = parse_version(base)
+    let actual = parse_version(target)
+    actual.compare(expected) >= 0 &&
+    actual.major == expected.major &&
+    actual.minor == expected.minor
+  } else {
+    version_matches(base, target)
+  }
+}
+
+///|
+fn ecosystem_range_rewrite(
+  ecosystem : String,
+  requirement : String,
+  target : String,
+) -> String {
+  if ecosystem == "cargo" {
+    if requirement.has_prefix("^") {
+      "^" + target
+    } else if requirement.has_prefix("~") {
+      "~" + target
+    } else if requirement.has_prefix("=") {
+      "=" + target
+    } else {
+      target
+    }
+  } else {
+    target
+  }
+}
+
+///|
 pub fn build_plan(
   snapshot : @model.WorkspaceSnapshot,
   changesets : Array[@model.Changeset],
@@ -63,7 +124,9 @@ pub fn build_plan(
     if units.contains(unit.id) {
       invalid("Duplicate unit: " + unit.id, path=unit.manifest)
     }
-    if unit.ecosystem != "moonbit" && unit.ecosystem != "npm" {
+    if unit.ecosystem != "moonbit" &&
+      unit.ecosystem != "npm" &&
+      unit.ecosystem != "cargo" {
       invalid(
         "Unsupported ecosystem: " + unit.ecosystem,
         code="unsupported-capability",
@@ -76,7 +139,7 @@ pub fn build_plan(
       }
     }
     for dep in unit.dependencies {
-      if dep.kind != @model.Runtime {
+      if unit.ecosystem == "moonbit" && dep.kind != @model.Runtime {
         invalid(
           "Unsupported dependency kind: " + dep.kind.text(),
           path=dep.path,
@@ -85,6 +148,20 @@ pub fn build_plan(
       }
       if unit.ecosystem == "moonbit" {
         ignore(parse_version(dep.requirement)) catch {
+          @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
+          error => raise error
+        }
+      } else if unit.ecosystem == "cargo" && dep.requirement != "*" {
+        ignore(
+          ecosystem_range_matches(
+            "cargo",
+            dep.requirement,
+            dep.requirement
+            .replace_all(old="^", new="")
+            .replace_all(old="~", new="")
+            .replace_all(old="=", new=""),
+          ),
+        ) catch {
           @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
           error => raise error
         }
@@ -307,11 +384,19 @@ pub fn build_plan(
     for id in ids {
       for dep in units[id].dependencies {
         if targets.get(dep.producer) is Some(target) {
-          let comparable = units[id].ecosystem == "moonbit" &&
+          let comparable = (
+              units[id].ecosystem == "moonbit" || units[id].ecosystem == "cargo"
+            ) &&
+            (dep.kind == @model.Runtime || units[id].ecosystem == "cargo") &&
             !dep.requirement.has_prefix("workspace:") &&
             !dep.requirement.has_prefix("file:") &&
             !dep.requirement.has_prefix("link:")
-          let outside = comparable && !version_matches(dep.requirement, target)
+          let outside = comparable &&
+            !ecosystem_range_matches(
+              units[id].ecosystem,
+              dep.requirement,
+              target,
+            )
           if (outside || config.update_dependents == "always") && comparable {
             if config.ignore.contains(id) {
               invalid(
@@ -363,18 +448,23 @@ pub fn build_plan(
       for dep in unit.dependencies {
         if targets.get(dep.producer) is Some(target) &&
           target != dep.requirement &&
-          unit.ecosystem == "moonbit" &&
+          (unit.ecosystem == "moonbit" || unit.ecosystem == "cargo") &&
+          (dep.kind == @model.Runtime || unit.ecosystem == "cargo") &&
           !dep.requirement.has_prefix("workspace:") &&
           !dep.requirement.has_prefix("file:") &&
           !dep.requirement.has_prefix("link:") {
-          if !version_matches(dep.requirement, target) ||
+          if !ecosystem_range_matches(unit.ecosystem, dep.requirement, target) ||
             levels[dep.producer].rank() >= config.update_dependencies.rank() {
             dependency_updates.push({
               consumer: id,
               producer: dep.producer,
               path: dep.path,
               old_requirement: dep.requirement,
-              new_requirement: target,
+              new_requirement: ecosystem_range_rewrite(
+                unit.ecosystem,
+                dep.requirement,
+                target,
+              ),
               start: dep.start,
               end: dep.end,
             })

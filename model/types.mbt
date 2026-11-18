@@ -65,6 +65,7 @@ pub(all) struct DependencyEdge {
   path : String
   start : Int32
   end : Int32
+  target_condition : String?
 }
 
 ///|
@@ -72,6 +73,9 @@ pub(all) struct DependencyEdge {
 pub(all) enum DependencyKind {
   Runtime
   Build
+  Development
+  Optional
+  Peer
 }
 
 ///|
@@ -85,6 +89,9 @@ pub fn DependencyKind::text(self : DependencyKind) -> String {
   match self {
     Runtime => "runtime"
     Build => "build"
+    Development => "development"
+    Optional => "optional"
+    Peer => "peer"
   }
 }
 
@@ -96,6 +103,8 @@ pub(all) struct ReleaseUnit {
   workspace_id : String
   root : String
   manifest : String
+  version_path : String
+  version_field : String
   version : String?
   visibility : String
   publish : Bool
@@ -144,7 +153,19 @@ pub(all) struct Config {
   mixed_workspaces : Array[MixedWorkspaceSpec]
   bridges : Array[Bridge]
   unit_overrides : Map[String, UnitOverride]
+  generators : Map[String, GeneratorPluginConfig]
   raw : Json
+}
+
+///|
+/// Explicitly registered executable used by the external generator protocol.
+pub(all) struct GeneratorPluginConfig {
+  program : String
+  args : Array[String]
+  allowed_programs : Array[String]
+  environment : Array[String]
+  timeout_ms : Int32
+  max_output_bytes : Int32
 }
 
 ///|
@@ -175,6 +196,7 @@ pub fn Config::default() -> Config {
     mixed_workspaces: [],
     bridges: [],
     unit_overrides: Map([]),
+    generators: Map([]),
     raw: Json::empty_object(),
   }
 }

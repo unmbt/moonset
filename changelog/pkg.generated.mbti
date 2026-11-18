@@ -2,6 +2,7 @@
 package "unmbt/moonset/changelog"
 
 import {
+  "moonbitlang/core/json",
   "unmbt/moonset/model",
 }
 
@@ -25,6 +26,7 @@ pub(all) struct ChangelogContext {
   repository : String?
   thanks : Bool
 }
+pub fn ChangelogContext::to_json(Self) -> @json.Json
 
 pub(all) enum GeneratorKind {
   Builtin

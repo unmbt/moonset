@@ -65,3 +65,19 @@ pub using @adapters {
 
 ///|
 pub using @api {api_version}
+
+///|
+pub using @api {
+  type AdapterRegistry,
+  type FileHost,
+  type ProcessHost,
+  type RegistryHost,
+  trait DiscoveryPort,
+  trait RangePort,
+  trait OwnershipPort,
+  trait LockfilePort,
+  trait ArtifactPort,
+  trait PublisherPort,
+  trait OperationalAdapter,
+  generator_result,
+}

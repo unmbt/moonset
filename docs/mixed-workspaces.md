@@ -169,3 +169,4 @@ Cargo/Tauri adapter 在后续阶段评估；第一版核心必须能表示这些
 4. **Phase 5+**：Cargo、应用产物与框架版本同步 adapter；每种 adapter 通过 conformance 测试才声明支持。
 
 具体验收编号和失败场景见 [测试策略](test-strategy.md)。配置、版本计划和 adapter 接口尚未发布，所以现在调整核心比以后把 `Module` 强行扩展成 npm package 成本更低。
+Cargo entries use an explicit Cargo workspace root. Cargo `workspace.package.version` inheritance is treated as a fixed release group so all packages sharing the same version field remain aligned. Cargo dependency categories include runtime, development, build, optional, and target-specific entries. Publishing is limited to crates.io; other registries and Tauri support remain deferred.

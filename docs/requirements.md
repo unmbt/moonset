@@ -116,3 +116,4 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 11. 平台包成功发布但 JS 主包失败时，保留成功凭据并仅重试主包；不创建“整个产品已发布”的标签。
 
 
+Phase 5 supports experimental operational adapter ports, JSONL external changelog generators, npm/pnpm routing, and Cargo workspace discovery/pack/publish for crates.io. External plugins are trusted processes; the protocol limits executable selection, environment variables, elapsed time, and output size, but does not provide OS-level file or network isolation.

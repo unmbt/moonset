@@ -91,5 +91,47 @@ async fn main {
   let first = invoke(binary, root, ["publish-plan"], 0)
   let second = invoke(binary, root, ["publish-plan"], 0)
   assert_eq(first, second)
+  let generator_config : Json = {
+    "changelog": { "generator": "fixture" },
+    "plugins": {
+      "generators": {
+        "fixture": {
+          "program": "node",
+          "args": [@path.Path(project).join(@path.Path("fixtures/phase5-plugin.mjs")).to_string(), "success"],
+          "allowedPrograms": ["node"],
+          "environment": ["PATH", "SystemRoot"],
+          "timeoutMs": 30000,
+          "maxOutputBytes": 1048576,
+        },
+      },
+    },
+  }
+  write(root, ".changeset/config.json", generator_config.stringify())
+  let manifest_before = @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string())
+  let generated = invoke(binary, root, ["version", "--dry-run", "--json"], 0)
+  assert_true(generated is {
+    "changelogs": [{
+      "generator": "fixture",
+      "metadata": { "fixture": True, .. },
+      "text": "phase5-fixture",
+      ..
+    }, ..],
+    "fingerprint": String(_),
+    ..
+  })
+  assert_eq(
+    @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()),
+    manifest_before,
+  )
+  assert_true(!@fs.exists(@path.Path(root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  let failing_config = generator_config.stringify().replace_all(old="\"success\"", new="\"crash\"")
+  write(root, ".changeset/config.json", failing_config)
+  let rejected = invoke(binary, root, ["version", "--json"], 2)
+  assert_true(rejected is { "errors": [{ "code": "plugin-crashed", .. }, ..], .. })
+  assert_eq(
+    @fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()),
+    manifest_before,
+  )
+  assert_true(!@fs.exists(@path.Path(root).join(@path.Path(".moonset/release-state.json")).to_string()))
   println("CLI integration: Git snapshots, merge-base, rename, empty changesets, exits, JSON and no-write checks passed")
 }

@@ -67,3 +67,4 @@ async fn publish(plan~ : ReleasePlan, publisher~ : Publisher, options~ : Publish
 ## 5. API 安全边界
 
 核心 API 不接收原始 shell 字符串、不输出凭据、不允许 generator 直接写文件。JSONL runner 只启动显式登记的 executable，并可通过 `environment` 白名单传入运行所需变量。需要宿主权限的实现必须显式传入 adapter；这样 planner 和 changeset parser 可以在 wasm/native 测试中复用。
+Operational adapter ports and the JSONL generator protocol are exposed from `unmbt/moonset/api`; adapter traits are experimental in API v1.

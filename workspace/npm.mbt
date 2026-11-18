@@ -240,13 +240,20 @@ async fn discover_npm_workspace(
         Object(items) =>
           for dependency, requirement in items {
             if requirement is String(value) {
+              let kind = match field {
+                "devDependencies" => @model.Development
+                "optionalDependencies" => @model.Optional
+                "peerDependencies" => @model.Peer
+                _ => @model.Runtime
+              }
               dependencies.push({
                 producer: "npm:" + dependency,
                 requirement: value,
-                kind: @model.Runtime,
+                kind,
                 path: manifest,
                 start: 0,
                 end: 0,
+                target_condition: None,
               })
             }
           }
@@ -269,6 +276,8 @@ async fn discover_npm_workspace(
       workspace_id: spec.id,
       root: member_path,
       manifest,
+      version_path: manifest,
+      version_field: "version",
       version: Some(version),
       visibility: if private {
         "private"

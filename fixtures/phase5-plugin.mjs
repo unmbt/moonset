@@ -15,7 +15,9 @@ if (mode === "slow") {
     const request = JSON.parse(input.trim());
     process.stdout.write(JSON.stringify({
       ok: true,
-      result: request.method === "generate" ? "phase5-fixture" : { accepted: true },
+      result: request.method === "generate"
+        ? { text: "phase5-fixture", metadata: { fixture: true } }
+        : { accepted: true },
     }) + "\n");
   });
 }

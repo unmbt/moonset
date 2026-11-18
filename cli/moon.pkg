@@ -3,6 +3,8 @@ import {
   "unmbt/moonset/model",
   "unmbt/moonset/engine",
   "unmbt/moonset/workspace",
+  "unmbt/moonset/adapters",
+  "unmbt/moonset/changelog",
   "moonbitlang/core/async/fs",
   "moonbitlang/core/async/stdio",
   "moonbitlang/core/encoding/utf8",

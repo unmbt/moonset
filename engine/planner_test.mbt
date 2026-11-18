@@ -11,6 +11,8 @@ fn unit(
     workspace_id: "main",
     root: name,
     manifest: name + "/moon.mod",
+    version_path: name + "/moon.mod",
+    version_field: "version",
     version: Some(version),
     visibility: "public",
     publish: true,
@@ -21,6 +23,7 @@ fn unit(
       path: name + "/moon.mod",
       start: 0,
       end: 0,
+      target_condition: None,
     }),
   }
 }

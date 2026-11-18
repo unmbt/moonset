@@ -103,6 +103,28 @@
         "thanks": { "type": "boolean" }
       }
     },
+    "plugins": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generators": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["program", "args", "allowedPrograms", "environment"],
+            "properties": {
+              "program": { "type": "string", "minLength": 1 },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "allowedPrograms": { "type": "array", "items": { "type": "string" } },
+              "environment": { "type": "array", "items": { "type": "string" } },
+              "timeoutMs": { "type": "integer", "minimum": 1 },
+              "maxOutputBytes": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
     "experimental": {
       "type": "object",
       "properties": {

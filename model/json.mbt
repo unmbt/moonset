@@ -147,6 +147,8 @@ pub fn ChangelogEntry::to_json(self : ChangelogEntry) -> Json {
     "section": self.section,
     "text": self.text,
     "path": self.path,
+    "generator": self.generator,
+    "metadata": self.metadata,
   }
 }
 

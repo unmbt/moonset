@@ -22,6 +22,15 @@ test "JSONL request and response schemas are versioned and validated" {
     _ => false
   }
   assert_true(rejected)
+  let (text, metadata) = @adapters.generator_result(
+    @adapters.parse_response(
+      @json.parse(
+        "{\"ok\":true,\"result\":{\"text\":\"generated\",\"metadata\":{\"source\":\"fixture\"}}}",
+      ),
+    ),
+  )
+  assert_eq(text, "generated")
+  assert_true(metadata is { "source": "fixture", .. })
 }
 
 ///|
@@ -31,6 +40,20 @@ test "adapter capability is rejected before execution when absent" {
       { adapter: "fixture", supported: [Discovery], },
       @adapters.Publish,
     )
+    false
+  } catch {
+    @model.Invalid(diagnostic) => diagnostic.code == "unsupported-capability"
+    _ => false
+  }
+  assert_true(rejected)
+}
+
+///|
+test "built-in adapter registry refuses undeclared ecosystems before operations" {
+  let registry = @adapters.AdapterRegistry::with_builtins()
+  registry.require("cargo", @adapters.Publish)
+  let rejected = try {
+    registry.require("tauri", @adapters.Publish)
     false
   } catch {
     @model.Invalid(diagnostic) => diagnostic.code == "unsupported-capability"
@@ -130,7 +153,7 @@ async fn run_plugin_fixture(
 async test "JSONL plugin process succeeds and rejects malformed, oversized, timed out, and crashed output" {
   assert_eq(
     run_plugin_fixture("success", 30000, 1048576),
-    Some("\"phase5-fixture\""),
+    Some("{\"text\":\"phase5-fixture\",\"metadata\":{\"fixture\":true}}"),
   )
   assert_eq(
     run_plugin_fixture("invalid", 30000, 1048576),

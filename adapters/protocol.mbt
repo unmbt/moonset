@@ -25,6 +25,98 @@ pub(all) struct PluginSpec {
 }
 
 ///|
+/// Host process result; stderr is diagnostic-only and never part of a result.
+pub(all) struct ProcessResult {
+  exit_code : Int32
+  stdout : String
+  stderr : String
+}
+
+///|
+/// Injectable filesystem port used by operational adapters.
+pub(all) struct FileHost {
+  read_text : (String) -> String?
+  write_text : (String, String) -> Unit raise @model.MoonsetError
+  exists : (String) -> Bool
+}
+
+///|
+/// Injectable process port. Implementations must invoke executable/argv directly.
+pub(all) struct ProcessHost {
+  run : (
+    String,
+    Array[String],
+    String?,
+    Map[String, String],
+    String,
+    Int32,
+    Int32,
+  ) -> ProcessResult raise @model.MoonsetError
+}
+
+///|
+/// Injectable registry queries and publication port; credentials remain host-owned.
+pub(all) struct RegistryHost {
+  already_published : (String, String, String) -> Bool raise @model.MoonsetError
+  preflight : (String, String, String) -> Unit raise @model.MoonsetError
+  publish : (String, String, String) -> String raise @model.MoonsetError
+}
+
+///|
+/// Experimental operation ports: v1 contracts may change before v2.
+pub(open) trait DiscoveryPort {
+  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
+}
+
+///|
+pub(open) trait RangePort {
+  fn satisfies(Self, String, String) -> Bool
+  fn rewrite(Self, String, String) -> String raise @model.MoonsetError
+}
+
+///|
+pub(open) trait OwnershipPort {
+  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
+}
+
+///|
+pub(open) trait LockfilePort {
+  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[
+    @model.FileEdit,
+  ] raise @model.MoonsetError
+}
+
+///|
+pub(open) trait ArtifactPort {
+  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
+}
+
+///|
+pub(open) trait PublisherPort {
+  fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
+  fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
+  fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
+}
+
+///|
+/// Combined experimental adapter facade for all executable operations.
+pub(open) trait OperationalAdapter {
+  fn name(Self) -> String
+  fn capabilities(Self) -> Array[Capability]
+  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
+  fn satisfies(Self, String, String) -> Bool
+  fn rewrite_range(Self, String, String) -> String raise @model.MoonsetError
+  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
+  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[
+    @model.FileEdit,
+  ] raise @model.MoonsetError
+  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
+  fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
+  fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
+  fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
+}
+
+///|
 pub fn JsonlRequest::to_json(self : JsonlRequest) -> Json {
   {
     "schemaVersion": self.schema_version,
@@ -77,6 +169,31 @@ pub fn parse_response(value : Json) -> JsonlResponse raise @model.MoonsetError {
     _ =>
       raise @model.Invalid(
         @model.diagnostic("plugin-schema", "Invalid JSONL response"),
+      )
+  }
+}
+
+///|
+/// Extract the required generator text and optional metadata from a response.
+pub fn generator_result(
+  response : JsonlResponse,
+) -> (String, Json) raise @model.MoonsetError {
+  guard response.ok else {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "plugin-request-failed",
+        response.error.unwrap_or("Generator rejected request"),
+      ),
+    )
+  }
+  match response.result {
+    { "text": String(text), "metadata": metadata, .. } => (text, metadata)
+    { "text": String(text), .. } => (text, Json::empty_object())
+    _ =>
+      raise @model.Invalid(
+        @model.diagnostic(
+          "plugin-schema", "Generator result requires result.text",
+        ),
       )
   }
 }
@@ -171,6 +288,40 @@ pub(all) struct CapabilityReport {
 ///|
 pub(all) struct PublisherRegistry {
   plugins : Map[String, PluginSpec]
+}
+
+///|
+/// Built-in operational adapter registrations used by CLI routing.
+pub(all) struct AdapterRegistry {
+  adapters : Map[String, CapabilityReport]
+}
+
+///|
+pub fn AdapterRegistry::with_builtins() -> AdapterRegistry {
+  let adapters : Map[String, CapabilityReport] = Map([])
+  let capabilities = [Discovery, Range, Ownership, Lockfile, Artifact, Publish]
+  for ecosystem in ["moonbit", "npm", "cargo"] {
+    adapters[ecosystem] = { adapter: ecosystem, supported: capabilities, }
+  }
+  { adapters, }
+}
+
+///|
+pub fn AdapterRegistry::require(
+  self : AdapterRegistry,
+  ecosystem : String,
+  capability : Capability,
+) -> Unit raise @model.MoonsetError {
+  match self.adapters.get(ecosystem) {
+    Some(report) => require_capability(report, capability)
+    None =>
+      raise @model.Invalid(
+        @model.diagnostic(
+          "unsupported-capability",
+          "No adapter is registered for ecosystem: " + ecosystem,
+        ),
+      )
+  }
 }
 
 ///|

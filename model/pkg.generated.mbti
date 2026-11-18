@@ -72,6 +72,8 @@ pub(all) struct ChangelogEntry {
   section : String
   text : String
   path : String
+  generator : String
+  metadata : @json.Json
 }
 pub fn ChangelogEntry::to_json(Self) -> @json.Json
 
@@ -114,6 +116,7 @@ pub(all) struct Config {
   mixed_workspaces : Array[MixedWorkspaceSpec]
   bridges : Array[Bridge]
   unit_overrides : Map[String, UnitOverride]
+  generators : Map[String, GeneratorPluginConfig]
   raw : @json.Json
 }
 pub fn Config::default() -> Self
@@ -125,6 +128,7 @@ pub(all) struct DependencyEdge {
   path : String
   start : Int32
   end : Int32
+  target_condition : String?
 }
 
 pub(all) struct DependencyIntent {
@@ -141,6 +145,9 @@ pub(all) struct DependencyIntent {
 pub(all) enum DependencyKind {
   Runtime
   Build
+  Development
+  Optional
+  Peer
 }
 pub fn DependencyKind::equal(Self, Self) -> Bool
 pub fn DependencyKind::not_equal(Self, Self) -> Bool
@@ -175,6 +182,15 @@ pub(all) struct FileEdit {
   atomic_write : Bool
 }
 pub fn FileEdit::to_json(Self) -> @json.Json
+
+pub(all) struct GeneratorPluginConfig {
+  program : String
+  args : Array[String]
+  allowed_programs : Array[String]
+  environment : Array[String]
+  timeout_ms : Int32
+  max_output_bytes : Int32
+}
 
 pub(all) struct MixedWorkspaceSpec {
   id : String
@@ -299,6 +315,8 @@ pub(all) struct ReleaseUnit {
   workspace_id : String
   root : String
   manifest : String
+  version_path : String
+  version_field : String
   version : String?
   visibility : String
   publish : Bool

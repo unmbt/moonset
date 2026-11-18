@@ -25,6 +25,51 @@ pub(all) struct ChangelogContext {
 }
 
 ///|
+/// JSON representation used by the versioned external generator protocol.
+pub fn ChangelogContext::to_json(self : ChangelogContext) -> Json {
+  let lines : Array[Json] = self.lines.map(line => {
+    let commit : Json = match line.commit {
+      Some(value) => Json::string(value)
+      None => Json::null()
+    }
+    let pull_request : Json = match line.pull_request {
+      Some(value) => Json::string(value)
+      None => Json::null()
+    }
+    let author : Json = match line.author {
+      Some(value) => Json::string(value)
+      None => Json::null()
+    }
+    let row : Json = {
+      "changesetId": line.changeset_id,
+      "summary": line.summary,
+      "unitId": line.unit_id,
+      "bump": line.bump.text(),
+      "oldVersion": line.old_version,
+      "newVersion": line.new_version,
+      "commit": commit,
+      "pullRequest": pull_request,
+      "author": author,
+    }
+    row
+  })
+  let repository : Json = match self.repository {
+    Some(value) => Json::string(value)
+    None => Json::null()
+  }
+  {
+    "unitId": self.unit_id,
+    "version": self.version,
+    "date": self.date,
+    "lines": lines,
+    "dependencyLines": self.dependency_lines,
+    "existing": self.existing,
+    "repository": repository,
+    "thanks": self.thanks,
+  }
+}
+
+///|
 /// Compile-time extension contract. Implementations must remain pure.
 pub(open) trait ChangelogGenerator {
   fn name(Self) -> String

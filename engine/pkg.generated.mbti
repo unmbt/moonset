@@ -14,6 +14,8 @@ pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.V
 
 pub fn canonical_id(String) -> String
 
+pub fn changelog_contexts(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String) -> Array[@changelog.ChangelogContext]
+
 pub fn format_changeset(@model.ChangesetDraft) -> String raise @model.MoonsetError
 
 pub fn matches_pattern(String, String) -> Bool

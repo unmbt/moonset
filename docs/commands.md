@@ -172,3 +172,4 @@ without overwriting existing files. `moonset add --package moonbit:org/name
 `--json` for machine readable output. `moonset pre enter|exit|status` manages
 the Moonset `active`/`exit` pre-release state.
 
+`pack` and `publish` route through the selected ecosystem adapter. npm and pnpm use their workspace manager, while Cargo stages the root `Cargo.lock`, packages `.crate` archives, and keeps credentials in Cargo's native configuration.
