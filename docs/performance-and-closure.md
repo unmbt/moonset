@@ -82,3 +82,18 @@
 | `moonset status --output json`（100 包 / 1000 changesets） | 3 次中位数 | `411 ms`（样本 `[395, 411, 421]` ms） | p50 `< 5 s` |
 | `moonset status --since main --output json`（同规模） | 3 次中位数 | `1494 ms`（样本 `[1487, 1494, 1499]` ms） | p50 `< 5 s` |
 | `moonset status --since main --output markdown`（同规模） | 3 次中位数 | `1495 ms`（样本 `[1493, 1495, 1502]` ms） | p50 `< 5 s` |
+
+---
+
+## 3. `0.1.0` 正式发版前收口（2026-11-19）
+
+在进入 `0.1.0` 正式发版阶段前，围绕 Mooncakes 干净发布、CLI 版本单一事实源、普通用户安装体验与自举发布流完成了最后一批收口：
+
+| 事项 | 原问题 | 修复与设计决策 | 位置 |
+|---|---|---|---|
+| 干净包发布传递依赖报错 | `mizchi/tui@0.10.2` 默认解析到旧格式 `mizchi/css@0.2.0`（含已废弃 `moon.mod.json`），导致 `moon publish --dry-run` 解压校验失败并依赖本地 Python 迁移脚本 | 在 [moon.mod](../moon.mod) 显式锁定新格式兼容传递依赖（`mizchi/css@0.7.4`、`moonbitlang/async@0.22.5` 等），删除临时迁移脚本与 CI 重试循环 | [moon.mod](../moon.mod)、[.github/workflows/ci.yml](../.github/workflows/ci.yml) |
+| CLI 版本号硬编码与缺少 `-V` | [cli/run.mbt](../cli/run.mbt) 硬编码 `"moonset 0.1.0-alpha.1"` 且未支持 `-V` | 通过 [cli/moon.pkg](../cli/moon.pkg) 的 `:embed` + `dev_build` 规则将 [moon.mod](../moon.mod) 编译期嵌入 [cli/embedded_version.mbt](../cli/embedded_version.mbt)，由 `@manifest.parse` 读取统一版本并支持 `-V`/`--version` | [cli/moon.pkg](../cli/moon.pkg)、[cli/arguments.mbt](../cli/arguments.mbt)、[cli/run.mbt](../cli/run.mbt) |
+| Mooncakes 已发布幂等查询与发布后 `tag` 冲突 | `moonbit` 生态 `registry_lookup` 固定返回 `"absent"`；`publish` 写入的 `.moonset/publish-state.json` 会使紧随其后的 `tag` 判定工作树脏 | 接入 `moon view <name>@<version> --json` 预检及 `409 Conflict` 识别；在 [executor/host.mbt](../executor/host.mbt) 过滤 `.moonset/publish-state.json` / `pack-results.json` / `version-journal.json` 并补充 `.gitignore` | [executor/publish.mbt](../executor/publish.mbt)、[executor/tag.mbt](../executor/tag.mbt)、[.gitignore](../.gitignore) |
+| 普通用户安装方式与 CI Action 解耦 | 仅有依赖 `gh` 与 `$RUNNER_TOOL_CACHE` 的 [setup/install.sh](../setup/install.sh)，缺少普通开发者安装脚本 | 参考 [moon-bump](https://github.com/unmbt/moon-bump) 新增零 `gh` 依赖的 [scripts/install.sh](../scripts/install.sh) 与 [scripts/install.ps1](../scripts/install.ps1)（安装至 `~/.unmbt` 并校验 `SHA256SUMS`），保持 `setup/install.sh` 专供 GitHub Actions | [scripts/install.sh](../scripts/install.sh)、[scripts/install.ps1](../scripts/install.ps1)、[README.mbt.md](../README.mbt.md) |
+| 自举 `0.1.0` 发布与凭证挂载 | 缺少根 `.changeset/config.json`，且根 `action.yml` 未挂载 `~/.moon/credentials.json`，`GITHUB_TOKEN` 打 tag 不自动触发二进制工作流 | 补齐 `.changeset/config.json` 与 Phase 6 changeset；为 `action.yml` 增加 `mooncakes-credentials` 输入；将 `.github/workflows/moonset-release.yml` 升级为 `version-pr -> publish -> release-binaries`（`workflow_call`）自举流水线 | [.changeset/config.json](../.changeset/config.json)、[action.yml](../action.yml)、[.github/workflows/moonset-release.yml](../.github/workflows/moonset-release.yml) |
+| 文档残留本地磁盘路径 | [docs/references.md](references.md) 残留本地文件路径与外部相对链接 | 全部替换为 GitHub 上游仓库 URL | [docs/references.md](references.md) |

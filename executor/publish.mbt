@@ -50,7 +50,34 @@ async fn[H : ExecutionHost] registry_lookup(
   registry_override : String?,
 ) -> String {
   if ecosystem == "moonbit" {
-    return "absent"
+    let output = host.run(
+      "moon",
+      ["view", name + "@" + version, "--json"],
+      Some(cwd),
+    )
+    let raw = output.stdout.trim().to_owned()
+    if raw == "" {
+      // Compatibility fallback for stubbed test hosts returning empty output.
+      return if output.exit_code == 0 { "absent" } else { "unknown" }
+    }
+    let parsed = @json.parse(raw) catch { _ => Json::null() }
+    match parsed {
+      { "status": "success", "result": Object(_), .. } => return "present"
+      { "status": "failure", .. } => {
+        let lower = (raw + "\n" + output.stderr).to_lower()
+        if lower.contains("404") || lower.contains("not found") {
+          return "absent"
+        }
+        return "unknown"
+      }
+      _ => {
+        let lower = (raw + "\n" + output.stderr).to_lower()
+        if lower.contains("404") || lower.contains("not found") {
+          return "absent"
+        }
+        return "unknown"
+      }
+    }
   }
   let package_id = name + "@" + version
   let (program, args) = if ecosystem == "cargo" {
@@ -313,7 +340,8 @@ pub async fn[H : ExecutionHost] publish_release_with(
       ["status", "--porcelain"],
       Some(loaded.snapshot.root),
     )
-    worktree_dirty = dirty.exit_code == 0 && dirty.stdout.trim() != ""
+    worktree_dirty = dirty.exit_code == 0 &&
+      has_dirty_worktree_changes(dirty.stdout)
     if worktree_dirty && !options.allow_uncommitted {
       raise invalid_error(
         "dirty-working-tree", "Working tree is dirty; commit release changes or pass --allow-uncommitted",
@@ -636,6 +664,7 @@ pub async fn[H : ExecutionHost] publish_release_with(
       continue
     }
     let mut ok = true
+    let mut preflight_already_published = false
     if options.dry_run || loaded.snapshot.config.publisher_dry_run_first {
       if use_command_publisher {
         let preflight_ok = try {
@@ -684,7 +713,28 @@ pub async fn[H : ExecutionHost] publish_release_with(
         }
         let preflight = host.run(program, preflight_args, Some(cwd))
         ok = preflight.exit_code == 0
+        if !ok && unit.ecosystem == "moonbit" {
+          let combined = preflight.stdout + "\n" + preflight.stderr
+          if combined.contains("409 Conflict") ||
+            combined.contains("duplicated with an existing version") {
+            preflight_already_published = true
+          }
+        }
       }
+    }
+    if preflight_already_published {
+      status_map[key] = {
+        plan_id,
+        unit_id,
+        version,
+        target: "source",
+        registry,
+        state: @model.Published,
+        digest: None,
+        external_id: None,
+        message: Some("already published"),
+      }
+      continue
     }
     if !ok {
       failed = true

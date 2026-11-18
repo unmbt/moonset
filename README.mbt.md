@@ -36,10 +36,46 @@ A refined versioning & changelog companion for MoonBit workspaces
 > **当前状态：Phase 1～5 核心能力与混合 workspace 已实现，PR Bot Action 已纳入主干。**
 > 已实现 `init`、`add`、`pre`、`status`（human/json/markdown）、`publish-plan`、`version`、`pack`、`publish`、`tag`、`doctor` 与 `unmbt/moonset/api` 扩展生态；Cargo 支持限定为 `crates.io`，其他 Cargo registry 与 Tauri 同步保持 Deferred。详见 [需求规格](docs/requirements.md) 与 [自动化设计](docs/automation.md)。
 
+### 安装指南
+
+推荐使用 MoonBit 包管理器安装：
+
+```bash
+moon install unmbt/moonset/cmd/moonset
+moonset -V
+```
+
+`moon install` 会将可执行文件安装到 `~/.moon/bin`，请确保该目录已加入 `PATH`。
+
+#### 预编译二进制（普通用户）
+
+如果不希望从源码构建，可使用对应系统的安装脚本下载最新的 GitHub Release（自动校验 `SHA256SUMS`）：
+
+##### Linux & macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.sh | bash
+```
+
+##### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 | iex
+```
+
+> **注意**：预编译二进制安装脚本会将文件安装到 `~/.unmbt`（与同组织工具 [moon-bump](https://github.com/unmbt/moon-bump) 共享目录），并自动将其加入 `PATH`。安装完成后可能需要重启终端；CI 环境请直接使用 `unmbt/moonset/setup@v1` Action。
+
+#### 工具选型：与 `moon-bump` 的分工
+
+- **[moon-bump](https://github.com/unmbt/moon-bump)**：适合单包或紧凑型 workspace 的**本地交互式一键发版**（修改 `moon.mod`、提交、打 tag、推送）。
+- **moonset**：适合**PR 协作与多包 / 混合生态（MoonBit + npm/pnpm + Cargo）发版治理**，通过 `.changeset/*.md` 记录变更意图、生成发布计划与 `CHANGELOG.md`，并配合模块化 GitHub Actions 自动化检查与发布。
+
+快速试跑：
+
 ```sh
-moon run cmd/moonset -- status --json
-moon run cmd/moonset -- publish-plan --pretty
-moon run cmd/moonset -- status --since main --json
+moonset status --json
+moonset publish-plan --pretty
+moonset status --since main --json
 ```
 
 `publish-plan` 输出不可执行的分析计划；不会改版本或发布。`--since` 使用已提交的 HEAD 快照，空 changeset 可以放行 PR 检查。
@@ -225,6 +261,40 @@ Crafted for the MoonBit ecosystem, it understands `moon.mod` and workspaces, res
 > [!NOTE]
 > **Current status: Phases 1–5 core & mixed workspaces implemented; PR Bot GitHub Actions integrated.**
 > `init`, `add`, `pre`, `status` (human/json/markdown), `publish-plan`, `version`, `pack`, `publish`, `tag`, `doctor`, and `unmbt/moonset/api` are implemented. Cargo support is limited to `crates.io`, and Tauri/other registries remain deferred. See [Requirements](docs/requirements.md) and [Automation](docs/automation.md).
+
+### Installation
+
+The recommended installation method is the MoonBit package manager:
+
+```bash
+moon install unmbt/moonset/cmd/moonset
+moonset -V
+```
+
+`moon install` places the executable in `~/.moon/bin`. Make sure that directory is included in your `PATH`.
+
+#### Pre-compiled Binary
+
+If you prefer not to build from source, use the installation script for your OS to download and SHA-256 verify the latest GitHub Release:
+
+##### Linux & macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.sh | bash
+```
+
+##### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 | iex
+```
+
+> **Note**: The user install scripts place `moonset` into `~/.unmbt` (alongside [moon-bump](https://github.com/unmbt/moon-bump)) and add it to your `PATH`. Restart your terminal if needed. For CI workflows, use the dedicated `unmbt/moonset/setup@v1` GitHub Action instead.
+
+#### Choosing between `moonset` and `moon-bump`
+
+- **[moon-bump](https://github.com/unmbt/moon-bump)**: streamlined interactive version bumping for single modules or lockstep MoonBit workspaces.
+- **moonset**: PR-centric changeset workflow, release planning, changelog generation, and multi-ecosystem (`MoonBit` + `npm/pnpm` + `Cargo`) automation with modular GitHub Actions.
 
 ### Philosophy
 

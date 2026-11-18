@@ -115,15 +115,15 @@ moonset/
   - 输入：`comment`（必填）、`state`（必填）、`should-comment`（默认 `'true'`）、`pr-number`（默认事件 PR 编号）、`github-token`（默认 `github.token`）、`bot-login`（默认 `'github-actions[bot]'`）、`label`（默认 `''`）、`fail-on-missing`（默认 `'false'`）。
   - 输出：`comment-id`、`action`（`created|updated|skipped`）。
 - **根 `action.yml`**：
-  - 输入：`mode`（`version-pr` | `publish`，默认 `version-pr`）、`version`、`binary-path`、`working-directory`、`branch`（默认 `moonset-release/<base>`）、`title`（默认 `chore: release packages`）、`commit-message`（默认 `chore: release`）、`github-token`。
+  - 输入：`mode`（`version-pr` | `publish`，默认 `version-pr`）、`version`、`binary-path`、`working-directory`、`branch`（默认 `moonset-release/<base>`）、`title`（默认 `chore: release packages`）、`commit-message`（默认 `chore: release`）、`github-token`、`mooncakes-credentials`（可选，在 `publish` 模式下以 `0600` 权限写入 `~/.moon/credentials.json`）。
   - 输出：`has-changesets`、`pull-request-number`、`published`、`tags`。
 
 ### 预编译二进制分发（OPS-001）
 
-- 由 `.github/workflows/release-binaries.yml` 在推送 `v*` tag（或 `workflow_dispatch`）时构建并随 GitHub Release 产出：
+- 由 `.github/workflows/release-binaries.yml` 在推送 `v*` tag、`workflow_dispatch` 或由自举发布流 `workflow_call` 调用时构建并随 GitHub Release 产出：
   - `moonset-linux-x64`（基于 `ubuntu-22.04` 构建，兼容 glibc 2.35+）
   - `moonset-linux-arm64`（基于 `ubuntu-22.04-arm` 构建）
   - `moonset-darwin-arm64`（基于 `macos-15` 构建）
   - `moonset-win32-x64.exe`（基于 `windows-latest` 构建）
   - `SHA256SUMS`（覆盖上述全部资产的 SHA-256 校验文件）
-- `setup` 下载二进制前必须同时下载 `SHA256SUMS` 并校验通过后才将其加入 `GITHUB_PATH`；Action major tag（如 `v1`）与对应 release 版本保持对齐。
+- CI Runner 由 `setup` Action（`setup/install.sh`）下载并校验 `SHA256SUMS` 后注入 `GITHUB_PATH`；普通开发者终端安装请使用 `scripts/install.sh`（Linux/macOS）或 `scripts/install.ps1`（Windows PowerShell），两者均安装到 `~/.unmbt` 并强制执行 `SHA256SUMS` 校验。Action major tag（如 `v1`）与对应 release 版本保持对齐。

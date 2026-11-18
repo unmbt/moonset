@@ -33,6 +33,10 @@ inputs:
     description: GitHub token for pushing release branch and managing PR
     required: false
     default: ${{ github.token }}
+  mooncakes-credentials:
+    description: Optional JSON contents for ~/.moon/credentials.json when publishing MoonBit packages
+    required: false
+    default: ''
 outputs:
   has-changesets:
     description: Whether pending changesets were found (version-pr mode)
@@ -71,6 +75,7 @@ runs:
         PR_TITLE: ${{ inputs.title }}
         COMMIT_MSG: ${{ inputs.commit-message }}
         GH_TOKEN: ${{ inputs.github-token }}
+        MOONCAKES_CREDENTIALS: ${{ inputs.mooncakes-credentials }}
         REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
@@ -90,6 +95,10 @@ runs:
 
           "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --json > "$tmp_dir/plan.json"
           "$MOONSET_BIN" --cwd "$WORK_DIR" version --no-commit --json > "$tmp_dir/applied.json"
+
+          if [ -f "$WORK_DIR/moon.mod" ] && command -v moon >/dev/null 2>&1; then
+            moon -C "$WORK_DIR" check || true
+          fi
 
           branch="${INPUT_BRANCH:-moonset-release/${BASE_REF}}"
           git config user.name "github-actions[bot]"
@@ -151,9 +160,7 @@ runs:
             if ! printf '%s\n' "$remote_tags" | grep -Fq "refs/tags/${t}"; then
               needs_publish="true"
             fi
-          done <<EOF
-$planned_tags
-EOF
+          done <<< "$planned_tags"
 
           if [ "$needs_publish" = "false" ]; then
             echo "All planned tags already exist on origin; skipping duplicate publish."
@@ -162,6 +169,12 @@ EOF
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "tags=$tags_summary" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          if [ -n "${MOONCAKES_CREDENTIALS:-}" ]; then
+            install -d -m 700 "${HOME}/.moon"
+            printf '%s' "${MOONCAKES_CREDENTIALS}" > "${HOME}/.moon/credentials.json"
+            chmod 600 "${HOME}/.moon/credentials.json"
           fi
 
           "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json > "$tmp_dir/publish.json"

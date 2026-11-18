@@ -2,7 +2,7 @@
 
 Phase 4 提供 `pack`、`publish`、`tag` 以及此前的 changeset、版本和状态命令。
 
-命令先解析配置所属 release domain，再发现其中的生态 workspace；可用全局 `--cwd` 定位，`--config` 显式选择分区。默认输出面向人类，`--output json` 或命令专属 `--json` 输出版本化 JSON。所有命令支持 `--help`、`--version`、`--quiet`，写操作支持 `--dry-run`（如果有意义）。混合模式契约见 [混合 workspace 设计](mixed-workspaces.md)，目前尚未实现。
+命令先解析配置所属 release domain，再发现其中的生态 workspace；可用全局 `--cwd` 定位，`--config` 显式选择分区。默认输出面向人类，`--output json` 或命令专属 `--json` 输出版本化 JSON。所有命令支持 `-h`/`--help`、`-V`/`--version`、`--quiet`，写操作支持 `--dry-run`（如果有意义）。混合模式契约见 [混合 workspace 设计](mixed-workspaces.md)。
 
 ## 命令总览
 
@@ -162,6 +162,8 @@ moonset tag [--dry-run] [--push] [--force] [--format template]
 - `--no-color`、`--quiet`：只影响人类输出。
 - `--yes`：跳过确认；CI 中必须显式提供。
 - `--json` 是 `--output json` 的别名。
+- `-h`、`--help`：打印命令帮助信息。
+- `-V`、`--version`：打印与 `moon.mod` 一致的 CLI 版本号。
 
 错误输出包含稳定 `code`、短消息、建议和可选 `path`/`line`/`column`。脚本不应依赖 message 文本。在 `--json` 模式下：`status` 报错保持兼容 `status` 结构（包含 `ok: false` 与 `errors` 数组）；其余命令统一返回简洁错误信封 `{"schemaVersion":1,"ok":false,"command":"<cmd>","errors":[...]}`。退出码遵循 `1`（策略/确认拦截，如 `missing-changeset`、`confirmation-required`、`dirty-working-tree`、`incomplete-selection`）、`2`（配置/changeset/参数/workspace 无效）、`3`（外部工具/Git/网络失败）。
 

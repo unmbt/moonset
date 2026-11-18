@@ -232,7 +232,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     i += 1
     match arg {
       "--help" | "-h" => command = "help"
-      "--version" => command = "version-info"
+      "--version" | "-V" => command = "version-info"
       "--json" => json = true
       "--pretty" => pretty = true
       "--quiet" | "-q" => quiet = true

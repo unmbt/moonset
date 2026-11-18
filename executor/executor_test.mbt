@@ -430,7 +430,11 @@ async test "create_tags skips existing HEAD tags, detects duplicates, and works 
       return { exit_code: 0, stdout: "new-release-commit-sha\n", stderr: "", }
     }
     if args == ["status", "--porcelain"] {
-      return { exit_code: 0, stdout: "", stderr: "", }
+      return {
+        exit_code: 0,
+        stdout: "?? .moonset/publish-state.json\n?? .moonset/pack-results.json\n",
+        stderr: "",
+      }
     }
     if args == ["rev-parse", "--verify", "refs/tags/v0.1.1"] {
       return { exit_code: 0, stdout: "new-release-commit-sha\n", stderr: "", }
@@ -539,4 +543,102 @@ async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix repairs
   )
   assert_true(did_commit)
   assert_true(git_cmds.any(a => a == ["commit", "-m", "chore: add changeset"]))
+}
+
+///|
+async test "publish uses moon view --json to skip already-published moonbit units and proceed on 404" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "plan-mb-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/a",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let loaded = sample_loaded(units=[
+    {
+      id: "moonbit:acme/a",
+      native_name: "acme/a",
+      ecosystem: "moonbit",
+      workspace_id: "main",
+      root: "a",
+      manifest: "a/moon.mod",
+      version_path: "a/moon.mod",
+      version_field: "version",
+      version: Some("0.1.1"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+  ])
+  let mut publish_called = false
+  host.runner = (program, args, _cwd) => {
+    if program == "moon" && args == ["view", "acme/a@0.1.1", "--json"] {
+      return {
+        exit_code: 0,
+        stdout: "{\"version\":1,\"status\":\"success\",\"result\":{\"module\":\"acme/a\",\"version\":\"0.1.1\"},\"messages\":[]}",
+        stderr: "",
+      }
+    }
+    if program == "moon" && args.contains("publish") {
+      publish_called = true
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let skipped = @executor.publish_release_with(host, loaded, {
+    dry_run: false,
+    only: [],
+    registry: None,
+    tag: None,
+    yes: true,
+    allow_uncommitted: false,
+    retry: 0,
+    no_tag: true,
+  })
+  assert_true(skipped.complete)
+  assert_true(!publish_called)
+  assert_eq(skipped.statuses[0].state, @model.Published)
+  assert_eq(skipped.statuses[0].message, Some("already published"))
+
+  // 404 from moon view means absent -> proceeds with publish
+  host.files.remove("/repo/.moonset/publish-state.json") |> ignore
+  host.runner = (program, args, _cwd) => {
+    if program == "moon" && args == ["view", "acme/a@0.1.1", "--json"] {
+      return {
+        exit_code: 0,
+        stdout: "{\"version\":1,\"status\":\"failure\",\"result\":null,\"messages\":[{\"level\":\"error\",\"message\":\"HTTP status client error (404 Not Found)\"}]}",
+        stderr: "",
+      }
+    }
+    if program == "moon" && args == ["publish"] {
+      publish_called = true
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let published = @executor.publish_release_with(host, loaded, {
+    dry_run: false,
+    only: [],
+    registry: None,
+    tag: None,
+    yes: true,
+    allow_uncommitted: false,
+    retry: 0,
+    no_tag: true,
+  })
+  assert_true(published.complete)
+  assert_true(publish_called)
+  assert_eq(published.statuses[0].state, @model.Published)
 }

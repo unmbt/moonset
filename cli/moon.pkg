@@ -1,5 +1,6 @@
 import {
   "moonbitlang/core/json",
+  "unmbt/moon-manifest" @manifest,
   "unmbt/moonset/model",
   "unmbt/moonset/engine",
   "unmbt/moonset/workspace",
@@ -24,4 +25,15 @@ options(
     "moonbitlang/core/async/fs",
     "moonbitlang/core/async/stdio",
   ],
+)
+
+rule(
+  name: "embed_moon_mod",
+  command: ":embed -i $input -o $output --name embedded_moon_mod --text",
+)
+
+dev_build(
+  rule: "embed_moon_mod",
+  input: "../moon.mod",
+  output: "embedded_version.mbt",
 )

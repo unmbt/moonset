@@ -74,7 +74,9 @@ async fn[H : ExecutionHost] apply_doctor_fixes(
   let state_ignore = absolute_path(cwd, ".moonset/.gitignore")
   if !host.exists(state_ignore) {
     host.mkdir(parent_dir(state_ignore))
-    host.write_text(state_ignore, "version-journal.json\n")
+    host.write_text(
+      state_ignore, "version-journal.json\npublish-state.json\npack-results.json\n",
+    )
     fixed.push(state_ignore)
   }
   fixed
@@ -177,7 +179,8 @@ pub async fn[H : ExecutionHost] run_doctor_with(
       ) catch {
         _ => { exit_code: 1, stdout: "", stderr: "", }
       }
-      let is_clean = dirty.exit_code == 0 && dirty.stdout.trim() == ""
+      let is_clean = dirty.exit_code == 0 &&
+        !has_dirty_worktree_changes(dirty.stdout)
       checks.push({
         name: "git-worktree",
         ok: dirty.exit_code == 0 && is_clean,

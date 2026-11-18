@@ -6,7 +6,7 @@
 
 ## 阅读顺序
 
-当前可执行边界先阅读 [Phase 1 契约](phase-1-contract.md)。后续命令、适配器、执行模型仍是设计契约，不能仅凭 schema 接受某字段就认为能力已实现。
+核心契约与可执行能力已覆盖 Phase 1～5 与模块化 PR Bot GitHub Actions；混合生态已支持 MoonBit、npm/pnpm 与 Cargo（`crates.io`），详见 [Phase 1 契约](phase-1-contract.md) 与 [混合 workspace 设计](mixed-workspaces.md)。
 
 1. [需求规格](requirements.md)：为什么做、做什么、不做什么，以及可验收条件。
 2. [命令契约](commands.md)：CLI 的参数、输出、退出码和副作用。
@@ -34,7 +34,7 @@
 - 文档示例中的 MoonBit API 必须用当前工具链验证；本版本基线见 [参考实现评估](references.md)。
 - 实现一个阶段前，维护 `requirements.md` 的状态；实现后补上验证命令和测试编号。
 - 本地开发提交前必须使用与 CI 相同的严格检查：`moon check --target native --deny-warn`；同时运行受影响的 `moon test --target native --deny-warn`（若工具链不支持 test 的该参数，则至少执行前一条 check）。普通不带 `--deny-warn` 的检查不能作为 CI 通过依据。
-- 本地依赖验证前先执行 `moon update` 和 `python scripts/migrate-registry-manifests.py`，迁移 `.mooncakes` 内惰性下载的旧 `moon.mod.json` 清单以及工具链不兼容的第三方 `Float` 标识符；严格检查若又拉取旧格式包，重复迁移后再检查。脚本只改本机缓存，不提交缓存文件。
+- 本地依赖验证前执行 `moon update`，依赖版本已于 [moon.mod](../moon.mod) 显式锁定并通过干净 `moon publish --dry-run` 校验。
 
 ## 状态标记
 

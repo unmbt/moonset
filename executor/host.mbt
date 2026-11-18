@@ -252,3 +252,33 @@ pub fn bytes_fingerprint(bytes : Bytes) -> String {
   }
   "fnv1a64:" + hash.to_string(radix=16)
 }
+
+///|
+fn is_ephemeral_moonset_state_path(path : String) -> Bool {
+  let normalized = path.replace_all(old="\\", new="/").trim().to_owned()
+  let unquoted = if normalized.has_prefix("\"") &&
+    normalized.has_suffix("\"") &&
+    normalized.length() >= 2 {
+    normalized[1:normalized.length() - 1].to_owned()
+  } else {
+    normalized
+  }
+  unquoted == ".moonset/publish-state.json" ||
+  unquoted == ".moonset/pack-results.json" ||
+  unquoted == ".moonset/version-journal.json"
+}
+
+///|
+fn has_dirty_worktree_changes(porcelain : String) -> Bool {
+  for raw_line in porcelain.replace_all(old="\r\n", new="\n").split("\n") {
+    let line = raw_line.to_owned()
+    if line.trim() == "" {
+      continue
+    }
+    let path = if line.length() > 3 { line[3:].to_owned() } else { line }
+    if !is_ephemeral_moonset_state_path(path) {
+      return true
+    }
+  }
+  false
+}

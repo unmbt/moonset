@@ -156,7 +156,7 @@ pub async fn[H : ExecutionHost] create_tags_with(
     ["status", "--porcelain"],
     Some(loaded.snapshot.root),
   )
-  if dirty_res.exit_code == 0 && dirty_res.stdout.trim() != "" {
+  if dirty_res.exit_code == 0 && has_dirty_worktree_changes(dirty_res.stdout) {
     raise invalid_error(
       "dirty-working-tree", "Working tree is dirty; commit version changes before tagging",
     )

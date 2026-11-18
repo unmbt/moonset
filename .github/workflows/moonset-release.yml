@@ -1,155 +1,126 @@
-name: moonset release example
+name: Release moonset
 
 on:
+  push:
+    branches:
+      - master
   workflow_dispatch:
-    inputs:
-      moonbit_unit:
-        description: MoonBit UnitId to publish (leave empty to skip)
-        required: false
-        type: string
-      npm_unit:
-        description: npm UnitId to publish (leave empty to skip)
-        required: false
-        type: string
 
-permissions:
-  contents: read
+concurrency:
+  group: moonset-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
 
 jobs:
-  release-plan:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: hustcer/setup-moonbit@v1
-        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
-      - run: moon update
-      - name: Prefetch and migrate registry manifests
-        shell: bash
-        run: |
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python scripts/migrate-registry-manifests.py
-          done
-      - run: moon build --target native --release
-      # A release commit must already contain the reviewed version state.
-      - run: test -f .moonset/release-state.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe pack --dry-run --json > publish-plan.json
-      - uses: actions/upload-artifact@v4
-        with: { name: moonset-release-plan, path: publish-plan.json }
-
-  publish-mooncakes:
-    needs: release-plan
-    if: github.event_name == 'workflow_dispatch' && inputs.moonbit_unit != ''
-    runs-on: ubuntu-latest
-    concurrency:
-      group: moonset-publish
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    env:
-      MOONSET_UNIT: ${{ inputs.moonbit_unit }}
-      MOONCAKES_TOKEN: ${{ secrets.MOONCAKES_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: hustcer/setup-moonbit@v1
-        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
-      - run: moon update
-      - name: Prefetch and migrate registry manifests
-        shell: bash
-        run: |
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python scripts/migrate-registry-manifests.py
-          done
-      - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --yes --no-tag --json > mooncakes-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --yes --no-tag --json > mooncakes-status.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: mooncakes-publish-status, path: mooncakes-status.json, if-no-files-found: ignore }
-
-  publish-npm:
-    needs: release-plan
-    if: github.event_name == 'workflow_dispatch' && inputs.npm_unit != ''
-    runs-on: ubuntu-latest
-    concurrency:
-      group: moonset-publish
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    env:
-      MOONSET_UNIT: ${{ inputs.npm_unit }}
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: hustcer/setup-moonbit@v1
-        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
-      - run: moon update
-      - name: Prefetch and migrate registry manifests
-        shell: bash
-        run: |
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python scripts/migrate-registry-manifests.py
-          done
-      - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --yes --no-tag --json > npm-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --yes --no-tag --json > npm-status.json
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: npm-publish-status, path: npm-status.json, if-no-files-found: ignore }
-
-  tag:
-    needs: [release-plan, publish-mooncakes, publish-npm]
-    if: >-
-      always() && github.event_name == 'workflow_dispatch' &&
-      needs.release-plan.result == 'success' &&
-      (inputs.moonbit_unit == '' || needs.publish-mooncakes.result == 'success') &&
-      (inputs.npm_unit == '' || needs.publish-npm.result == 'success') &&
-      (inputs.moonbit_unit != '' || inputs.npm_unit != '')
-    runs-on: ubuntu-latest
+  version-pr:
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
+      pull-requests: write
+    outputs:
+      has-changesets: ${{ steps.release.outputs.has-changesets }}
+      pull-request-number: ${{ steps.release.outputs.pull-request-number }}
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: hustcer/setup-moonbit@v1
-        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
-      - run: moon update
-      - name: Prefetch and migrate registry manifests
-        shell: bash
-        run: |
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python scripts/migrate-registry-manifests.py
-          done
-      - uses: actions/download-artifact@v4
-        with: { pattern: '*-publish-status', merge-multiple: true }
-      - name: Verify every selected target completed before tagging
-        shell: bash
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
         env:
-          MOONBIT_UNIT: ${{ inputs.moonbit_unit }}
-          NPM_UNIT: ${{ inputs.npm_unit }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: moon update
+      - run: moon check --target native --deny-warn
+      - run: moon build --target native --release
+      - name: Stage trusted moonset CLI binary
+        shell: bash
         run: |
           set -euo pipefail
-          for unit in "$MOONBIT_UNIT" "$NPM_UNIT"; do
-            [ -n "$unit" ] || continue
-            if [[ "$unit" == moonbit:* ]]; then file=mooncakes-status.json; else file=npm-status.json; fi
-            jq -e --arg unit "$unit" '.complete == true and any(.statuses[]; .unitId == $unit and .state == "published")' "$file" >/dev/null
-          done
-      - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe tag --push --yes
+          mkdir -p dist
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" dist/moonset-cli
+          chmod +x dist/moonset-cli
+      - id: release
+        uses: ./
+        with:
+          mode: version-pr
+          binary-path: dist/moonset-cli
+
+  publish:
+    needs: version-pr
+    if: needs.version-pr.outputs.has-changesets == 'false'
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: moonset-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+      tags: ${{ steps.release.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check for pending release state
+        id: check-state
+        shell: bash
+        run: |
+          if [ -f .moonset/release-state.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: hustcer/setup-moonbit@v1
+        if: steps.check-state.outputs.present == 'true'
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon update
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon check --target native --deny-warn
+      - if: steps.check-state.outputs.present == 'true'
+        run: moon build --target native --release
+      - name: Stage trusted moonset CLI binary
+        if: steps.check-state.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" dist/moonset-cli
+          chmod +x dist/moonset-cli
+      - id: release
+        if: steps.check-state.outputs.present == 'true'
+        uses: ./
+        with:
+          mode: publish
+          binary-path: dist/moonset-cli
+          mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
+      - name: Upload publish status artifact
+        if: always() && steps.check-state.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonset-publish-state
+          path: .moonset/publish-state.json
+          if-no-files-found: ignore
+
+  release-binaries:
+    needs: publish
+    if: needs.publish.outputs.published == 'true' && needs.publish.outputs.tags != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ needs.publish.outputs.tags }}

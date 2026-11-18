@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "baseBranch": "master",
+  "access": "public",
+  "updateInternalDependencies": "patch",
+  "changelog": {
+    "generator": "github",
+    "options": {
+      "repo": "unmbt/moonset"
+    }
+  },
+  "publisher": {
+    "kind": "moon",
+    "registry": "default",
+    "dryRunFirst": true
+  }
+}

@@ -20,6 +20,12 @@ test "arguments parse pre tag, doctor, publish flags, and tag format without con
   assert_eq(tag_compat.tag_format, "v{version}")
   assert_true(!tag_compat.json)
 
+  let ver_short = arguments(["-V"])
+  assert_eq(ver_short.command, "version-info")
+  let ver_long = arguments(["--version"])
+  assert_eq(ver_long.command, "version-info")
+  assert_true(cli_version() != "" && cli_version() != "0.0.0")
+
   let doc = arguments(["doctor", "--registry", "--output", "json"])
   assert_eq(doc.command, "doctor")
   assert_true(doc.check_registry)

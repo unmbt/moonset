@@ -1,4 +1,14 @@
 ///|
+fn cli_version() -> String {
+  let document = @manifest.parse(
+    @manifest.Kind::Mod,
+    embedded_moon_mod,
+    path="moon.mod",
+  )
+  document.version().unwrap_or("0.0.0")
+}
+
+///|
 async fn stderr(message : String) -> Unit {
   @stdio.stderr.write(@utf8.encode(message + "\n"))
 }
@@ -884,12 +894,12 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "help" {
     println(
-      "moonset Phase 6\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
+      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color -h/--help -V/--version",
     )
     return 0
   }
   if options.command == "version-info" {
-    println("moonset 0.1.0-alpha.1")
+    println("moonset " + cli_version())
     return 0
   }
   if options.command == "init" {

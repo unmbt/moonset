@@ -45,10 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           moon update
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python3 scripts/migrate-registry-manifests.py 2>/dev/null || python scripts/migrate-registry-manifests.py
-          done
+          moon check --target native --deny-warn
           moon build --target native --release
           src="_build/native/release/build/cmd/moonset/moonset.exe"
           if [ ! -f "$src" ]; then

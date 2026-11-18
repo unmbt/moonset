@@ -6,3 +6,5 @@ target
 .moonagent/
 /changesets/
 .moonset/version-journal.json
+.moonset/publish-state.json
+.moonset/pack-results.json

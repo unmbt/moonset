@@ -38,8 +38,6 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    env:
-      MOONCAKES_TOKEN: ${{ secrets.MOONCAKES_TOKEN }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,3 +49,4 @@ jobs:
       - uses: unmbt/moonset@v1
         with:
           mode: publish
+          mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
