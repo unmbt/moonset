@@ -1,6 +1,6 @@
 # 需求规格
 
-> 状态：Draft 0.1；Phase 3 版本计划、内置 changelog、混合 workspace 和 tag 相关条目已进入实现验证。
+> 状态：Phase 1～5 核心能力与混合 workspace 已实现并验证；GitHub Action/App 服务端参考实现、自动跨分区导出与 Tauri/非 crates.io Cargo registry 仍按阶段保持 `Proposed`/`Partial`/`Deferred`。
 
 ### 开发验证约束
 
@@ -47,52 +47,52 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 
 ## 4. 功能需求
 
-| ID | 需求 | 验收条件 | 状态 |
-|---|---|---|---|
-| FR-001 | 初始化 | `init` 创建 `.changeset/`、默认 `config.json` 和 README；重复运行不覆盖用户文件，并给出可机器读取结果。 | Proposed |
-| FR-002 | 记录变更 | `add` 支持交互式和非交互式输入，生成唯一 Markdown changeset；支持 `major/minor/patch/none`，禁止未知包名和空摘要（除非显式 `--empty`）。 | Proposed |
-| FR-003 | 发现 workspace | 按 release domain 发现已授权的 workspace；MoonBit adapter 读取 `moon.work` 成员和单模块项目，输出稳定排序的 ReleaseUnit，区分编译包和发布模块。 | Implemented (MoonBit) |
-| FR-004 | 解析 changeset | 解析平面 YAML front matter 子集和 Markdown 摘要，报告文件路径、行号、包名和版本类型；任何一个文件无效时规划失败且不写盘。 | Implemented |
-| FR-005 | 生成 release plan | 合并 changeset、fixed/linked 组、内部依赖和预发布状态，输出 old/new version、原因和受影响文件；同样输入必须得到同样计划。 | Implemented (analysis) |
-| FR-006 | 查看状态 | `status` 显示待处理 changeset、预计版本、缺失 changeset 和配置错误；支持 `--since`、`--verbose`、`--output json`。 | Implemented |
-| FR-007 | 应用版本 | `version` 原子更新 `moon.mod`、相关依赖范围、各包 `CHANGELOG.md`，消费已应用 changeset，并保留可审阅 diff。 | Proposed |
-| FR-008 | 预发布 | `pre enter <tag>`、`pre exit` 管理 `.changeset/pre.json`；重复进入、错误退出和标签非法时给出明确错误。 | Proposed |
-| FR-009 | 发布 | `publish` 只发布计划中有新版本且允许发布的模块，支持 dry-run、Mooncakes/npm target、逐目标状态和失败续跑；默认不自动执行 `version`。 | Implemented (Phase 4 baseline) |
-| FR-010 | 标签 | `tag` 根据当前版本创建确定性 Git 标签，支持单模块 `vX.Y.Z` 与 workspace `name@X.Y.Z`，支持预览和可选推送。 | Proposed |
-| FR-011 | 打包与计划 | `pack` 调用 MoonBit/npm 打包流程并输出带来源与摘要的 artifact JSON；`publish-plan` 输出不改盘的发布 JSON。 | Implemented (Phase 4 baseline) |
-| FR-012 | 配置 | `.changeset/config.json` 支持版本策略、fixed/linked、ignore、私有包、changelog、tag、publisher、GitHub 和格式化器；未知顶层字段默认报错。 | Proposed |
-| FR-013 | 自定义 changelog | 内置生成器覆盖纯文本、Git、GitHub 三类；MoonBit API 和受限 JSONL 进程协议都能提供自定义 release line。 | Partial (compile-time API and protocol runner; CLI JSONL routing pending) |
-| FR-014 | GitHub Action | 提供 PR 检查、版本 PR/提交、发布和标签四种可组合 job 的参考工作流；权限最小化，并支持 OIDC 或显式令牌。 | Proposed |
-| FR-015 | GitHub App | 定义 webhook、去重、评论和标签策略；机器人默认只读检查和评论，不直接改版本或发布。 | Proposed |
-| FR-016 | 编程 API | 核心模型、解析器、规划器、执行器和适配器接口有稳定的 MoonBit 公共包；I/O 通过注入接口可测试。 | Partial (API v1 facade; adapter execution/conformance incomplete) |
-| FR-017 | 环境诊断 | `doctor` 只读检查 MoonBit、Git、workspace、配置、publisher 和必要权限，输出可修复建议。 | Proposed |
-| FR-018 | 混合 workspace 与所有权 | 同级、嵌套、同目录双清单均可表达；按声明发现 npm/pnpm 与 MoonBit 成员；工具清单、生成目录、嵌套仓库不被默认接管；重复所有权在写入前报错。 | Proposed |
-| FR-019 | 跨生态身份 | 使用生态前缀 UnitId；同名跨生态单元可区分；混合 changeset、选择器、pre 状态和计划使用相同 ID；旧记录迁移提供可审阅映射。 | Proposed |
-| FR-020 | 跨生态依赖与版本组 | 包依赖、build bridge 和 fixed/linked 分开；bridge 提升 consumer 的最低 bump 并进入闭包；环与不完整 `--only` 选择在写入前失败。 | Proposed |
-| FR-021 | 原生清单和锁文件 | adapter 在隔离 staging 使用精确 packageManager 版本校验/更新锁文件；`verify-only` 差异失败，不改写 `workspace:` 协议。 | Implemented (Phase 3 baseline) |
-| FR-022 | 构建产物与多目标发布 | pack/publish 输出 artifact 与逐 target 状态；真实发布先完成全部 preflight，失败续跑跳过已确认目标，不自动撤销成功版本。 | Implemented (Phase 4 baseline) |
-| FR-023 | 与已有工具共存 | Changesets 等工具和 moonset 分区管理，changeset/版本字段/锁文件只有一个写入者；不互相消费记录或静默迁移配置；跨分区关系只读导出。 | Proposed |
-| FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo/Tauri 作为后续适配，不宣称已支持。 | Partial (capability gate; full adapter operation traits pending) |
+| ID | 需求 | 验收条件 | 状态 | 验证证据 |
+|---|---|---|---|---|
+| FR-001 | 初始化 | `init` 创建 `.changeset/`、默认 `config.json` 和 README；重复运行不覆盖用户文件，并给出可机器读取结果。 | Implemented | `scripts/cli-integration.mbtx` (`init --json` / 幂等跳过) |
+| FR-002 | 记录变更 | `add` 支持交互式和非交互式输入，生成唯一 Markdown changeset；支持 `major/minor/patch/none`，禁止未知包名和空摘要（除非显式 `--empty`）。 | Implemented | `cli/cli_wbtest.mbt`、`scripts/cli-integration.mbtx` (`add` 校验与提交) |
+| FR-003 | 发现 workspace | 按 release domain 发现已授权的 workspace；MoonBit adapter 读取 `moon.work` 成员和单模块项目，输出稳定排序的 ReleaseUnit，区分编译包和发布模块。 | Implemented (MoonBit/npm/Cargo) | `workspace/integration_test.mbt`、`workspace/cargo_test.mbt` |
+| FR-004 | 解析 changeset | 解析平面 YAML front matter 子集和 Markdown 摘要，报告文件路径、行号、包名和版本类型；任何一个文件无效时规划失败且不写盘。 | Implemented | `engine/parsing_test.mbt`、`fixtures/invalid-frontmatter/` |
+| FR-005 | 生成 release plan | 合并 changeset、fixed/linked 组、内部依赖和预发布状态，输出 old/new version、原因和受影响文件；同样输入必须得到同样计划。 | Implemented | `engine/planner_test.mbt`、`engine/planner_golden_test.mbt` |
+| FR-006 | 查看状态 | `status` 显示待处理 changeset、预计版本、缺失 changeset 和配置错误；支持 `--since`、`--verbose`、`--output json`。 | Implemented | `scripts/cli-integration.mbtx` (`status --since` / 退出码 `1`) |
+| FR-007 | 应用版本 | `version` 原子更新 `moon.mod`、相关依赖范围、各包 `CHANGELOG.md`，消费已应用 changeset，并保留可审阅 diff。 | Implemented | `engine/version_test.mbt`、`executor/executor_test.mbt` |
+| FR-008 | 预发布 | `pre enter <tag>`、`pre exit` 管理 `.changeset/pre.json`；重复进入、错误退出和标签非法时给出明确错误。 | Implemented | `engine/planner_test.mbt`、`engine/version_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-009 | 发布 | `publish` 只发布计划中有新版本且允许发布的模块，支持 dry-run、Mooncakes/npm/Cargo/command target、逐目标状态和失败续跑；默认不自动执行 `version`。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-010 | 标签 | `tag` 根据当前版本创建确定性 Git 标签，支持单模块 `vX.Y.Z` 与 workspace `name@X.Y.Z`，支持预览和可选推送。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-011 | 打包与计划 | `pack` 调用 MoonBit/npm/Cargo 打包流程并输出带来源与摘要的 artifact JSON；`publish-plan` 输出不改盘的发布 JSON。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-012 | 配置 | `.changeset/config.json` 支持版本策略、fixed/linked、ignore、私有包、changelog、tag、publisher、GitHub 和格式化器；未知顶层字段默认报错。 | Implemented | `engine/parsing_test.mbt`、`scripts/embed-schema.mbtx --check` |
+| FR-013 | 自定义 changelog | 内置生成器覆盖纯文本、Git、GitHub 三类；MoonBit API 和受限 JSONL 进程协议都能提供自定义 release line；支持同目录聚合输出。 | Implemented | `changelog/changelog_test.mbt`、`engine/version_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-014 | GitHub Action | 提供 PR 检查、版本 PR/提交、发布和标签四种可组合 job 的参考工作流；权限最小化，并支持 OIDC 或显式令牌。 | Proposed | 参考工作流 `.github/workflows/moonset-release.yml`（待在线 Action 环境矩阵演练） |
+| FR-015 | GitHub App | 定义 webhook、去重、评论和标签策略；机器人默认只读检查和评论，不直接改版本或发布。 | Proposed | 延后至 Phase 6 |
+| FR-016 | 编程 API | 核心模型、解析器、规划器、执行器和适配器接口有稳定的 MoonBit 公共包；I/O 通过注入接口可测试。 | Implemented (`api`, `executor`, `native` + `wasm-gc` pure core) | `fixtures/external-moonbit-api/`、`moon test --target wasm-gc` |
+| FR-017 | 环境诊断 | `doctor` 只读检查 MoonBit、Git、workspace、配置、publisher 和必要权限，输出可修复建议；支持 `--fix` 可逆补缺。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-018 | 混合 workspace 与所有权 | 同级、嵌套、同目录双清单均可表达；按声明发现 npm/pnpm 与 MoonBit 成员；工具清单、生成目录、嵌套仓库不被默认接管；重复所有权在写入前报错。 | Implemented | `workspace/integration_test.mbt`、`engine/planner_test.mbt` |
+| FR-019 | 跨生态身份 | 使用生态前缀 UnitId；同名跨生态单元可区分；混合 changeset、选择器、pre 状态和计划使用相同 ID；旧记录迁移提供可审阅映射。 | Implemented | `engine/parsing_test.mbt`、`workspace/integration_test.mbt` |
+| FR-020 | 跨生态依赖与版本组 | 包依赖、build bridge 和 fixed/linked 分开；bridge 提升 consumer 的最低 bump 并进入闭包；环与不完整 `--only` 选择在写入前失败。 | Implemented | `engine/planner_test.mbt`、`executor/executor_test.mbt` |
+| FR-021 | 原生清单和锁文件 | adapter 在隔离 staging 使用精确 packageManager 版本校验/更新锁文件；`verify-only` 差异失败，不改写 `workspace:` 协议。 | Implemented | `executor/staging.mbt`、`engine/planner_test.mbt` |
+| FR-022 | 构建产物与多目标发布 | pack/publish 输出 artifact 与逐 target 状态；真实发布先完成全部 preflight，失败续跑跳过已确认目标，不自动撤销成功版本。 | Partial (single-target `source` pack/publish + artifact verification; multi-platform binary target matrix pending) | `executor/executor_test.mbt`、`fixtures/partial-publish/` |
+| FR-023 | 与已有工具共存 | Changesets 等工具和 moonset 分区管理，changeset/版本字段/锁文件只有一个写入者；不互相消费记录或静默迁移配置；跨分区关系只读导出。 | Partial (partitioned discovery; automated coexistence export pending) | `workspace/integration_test.mbt` |
+| FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo crates.io 已接入，其他 Cargo registry/Tauri 保持 Deferred。 | Partial (`executor::ExecutionHost` + `PublisherRegistry` + capability gating; v1 `adapters` traits preserved) | `adapters/protocol_test.mbt`、`executor/executor_test.mbt` |
 
 ## 5. 非功能需求
 
-| ID | 需求 | 验收条件 | 状态 |
-|---|---|---|---|
-| NFR-001 | 跨平台 | Windows、Linux、macOS native 构建；Git 和路径处理不依赖 POSIX shell。 | Proposed |
-| NFR-002 | 确定性 | 相同 Git 树、时间输入和配置产生相同计划；发布时间由 `Clock` 注入，默认使用 UTC。 | Proposed |
-| NFR-003 | 可恢复 | 文件替换、Git 标签和发布步骤有阶段状态；失败结果包含已完成步骤和下一条恢复命令。 | Proposed |
-| NFR-004 | 可观测 | 人类输出可读；`--json` 使用版本化 schema，日志不泄露 token。 | Proposed |
-| NFR-005 | 性能 | 100 个包、1000 个 changeset 的 `status` 和规划在普通开发机上完成；具体预算在基准测试后冻结。 | Proposed |
-| NFR-006 | 兼容性 | 只使用当前 MoonBit 工具链验证过的 API；依赖升级必须记录 ADR 和回归结果。 | Proposed |
+| ID | 需求 | 验收条件 | 状态 | 验证证据 |
+|---|---|---|---|---|
+| NFR-001 | 跨平台 | Windows、Linux、macOS native 构建；Git 和路径处理不依赖 POSIX shell。 | Implemented | `.github/workflows/ci.yml`、`moon test --target native` |
+| NFR-002 | 确定性 | 相同 Git 树、时间输入和配置产生相同计划；发布时间由 `Clock` 注入，默认使用 UTC。 | Implemented | `engine/planner_test.mbt`、`engine/planner_golden_test.mbt` |
+| NFR-003 | 可恢复 | 文件替换、Git 标签和发布步骤有阶段状态；失败结果包含已完成步骤和下一条恢复命令。 | Implemented | `executor/executor_test.mbt` (journal rollback & partial publish retry) |
+| NFR-004 | 可观测 | 人类输出可读；`--json` 使用版本化 schema，日志不泄露 token。 | Implemented | `cli/cli_wbtest.mbt`、`scripts/cli-integration.mbtx` |
+| NFR-005 | 性能 | 100 个包、1000 个 changeset 的 `status` 和规划在普通开发机上完成；具体预算在基准测试后冻结。 | Proposed | 待基准测试 |
+| NFR-006 | 兼容性 | 只使用当前 MoonBit 工具链验证过的 API；依赖升级必须记录 ADR 和回归结果。 | Implemented | `moon check --target native --deny-warn`、`moon check --target wasm-gc` |
 
 ## 6. 安全需求
 
-| ID | 需求 | 验收条件 | 状态 |
-|---|---|---|---|
-| SEC-001 | 命令注入防护 | Git、Moon 和 publisher 命令使用可执行文件加参数数组；插件命令明确显示并可禁用。 | Proposed |
-| SEC-002 | 发布确认 | 真实发布前显示 registry、包、版本、访问级别和标签；CI 必须显式设置非交互模式。 | Proposed |
-| SEC-003 | 最小权限 | GitHub Action/App 文档只申请必须的 contents、pull-requests、issues 权限；发布 token 不进入日志。 | Proposed |
-| SEC-004 | 工作区安全 | 默认拒绝脏工作树、未跟踪 `.changeset` 和发布中间状态；绕过必须是显式 flag 且记录。 | Proposed |
+| ID | 需求 | 验收条件 | 状态 | 验证证据 |
+|---|---|---|---|---|
+| SEC-001 | 命令注入防护 | Git、Moon 和 publisher 命令使用可执行文件加参数数组；插件命令明确显示并可禁用。 | Implemented | `adapters/protocol_test.mbt`、`executor/host.mbt` |
+| SEC-002 | 发布确认 | 真实发布前显示 registry、包、版本、访问级别和标签；CI 必须显式设置非交互模式。 | Implemented | `executor/publish.mbt` (`--yes` 门禁退出码 `1`) |
+| SEC-003 | 最小权限 | GitHub Action/App 文档只申请必须的 contents、pull-requests、issues 权限；发布 token 不进入日志。 | Partial (凭据脱敏与白名单已实现；Action/App 审校待完结) | `adapters/protocol.mbt`、`executor/doctor.mbt` |
+| SEC-004 | 工作区安全 | 默认拒绝脏工作树、未跟踪 `.changeset` 和发布中间状态；绕过必须是显式 flag 且记录。 | Implemented | `executor/publish.mbt`、`executor/tag.mbt` |
 
 ## 7. 退出码契约
 

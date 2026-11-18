@@ -1,0 +1,152 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/executor"
+
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/adapters",
+  "unmbt/moonset/model",
+  "unmbt/moonset/workspace",
+}
+
+// Values
+pub fn absolute_path(String, String) -> String
+
+pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResult
+
+pub async fn[H : ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
+
+pub fn bytes_fingerprint(Bytes) -> String
+
+pub async fn commit_changes(String, Array[String], String) -> Bool
+
+pub async fn[H : ExecutionHost] commit_changes_with(H, String, Array[String], String) -> Bool
+
+pub async fn create_tags(@workspace.LoadedWorkspace, TagOptions) -> TagResult
+
+pub async fn[H : ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, TagOptions) -> TagResult
+
+pub fn error_message(Error) -> String
+
+pub fn manager_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
+
+pub fn native_host() -> NativeHost
+
+pub async fn pack_artifacts(@workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
+
+pub async fn[H : ExecutionHost] pack_artifacts_with(H, @workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
+
+pub fn[H : ExecutionHost] package_manager_program(H, String) -> String
+
+pub fn parent_dir(String) -> String
+
+pub async fn publish_release(@workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
+
+pub async fn[H : ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
+
+pub async fn recover_version(String) -> Array[String]
+
+pub async fn[H : ExecutionHost] recover_version_with(H, String) -> Array[String]
+
+pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> DoctorReport
+
+pub async fn[H : ExecutionHost] run_doctor_with(H, String, config_path? : String, check_registry? : Bool, fix? : Bool) -> DoctorReport
+
+pub async fn stage_lockfiles(String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
+
+pub async fn[H : ExecutionHost] stage_lockfiles_with(H, String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
+
+pub fn utc_date(UInt64) -> String
+
+pub fn workspace_root_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct DoctorCheck {
+  name : String
+  ok : Bool
+  message : String
+  suggestion : String?
+}
+pub fn DoctorCheck::to_json(Self) -> @json.Json
+
+pub(all) struct DoctorReport {
+  ok : Bool
+  checks : Array[DoctorCheck]
+}
+pub fn DoctorReport::to_json(Self) -> @json.Json
+
+pub struct NativeHost {
+}
+pub async fn NativeHost::exists(Self, String) -> Bool
+pub fn NativeHost::getenv(Self, String) -> String?
+pub async fn NativeHost::is_dir(Self, String) -> Bool
+pub async fn NativeHost::mkdir(Self, String) -> Unit
+pub fn NativeHost::now(Self) -> UInt64
+pub async fn NativeHost::read_binary(Self, String) -> Bytes
+pub async fn NativeHost::read_text(Self, String) -> String
+pub async fn NativeHost::readdir(Self, String) -> Array[String]
+pub async fn NativeHost::remove(Self, String) -> Unit
+pub async fn NativeHost::rename(Self, String, String) -> Unit
+pub async fn NativeHost::rmdir(Self, String) -> Unit
+pub async fn NativeHost::run(Self, String, Array[String], String?) -> @adapters.ProcessResult
+pub async fn NativeHost::tmpdir(Self, String) -> String
+pub async fn NativeHost::write_binary(Self, String, Bytes) -> Unit
+pub async fn NativeHost::write_text(Self, String, String) -> Unit
+pub impl ExecutionHost for NativeHost
+
+pub(all) struct PackOptions {
+  dry_run : Bool
+  frozen : Bool
+  packages : Array[String]
+}
+
+pub(all) struct PublishOptions {
+  dry_run : Bool
+  only : Array[String]
+  registry : String?
+  tag : String?
+  yes : Bool
+  allow_uncommitted : Bool
+  retry : Int32
+  no_tag : Bool
+}
+
+pub(all) struct TagOptions {
+  dry_run : Bool
+  push : Bool
+  force : Bool
+  yes : Bool
+  format : String
+}
+
+pub(all) struct TagResult {
+  head : String
+  tags : Array[String]
+  created : Array[String]
+  skipped : Array[String]
+  pushed : Array[String]
+  dry_run : Bool
+}
+pub fn TagResult::to_json(Self) -> @json.Json
+
+// Type aliases
+
+// Traits
+pub(open) trait ExecutionHost {
+  async fn exists(Self, String) -> Bool
+  async fn is_dir(Self, String) -> Bool
+  async fn read_text(Self, String) -> String
+  async fn read_binary(Self, String) -> Bytes
+  async fn write_text(Self, String, String) -> Unit
+  async fn write_binary(Self, String, Bytes) -> Unit
+  async fn readdir(Self, String) -> Array[String]
+  async fn mkdir(Self, String) -> Unit
+  async fn remove(Self, String) -> Unit
+  async fn rename(Self, String, String) -> Unit
+  async fn tmpdir(Self, String) -> String
+  async fn rmdir(Self, String) -> Unit
+  async fn run(Self, String, Array[String], String?) -> @adapters.ProcessResult
+  fn getenv(Self, String) -> String?
+  fn now(Self) -> UInt64
+}

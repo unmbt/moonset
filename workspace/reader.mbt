@@ -103,9 +103,10 @@ async fn Reader::files(self : Reader, directory : String) -> Array[String] {
   let result = []
   match self.git_root {
     Some(root) => {
-      let prefix = relative(root, join(self.root, directory)) + "/"
+      let rel_dir = relative(root, join(self.root, directory))
+      let prefix = if rel_dir == "" { "" } else { rel_dir + "/" }
       for path in self.tree.keys() {
-        if path.has_prefix(prefix) {
+        if prefix == "" || path.has_prefix(prefix) {
           let rest = path[prefix.length():].to_owned()
           if !rest.contains("/") {
             result.push(rest)
@@ -118,6 +119,42 @@ async fn Reader::files(self : Reader, directory : String) -> Array[String] {
       if @fs.exists(absolute) {
         ignore(relative(self.root, @fs.realpath(absolute)))
         result.append(@fs.readdir(absolute, include_hidden=true))
+      }
+    }
+  }
+  result.sort()
+  result
+}
+
+///|
+async fn Reader::dirs(self : Reader, directory : String) -> Array[String] {
+  let result : Array[String] = []
+  match self.git_root {
+    Some(root) => {
+      let rel_dir = relative(root, join(self.root, directory))
+      let prefix = if rel_dir == "" { "" } else { rel_dir + "/" }
+      for path in self.tree.keys() {
+        if prefix == "" || path.has_prefix(prefix) {
+          let rest = path[prefix.length():].to_owned()
+          if rest.find("/") is Some(sep) {
+            let child = rest[:sep].to_owned()
+            if !result.contains(child) {
+              result.push(child)
+            }
+          }
+        }
+      }
+    }
+    None => {
+      let absolute = join(self.root, directory)
+      if @fs.exists(absolute) {
+        ignore(relative(self.root, @fs.realpath(absolute)))
+        for entry in @fs.readdir(absolute) {
+          let child = join(absolute, entry)
+          if @fs.kind(child) == @fs.Directory {
+            result.push(entry)
+          }
+        }
       }
     }
   }

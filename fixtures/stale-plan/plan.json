@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "stage": "version",
+  "executable": true,
+  "fingerprint": "stale-fp-1",
+  "edits": [
+    {
+      "path": "moon.mod",
+      "kind": "manifest",
+      "owner": "moonbit:acme/stale",
+      "beforeHash": "fnv1a64:0000000000000000",
+      "afterText": "name = \"acme/stale\"\nversion = \"0.2.1\"\n",
+      "atomic": true
+    }
+  ],
+  "changelogs": [],
+  "tags": [],
+  "consumedChangesets": []
+}

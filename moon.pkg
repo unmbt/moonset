@@ -4,6 +4,7 @@ import {
   "unmbt/moonset/workspace",
   "unmbt/moonset/changelog",
   "unmbt/moonset/adapters",
+  "unmbt/moonset/executor",
   "unmbt/moonset/api",
 }
 

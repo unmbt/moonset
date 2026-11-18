@@ -140,3 +140,132 @@ async test "coexist uses a separate changeset directory and excludes nested chec
     "0.1.1",
   )
 }
+
+///|
+async test "mixed publisher overrides, custom changelog.file preload, and --since npm/cargo glob isolation" {
+  let root = @fs.tmpdir(prefix="moonset-mixed-since-")
+  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  ignore(run_git(root, ["init", "-b", "main"]))
+  ignore(run_git(root, ["config", "user.email", "test@example.invalid"]))
+  ignore(run_git(root, ["config", "user.name", "Moonset Test"]))
+  write(
+    root, ".changeset/config.json", "{\"changelog\":{\"generator\":\"builtin\",\"file\":\"HISTORY.md\"},\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"npm\",\"includeRoot\":false},{\"id\":\"rs\",\"ecosystem\":\"cargo\",\"root\":\"rs\",\"manager\":\"cargo\",\"includeRoot\":false}],\"units\":{\"npm:@acme/a\":{\"publisher\":\"npm\"},\"cargo:acme-rs\":{\"publisher\":\"cargo\"}}}}}",
+  )
+  write(
+    root, "js/package.json", "{\"name\":\"js-root\",\"workspaces\":[\"packages/*\"]}",
+  )
+  write(
+    root, "js/packages/a/package.json", "{\"name\":\"@acme/a\",\"version\":\"1.0.0\"}",
+  )
+  write(root, "js/packages/a/HISTORY.md", "# History\n")
+  write(root, "rs/Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n")
+  write(
+    root, "rs/crates/a/Cargo.toml", "[package]\nname = \"acme-rs\"\nversion = \"0.1.0\"\n",
+  )
+  write(root, "rs/crates/a/HISTORY.md", "# Rust History\n")
+  ignore(run_git(root, ["add", "."]))
+  ignore(run_git(root, ["commit", "-m", "init"]))
+  let base = run_git(root, ["rev-parse", "HEAD"])
+  // Create uncommitted packages that MUST NOT leak into --since discovery
+  write(
+    root, "js/packages/dirty/package.json", "{\"name\":\"@acme/dirty\",\"version\":\"9.9.9\"}",
+  )
+  write(
+    root, "rs/crates/dirty/Cargo.toml", "[package]\nname = \"acme-dirty\"\nversion = \"9.9.9\"\n",
+  )
+  let loaded = @workspace.discover(root, since=base)
+  assert_eq(loaded.snapshot.units.map(u => u.id), [
+    "npm:@acme/a", "cargo:acme-rs",
+  ])
+  assert_eq(
+    loaded.snapshot.sources.get("js/packages/a/HISTORY.md"),
+    Some("# History\n"),
+  )
+  assert_eq(
+    loaded.snapshot.sources.get("rs/crates/a/HISTORY.md"),
+    Some("# Rust History\n"),
+  )
+}
+
+///|
+async test "Cargo publish=[], inline version span with path, ** glob, pnpm comments, and Git changeset commits" {
+  let root = @fs.tmpdir(prefix="moonset-cargo-pnpm-")
+  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  ignore(run_git(root, ["init", "-b", "main"]))
+  ignore(run_git(root, ["config", "user.email", "test@example.invalid"]))
+  ignore(run_git(root, ["config", "user.name", "Moonset Test"]))
+  write(
+    root, ".changeset/config.json", "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":false},{\"id\":\"rs\",\"ecosystem\":\"cargo\",\"root\":\"rs\",\"manager\":\"cargo\",\"includeRoot\":false}]}}}",
+  )
+  write(root, "js/package.json", "{\"name\":\"js-root\"}")
+  write(
+    root, "js/pnpm-workspace.yaml", "packages: # root workspaces\n  - \"packages/*\" # public\n  - \"!packages/ignored\"\n",
+  )
+  write(
+    root, "js/packages/app/package.json", "{\"name\":\"@acme/app\",\"version\":\"1.0.0\",\"private\":true}",
+  )
+  write(
+    root, "js/packages/ignored/package.json", "{\"name\":\"@acme/ignored\",\"version\":\"1.0.0\"}",
+  )
+  write(root, "rs/Cargo.toml", "[workspace]\nmembers = [\"crates/**\"]\n")
+  write(
+    root, "rs/crates/core/Cargo.toml", "[package]\nname = \"acme-core\"\nversion = \"0.1.0\"\npublish = []\n",
+  )
+  write(
+    root, "rs/crates/nested/app/Cargo.toml", "[package]\nname = \"acme-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nacme-core = { path = \"../../version-core\", version = \"0.1.0\" }\n",
+  )
+  write(
+    root, ".changeset/c1.md", "---\n\"cargo:acme-core\": patch\n---\nCore patch",
+  )
+  ignore(run_git(root, ["add", "."]))
+  ignore(run_git(root, ["commit", "-m", "initial commit"]))
+  let head = run_git(root, ["rev-parse", "HEAD"])
+  let loaded = @workspace.discover(root)
+  assert_eq(loaded.changeset_commits.get("c1"), Some(head))
+  let core = loaded.snapshot.units
+    .iter()
+    .find_first(u => u.id == "cargo:acme-core")
+    .unwrap()
+  assert_false(core.publish)
+  let app = loaded.snapshot.units
+    .iter()
+    .find_first(u => u.id == "cargo:acme-app")
+    .unwrap()
+  let dep = app.dependencies[0]
+  let app_src = loaded.snapshot.sources[app.manifest]
+  assert_eq(
+    @utf8.decode_lossy(@utf8.encode(app_src)[dep.start:dep.end]),
+    "0.1.0",
+  )
+  assert_false(loaded.snapshot.units.any(u => u.id == "npm:@acme/ignored"))
+}
+
+///|
+async test "SDD minimal fixtures discover and validate expected plans" {
+  let single = @workspace.discover("fixtures/single-module")
+  assert_eq(
+    @engine.build_plan(single.snapshot, single.changesets).releases[0].new_version,
+    "0.1.1",
+  )
+
+  let two = @workspace.discover("fixtures/workspace-two-modules")
+  let two_plan = @engine.build_plan(two.snapshot, two.changesets)
+  assert_eq(two_plan.releases.length(), 2)
+
+  let pre_fx = @workspace.discover("fixtures/prerelease")
+  let pre_plan = @engine.build_plan(
+    pre_fx.snapshot,
+    pre_fx.changesets,
+    pre?=pre_fx.pre,
+  )
+  assert_eq(pre_plan.releases[0].new_version, "0.2.0-alpha.1")
+
+  let invalid_rejected = try {
+    ignore(@workspace.discover("fixtures/invalid-frontmatter"))
+    false
+  } catch {
+    @model.Invalid(_) => true
+    _ => false
+  }
+  assert_true(invalid_rejected)
+}

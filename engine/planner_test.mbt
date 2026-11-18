@@ -213,3 +213,138 @@ test "public planner validates field ownership and canonical identities" {
     assert_true(rejected)
   }
 }
+
+///|
+test "pre mode secondary minor bump uses initialVersions and stays monotonic" {
+  let state = @engine.parse_pre_state(
+    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/a\":1},\"consumed\":[\"c1\"]}",
+  )
+  let ws = snapshot([unit("acme/a", version="0.1.1-alpha.0")])
+  let plan = @engine.build_plan(
+    ws,
+    [change("acme/a", bump="minor", id="c2")],
+    pre=state,
+  )
+  assert_eq(plan.releases[0].new_version, "0.2.0-alpha.1")
+  assert_eq(plan.next_pre_state.unwrap().next_numbers["moonbit:acme/a"], 2)
+  assert_eq(plan.next_pre_state.unwrap().consumed, ["c1", "c2"])
+}
+
+///|
+test "mixed bridges propagate consumer bumps, detect cycles, and preserve npm workspace protocol" {
+  let mbt : @model.ReleaseUnit = unit("acme/native", version="0.1.0")
+  let js_core : @model.ReleaseUnit = {
+    id: "npm:@acme/core",
+    native_name: "@acme/core",
+    ecosystem: "npm",
+    workspace_id: "js",
+    root: "js/core",
+    manifest: "js/core/package.json",
+    version_path: "js/core/package.json",
+    version_field: "version",
+    version: Some("1.0.0"),
+    visibility: "public",
+    publish: true,
+    dependencies: [],
+  }
+  let js_app : @model.ReleaseUnit = {
+    id: "npm:@acme/app",
+    native_name: "@acme/app",
+    ecosystem: "npm",
+    workspace_id: "js",
+    root: "js/app",
+    manifest: "js/app/package.json",
+    version_path: "js/app/package.json",
+    version_field: "version",
+    version: Some("1.0.0"),
+    visibility: "public",
+    publish: true,
+    dependencies: [
+      {
+        producer: "npm:@acme/core",
+        requirement: "^1.0.0",
+        kind: @model.Runtime,
+        path: "js/app/package.json",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+      {
+        producer: "npm:@acme/ws",
+        requirement: "workspace:^",
+        kind: @model.Runtime,
+        path: "js/app/package.json",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let js_ws : @model.ReleaseUnit = {
+    id: "npm:@acme/ws",
+    native_name: "@acme/ws",
+    ecosystem: "npm",
+    workspace_id: "js",
+    root: "js/ws",
+    manifest: "js/ws/package.json",
+    version_path: "js/ws/package.json",
+    version_field: "version",
+    version: Some("1.0.0"),
+    visibility: "public",
+    publish: true,
+    dependencies: [],
+  }
+  let cfg = "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"native\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":false}],\"bridges\":[{\"consumer\":\"npm:@acme/core\",\"producer\":\"moonbit:acme/native\",\"kind\":\"build\",\"bump\":\"patch\",\"waitFor\":\"build\"}]}}}"
+  let ws = snapshot([mbt, js_core, js_app, js_ws], config=cfg)
+  let plan = @engine.build_plan(ws, [
+    change("moonbit:acme/native", bump="minor", id="c1"),
+    change("npm:@acme/ws", bump="minor", id="c2"),
+    change("npm:@acme/app", bump="patch", id="c3"),
+  ])
+  assert_true(
+    plan.releases.any(r => {
+      r.unit_id == "npm:@acme/core" && r.new_version == "1.0.1"
+    }),
+  )
+  assert_true(
+    plan.dependency_updates.any(d => {
+      d.consumer == "npm:@acme/app" &&
+      d.producer == "npm:@acme/core" &&
+      d.new_requirement == "^1.0.1"
+    }),
+  )
+  assert_true(!plan.dependency_updates.any(d => d.producer == "npm:@acme/ws"))
+
+  let cyclic_cfg = "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"native\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":false}],\"bridges\":[{\"consumer\":\"npm:@acme/core\",\"producer\":\"moonbit:acme/native\",\"kind\":\"build\",\"bump\":\"patch\",\"waitFor\":\"build\"},{\"consumer\":\"moonbit:acme/native\",\"producer\":\"npm:@acme/core\",\"kind\":\"build\",\"bump\":\"patch\",\"waitFor\":\"build\"}]}}}"
+  let cyclic_ws = snapshot([mbt, js_core], config=cyclic_cfg)
+  let rejected = try {
+    ignore(@engine.build_plan(cyclic_ws, [change("moonbit:acme/native")]))
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "dependency-cycle"
+    _ => false
+  }
+  assert_true(rejected)
+}
+
+///|
+test "MIX-005 MIX-006 pre fixed group stays anchored on initialVersions" {
+  let pre_state = @engine.parse_pre_state(
+    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\",\"moonbit:acme/b\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/a\":1,\"moonbit:acme/b\":1},\"consumed\":[\"c1\"]}",
+  )
+  let ws = snapshot(
+    [
+      unit("acme/a", version="1.0.0-alpha.0"),
+      unit("acme/b", version="1.0.0-alpha.0"),
+    ],
+    config="{\"fixed\":[[\"acme/a\",\"acme/b\"]]}",
+  )
+  let plan = @engine.build_plan(
+    ws,
+    [change("acme/a", bump="minor", id="c2")],
+    pre=pre_state,
+  )
+  assert_eq(plan.releases.length(), 2)
+  assert_eq(plan.releases[0].new_version, "1.0.0-alpha.1")
+  assert_eq(plan.releases[1].new_version, "1.0.0-alpha.1")
+}

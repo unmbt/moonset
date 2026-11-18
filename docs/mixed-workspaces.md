@@ -1,6 +1,6 @@
 # 混合生态 workspace 设计
 
-> 状态：Proposed，2026-11-10。这是对第一版 MoonBit 单生态假设的修订，尚未实现。涉及 FR-018 至 FR-024、ADR-006。本文的配置位于 `experimental.mixedWorkspaces`；实现稳定后再冻结公共配置和 API。
+> 状态：Implemented (MoonBit, npm/pnpm, Cargo crates.io)，2026-11-18。配置位于 `experimental.mixedWorkspaces`，覆盖 FR-018 至 FR-024、ADR-006；其他 Cargo registry、Tauri 同步与自动跨分区协调导出仍保持 Deferred/Partial。
 
 ## 1. 要解决的问题
 

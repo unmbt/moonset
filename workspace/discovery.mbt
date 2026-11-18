@@ -4,6 +4,7 @@ pub(all) struct LoadedWorkspace {
   changesets : Array[@model.Changeset]
   pre : @model.PreState?
   changeset_directory : String
+  changeset_commits : Map[String, String]
 }
 
 ///|
@@ -32,7 +33,12 @@ async fn locate(
     if head_files is None && !@fs.exists(absolute) {
       fail_input("Explicit config does not exist", path=absolute)
     }
-    let root = @fs.realpath(parent(parent(absolute)))
+    let config_root_dir = parent(parent(absolute))
+    let root = if @fs.exists(config_root_dir) {
+      @fs.realpath(config_root_dir)
+    } else {
+      @path.Path(config_root_dir).normalize().to_string()
+    }
     return (root, relative(root, absolute))
   }
   let mut cursor = start
@@ -323,57 +329,41 @@ pub async fn discover(
       )
     }
   }
-  let cargo_version_paths : Map[String, Array[String]] = Map([])
-  for unit in units {
-    if unit.ecosystem == "cargo" {
-      let group = cargo_version_paths.get(unit.version_path).unwrap_or([])
-      group.push(unit.id)
-      cargo_version_paths[unit.version_path] = group
-    }
-  }
-  for _, group in cargo_version_paths {
-    if group.length() > 1 {
-      let occupied = config.fixed.flatten() + config.linked.flatten()
-      if group.any(id => occupied.contains(id)) {
-        if !config.fixed.any(existing => existing == group) {
-          fail_input(
-            "Cargo packages sharing workspace.package.version must share a fixed version group",
-            path=config_file,
-          )
-        }
-      } else {
-        config.fixed.push(group)
-      }
-    }
-  }
   if units.is_empty() {
     fail_input("No managed release units were discovered", path=root)
   }
-  match config.raw {
-    {
-      "experimental": {
-        "mixedWorkspaces": { "units": Object(overrides), .. },
-        ..
-      },
-      ..
-    } =>
-      for id, value in overrides {
-        if !units.any(unit => unit.id == id) {
-          fail_input(
-            "Unit override references an unknown UnitId: " + id,
-            path=config_file,
-          )
-        }
-        if value is { "publisher": String(publisher), .. } &&
-          publisher != "moon" {
-          fail_input(
-            "Unsupported MoonBit publisher override",
-            path=config_file,
-            code="unsupported-capability",
-          )
-        }
+  for id, unit_override in config.unit_overrides {
+    let mut found : @model.ReleaseUnit? = None
+    for unit in units {
+      if unit.id == id {
+        found = Some(unit)
       }
-    _ => ()
+    }
+    guard found is Some(unit) else {
+      fail_input(
+        "Unit override references an unknown UnitId: " + id,
+        path=config_file,
+      )
+      continue
+    }
+    if unit_override.publisher is Some(publisher) {
+      let allowed = match unit.ecosystem {
+        "moonbit" => publisher == "moon"
+        "npm" => publisher == "npm" || publisher == "pnpm"
+        "cargo" => publisher == "cargo"
+        _ => false
+      }
+      if !allowed {
+        fail_input(
+          "Unsupported publisher override for " +
+          unit.ecosystem +
+          ": " +
+          publisher,
+          path=config_file,
+          code="unsupported-capability",
+        )
+      }
+    }
   }
   let inspection_roots = [""] + units.map(x => x.root)
   for dir in inspection_roots {
@@ -393,14 +383,19 @@ pub async fn discover(
   // any write occurs.
   for unit in units {
     let changelog = if unit.root == "" {
-      "CHANGELOG.md"
+      config.changelog_file
     } else {
-      slash(join(unit.root, "CHANGELOG.md"))
+      slash(join(unit.root, config.changelog_file))
     }
     ignore(reader.read(changelog))
   }
   ignore(reader.read(".moonset/release-state.json"))
   let changesets = []
+  let changeset_commits : Map[String, String] = Map([])
+  let git_dir = match reader.git_root {
+    Some(dir) => Some(dir)
+    None => if @fs.exists(join(root, ".git")) { Some(root) } else { None }
+  }
   for file in reader.files(changeset_directory) {
     let path = slash(join(changeset_directory, file))
     if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
@@ -410,14 +405,35 @@ pub async fn discover(
       continue
     }
     if reader.read(path) is Some(source) {
-      changesets.push(
-        @engine.parse_changeset(
-          source,
-          id=file[:file.length() - 3].to_owned(),
-          path~,
-          mixed=config.mixed,
-        ),
+      let cs = @engine.parse_changeset(
+        source,
+        id=file[:file.length() - 3].to_owned(),
+        path~,
+        mixed=config.mixed,
       )
+      changesets.push(cs)
+      if git_dir is Some(repo) {
+        let repo_rel = relative(repo, join(root, path)) catch { _ => path }
+        let added_sha = (git(repo, [
+            "log", "--diff-filter=A", "--format=%H", "-n", "1", "--", repo_rel,
+          ]) catch {
+            _ => ""
+          })
+          .trim()
+          .to_owned()
+        let sha = if added_sha != "" {
+          added_sha
+        } else {
+          (git(repo, ["log", "--format=%H", "-n", "1", "--", repo_rel]) catch {
+            _ => ""
+          })
+          .trim()
+          .to_owned()
+        }
+        if sha != "" {
+          changeset_commits[cs.id] = sha
+        }
+      }
     }
   }
   let pre_file = match config.raw {
@@ -444,5 +460,6 @@ pub async fn discover(
     changesets,
     pre,
     changeset_directory,
+    changeset_commits,
   }
 }

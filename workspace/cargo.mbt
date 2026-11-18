@@ -1,16 +1,57 @@
 ///|
+fn strip_toml_comment(line : String) -> String {
+  let mut in_double = false
+  let mut in_single = false
+  let mut escaped = false
+  let out : Array[Char] = []
+  for ch in line.to_array() {
+    if escaped {
+      out.push(ch)
+      escaped = false
+      continue
+    }
+    if in_double && ch == '\\' {
+      out.push(ch)
+      escaped = true
+      continue
+    }
+    if !in_single && ch == '"' {
+      in_double = !in_double
+      out.push(ch)
+      continue
+    }
+    if !in_double && ch == '\'' {
+      in_single = !in_single
+      out.push(ch)
+      continue
+    }
+    if !in_double && !in_single && ch == '#' {
+      break
+    }
+    out.push(ch)
+  }
+  String::from_array(out)
+}
+
+///|
 fn cargo_value(source : String, section : String, key : String) -> String? {
   let mut active = ""
   for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = raw.trim().to_owned()
+    let line = strip_toml_comment(raw.to_owned()).trim().to_owned()
     if line.has_prefix("[") && line.has_suffix("]") {
-      active = line[1:line.length() - 1].to_owned()
+      active = line[1:line.length() - 1].trim().to_owned()
       continue
     }
-    if active == section && line.has_prefix(key + " =") {
-      let value = line.split("=").last().unwrap_or("").trim().to_owned()
-      if value.has_prefix("\"") && value.has_suffix("\"") {
-        return Some(value[1:value.length() - 1].to_owned())
+    if active == section && line.has_prefix(key) {
+      let after_key = line[key.length():].trim().to_owned()
+      if after_key.has_prefix("=") {
+        let value = after_key[1:].trim().to_owned()
+        if (value.has_prefix("\"") && value.has_suffix("\"")) ||
+          (value.has_prefix("'") && value.has_suffix("'")) {
+          if value.length() >= 2 {
+            return Some(value[1:value.length() - 1].to_owned())
+          }
+        }
       }
     }
   }
@@ -21,11 +62,14 @@ fn cargo_value(source : String, section : String, key : String) -> String? {
 fn cargo_raw_value(source : String, section : String, key : String) -> String? {
   let mut active = ""
   for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = raw.trim().to_owned()
+    let line = strip_toml_comment(raw.to_owned()).trim().to_owned()
     if line.has_prefix("[") && line.has_suffix("]") {
-      active = line[1:line.length() - 1].to_owned()
-    } else if active == section && line.has_prefix(key + " =") {
-      return Some(line.split("=").last().unwrap_or("").trim().to_owned())
+      active = line[1:line.length() - 1].trim().to_owned()
+    } else if active == section && line.has_prefix(key) {
+      let after_key = line[key.length():].trim().to_owned()
+      if after_key.has_prefix("=") {
+        return Some(after_key[1:].trim().to_owned())
+      }
     }
   }
   None
@@ -77,51 +121,94 @@ fn cargo_members(source : String) -> Array[String] {
 }
 
 ///|
+async fn expand_cargo_glob(
+  reader : Reader,
+  workspace_root : String,
+  current : String,
+  parts : Array[String],
+  index : Int32,
+  result : Array[String],
+) -> Unit {
+  if index >= parts.length() {
+    let manifest_rel = if workspace_root == "" {
+      if current == "" {
+        "Cargo.toml"
+      } else {
+        current + "/Cargo.toml"
+      }
+    } else if current == "" {
+      workspace_root + "/Cargo.toml"
+    } else {
+      workspace_root + "/" + current + "/Cargo.toml"
+    }
+    if !result.contains(current) && reader.read(manifest_rel) is Some(_) {
+      result.push(current)
+    }
+    return
+  }
+  let part = parts[index]
+  if part == "" || part == "." {
+    expand_cargo_glob(reader, workspace_root, current, parts, index + 1, result)
+    return
+  }
+  let dir_rel = if workspace_root == "" {
+    current
+  } else if current == "" {
+    workspace_root
+  } else {
+    workspace_root + "/" + current
+  }
+  if part == "**" {
+    expand_cargo_glob(reader, workspace_root, current, parts, index + 1, result)
+    for child in reader.dirs(dir_rel) {
+      if [".git", "target", "_build", "node_modules", ".mooncakes"].contains(
+          child,
+        ) {
+        continue
+      }
+      let next = if current == "" { child } else { current + "/" + child }
+      expand_cargo_glob(reader, workspace_root, next, parts, index, result)
+    }
+    return
+  }
+  if !part.contains("*") && !part.contains("?") {
+    let next = if current == "" { part } else { current + "/" + part }
+    expand_cargo_glob(reader, workspace_root, next, parts, index + 1, result)
+    return
+  }
+  for child in reader.dirs(dir_rel) {
+    if [".git", "target", "_build", "node_modules", ".mooncakes"].contains(
+        child,
+      ) {
+      continue
+    }
+    if @engine.matches_pattern(child, part) {
+      let next = if current == "" { child } else { current + "/" + child }
+      expand_cargo_glob(reader, workspace_root, next, parts, index + 1, result)
+    }
+  }
+}
+
+///|
 async fn cargo_candidates(
   reader : Reader,
   workspace_root : String,
   pattern : String,
 ) -> Array[String] {
-  let clean = pattern.trim().replace_all(old="./", new="")
+  let mut clean = pattern.trim().to_owned()
+  while clean.has_prefix("./") {
+    clean = clean[2:].to_owned()
+  }
   if !clean.contains("*") && !clean.contains("?") {
-    return [clean.to_owned()]
+    return [clean]
   }
-  let parts = clean.split("/").map(x => x.to_owned()).collect()
-  let wildcard = parts.search_by(x => x.contains("*") || x.contains("?"))
-  guard wildcard is Some(index) else { return [] }
-  let parent = parts[:index].join("/")
-  let directory_rel = if workspace_root == "" {
-    parent
-  } else if parent == "" {
-    workspace_root
-  } else {
-    workspace_root + "/" + parent
-  }
-  let directory = join(reader.root, directory_rel)
-  if !@fs.exists(directory) {
-    return []
-  }
+  let parts = clean
+    .split("/")
+    .map(x => x.to_owned())
+    .filter(x => x != "")
+    .collect()
   let result : Array[String] = []
-  for child in @fs.readdir(directory) {
-    if !@engine.matches_pattern(child, parts[index]) {
-      continue
-    }
-    let prefix = if parent == "" { child } else { parent + "/" + child }
-    let suffix = if index + 1 == parts.length() {
-      ""
-    } else {
-      "/" + parts[index + 1:].join("/")
-    }
-    let candidate = prefix + suffix
-    let full = if workspace_root == "" {
-      candidate
-    } else {
-      workspace_root + "/" + candidate
-    }
-    if reader.read(full + "/Cargo.toml") is Some(_) {
-      result.push(candidate)
-    }
-  }
+  expand_cargo_glob(reader, workspace_root, "", parts, 0, result)
   result
 }
 
@@ -136,30 +223,48 @@ priv struct CargoEntry {
 ///|
 fn cargo_entries(source : String) -> Array[CargoEntry] {
   let result : Array[CargoEntry] = []
+  let bytes = @utf8.encode(source)
   let mut section = ""
-  let mut offset = 0
-  for raw_line in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = raw_line.to_owned()
-    let trimmed = line.trim().to_owned()
+  let mut pos : Int32 = 0
+  while pos <= bytes.length() {
+    let mut nl = pos
+    while nl < bytes.length() && bytes[nl].to_int() != 0x0A {
+      nl += 1
+    }
+    let line_end = if nl > pos && bytes[nl - 1].to_int() == 0x0D {
+      nl - 1
+    } else {
+      nl
+    }
+    let line = @utf8.decode_lossy(bytes[pos:line_end])
+    let clean = strip_toml_comment(line)
+    let trimmed = clean.trim().to_owned()
     if trimmed.has_prefix("[") && trimmed.has_suffix("]") {
-      section = trimmed[1:trimmed.length() - 1].to_owned()
-    } else if trimmed != "" && !trimmed.has_prefix("#") && line.contains("=") {
-      match line.find("=") {
-        Some(index) => {
-          let value_source = line[index + 1:]
-          let raw_value = value_source.trim().to_owned()
-          let leading = value_source.length() - value_source.trim().length()
-          result.push({
-            section,
-            key: line[:index].trim().to_owned(),
-            raw: raw_value,
-            offset: offset + index + 1 + leading,
-          })
+      section = trimmed[1:trimmed.length() - 1].trim().to_owned()
+    } else if trimmed != "" && clean.contains("=") {
+      match clean.find("=") {
+        Some(eq_char_idx) => {
+          let key = clean[:eq_char_idx].trim().to_owned()
+          let value_part = clean[eq_char_idx + 1:]
+          let raw_value = value_part.trim().to_owned()
+          let prefix_bytes = @utf8.encode(clean[:eq_char_idx + 1].to_owned()).length()
+          let mut val_offset = pos + prefix_bytes
+          while val_offset < line_end &&
+                (
+                  bytes[val_offset].to_int() == 0x20 ||
+                  bytes[val_offset].to_int() == 0x09
+                ) {
+            val_offset += 1
+          }
+          result.push({ section, key, raw: raw_value, offset: val_offset, })
         }
         None => ()
       }
     }
-    offset += line.length() + 1
+    if nl >= bytes.length() {
+      break
+    }
+    pos = nl + 1
   }
   result
 }
@@ -194,30 +299,108 @@ fn cargo_req(entry : CargoEntry) -> String? {
 }
 
 ///|
+fn find_toml_inline_key_offset(raw : String, target_key : String) -> Int32? {
+  let bytes = @utf8.encode(raw)
+  let key_bytes = @utf8.encode(target_key)
+  let mut in_double = false
+  let mut in_single = false
+  let mut escaped = false
+  let mut i : Int32 = 0
+  while i < bytes.length() {
+    let b = bytes[i].to_int()
+    if escaped {
+      escaped = false
+      i += 1
+      continue
+    }
+    if in_double {
+      if b == 0x5C {
+        escaped = true
+      } else if b == 0x22 {
+        in_double = false
+      }
+      i += 1
+      continue
+    }
+    if in_single {
+      if b == 0x27 {
+        in_single = false
+      }
+      i += 1
+      continue
+    }
+    if b == 0x22 {
+      in_double = true
+      i += 1
+      continue
+    }
+    if b == 0x27 {
+      in_single = true
+      i += 1
+      continue
+    }
+    if i + key_bytes.length() <= bytes.length() {
+      let prev_ok = i == 0 ||
+        bytes[i - 1].to_int() == 0x20 ||
+        bytes[i - 1].to_int() == 0x09 ||
+        bytes[i - 1].to_int() == 0x7B ||
+        bytes[i - 1].to_int() == 0x2C
+      if prev_ok {
+        let mut matched = true
+        for k in 0..<key_bytes.length() {
+          if bytes[i + k] != key_bytes[k] {
+            matched = false
+            break
+          }
+        }
+        if matched {
+          let mut after = i + key_bytes.length()
+          while after < bytes.length() &&
+                (bytes[after].to_int() == 0x20 || bytes[after].to_int() == 0x09) {
+            after += 1
+          }
+          if after < bytes.length() && bytes[after].to_int() == 0x3D {
+            return Some(after + 1)
+          }
+        }
+      }
+    }
+    i += 1
+  }
+  None
+}
+
+///|
 fn cargo_req_span(entry : CargoEntry) -> (Int32, Int32) {
   let raw = entry.raw
-  let search = if raw.has_prefix("\"") {
-    raw
+  let bytes = @utf8.encode(raw)
+  let base_offset : Int32 = if raw.has_prefix("\"") || raw.has_prefix("'") {
+    0
   } else {
-    let version_index = raw.find("version").unwrap_or(0)
-    raw[version_index:].to_owned()
+    match find_toml_inline_key_offset(raw, "version") {
+      Some(idx) => idx
+      None => return (0, 0)
+    }
   }
-  match search.find("\"") {
-    Some(first) =>
-      match search[first + 1:].find("\"") {
-        Some(length) => {
-          let prefix = if raw.has_prefix("\"") {
-            0
-          } else {
-            raw.find("version").unwrap_or(0)
-          }
-          let start = entry.offset + prefix + first + 1
-          (start, start + length)
-        }
-        None => (0, 0)
-      }
-    None => (0, 0)
+  let mut i = base_offset
+  while i < bytes.length() &&
+        bytes[i].to_int() != 0x22 &&
+        bytes[i].to_int() != 0x27 {
+    i += 1
   }
+  if i >= bytes.length() {
+    return (0, 0)
+  }
+  let quote = bytes[i].to_int()
+  let val_start = i + 1
+  let mut val_end = val_start
+  while val_end < bytes.length() && bytes[val_end].to_int() != quote {
+    val_end += 1
+  }
+  if val_end >= bytes.length() {
+    return (0, 0)
+  }
+  (entry.offset + val_start, entry.offset + val_end)
 }
 
 ///|
@@ -359,7 +542,21 @@ async fn discover_cargo_workspace(
       fail_input("Duplicate Cargo package: " + id, path=member_manifest)
     }
     seen[member_manifest] = true
-    let publish = cargo_raw_value(source, "package", "publish") != Some("false") &&
+    let raw_publish = cargo_raw_value(source, "package", "publish")
+    let cargo_allows_publish = match raw_publish {
+      None => true
+      Some(raw) => {
+        let clean = raw.trim().to_owned()
+        if clean == "false" {
+          false
+        } else if clean.has_prefix("[") {
+          clean.contains("\"crates-io\"") || clean.contains("'crates-io'")
+        } else {
+          true
+        }
+      }
+    }
+    let publish = cargo_allows_publish &&
       overrides.get(id).map(x => x.publish).unwrap_or(None) != Some(false)
     units.push({
       id,

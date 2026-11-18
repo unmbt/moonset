@@ -1,0 +1,29 @@
+{
+  "planFingerprint": "plan-partial-1",
+  "sourceHead": null,
+  "releases": [
+    {
+      "unitId": "moonbit:acme/a",
+      "oldVersion": "0.1.0",
+      "newVersion": "0.1.1",
+      "level": "patch",
+      "reasons": [],
+      "changesets": [],
+      "publish": true
+    },
+    {
+      "unitId": "npm:@acme/b",
+      "oldVersion": "0.1.0",
+      "newVersion": "0.1.1",
+      "level": "patch",
+      "reasons": [],
+      "changesets": [],
+      "publish": true
+    }
+  ],
+  "tags": [
+    { "unitId": "moonbit:acme/a", "version": "0.1.1", "name": "moonbit/acme/a@0.1.1" },
+    { "unitId": "npm:@acme/b", "version": "0.1.1", "name": "npm/@acme/b@0.1.1" }
+  ],
+  "consumedChangesets": []
+}

@@ -98,12 +98,20 @@ pub(all) struct Config {
   update_dependents : String
   changed_patterns : Array[String]
   pre_file : String
+  pre_directory : String
   mixed : Bool
   formatter : String
+  format_mode : String
+  changelog_enabled : Bool
   changelog : String
   github : String?
+  github_links : Bool
+  github_thanks : Bool
   access : String
   base_branch : String
+  commit_mode : String
+  commit_add_message : String
+  commit_version_message : String
   private_version : Bool
   private_tag : Bool
   private_publish : Bool
@@ -112,6 +120,11 @@ pub(all) struct Config {
   tag_after_publish : Bool
   tag_format : String
   tag_push : Bool
+  publisher_kind : String
+  publisher_registry : String
+  publisher_dry_run_first : Bool
+  publisher_command : Array[String]
+  publisher_token_env : String?
   lockfiles : String
   mixed_workspaces : Array[MixedWorkspaceSpec]
   bridges : Array[Bridge]

@@ -16,6 +16,7 @@ pub(all) struct LoadedWorkspace {
   changesets : Array[@model.Changeset]
   pre : @model.PreState?
   changeset_directory : String
+  changeset_commits : Map[String, String]
 }
 
 // Type aliases

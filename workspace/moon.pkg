@@ -4,6 +4,7 @@ import {
   "unmbt/moon-manifest" @manifest,
   "moonbitlang/core/async/fs",
   "moonbitlang/core/async/shell",
+  "moonbitlang/core/json",
   "moonbitlang/core/path",
   "moonbitlang/core/encoding/utf8",
 }

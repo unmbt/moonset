@@ -88,20 +88,31 @@ pub fn parse_pre_state(
 }
 
 ///|
-fn target_version(
-  unit : @model.ReleaseUnit,
+fn strip_prerelease(version : @semver.SemVer) -> String {
+  "\{version.major}.\{version.minor}.\{version.patch}"
+}
+
+///|
+/// Compute the next version from baseline(s) and current manifest version(s)
+/// so single units and fixed/linked groups share identical prerelease rules.
+fn compute_group_target_version(
+  units : Array[@model.ReleaseUnit],
   level : @model.Bump,
   pre : @model.PreState?,
 ) -> String raise @model.MoonsetError {
-  guard unit.version is Some(old) else {
-    invalid("Release unit has no version: " + unit.id, path=unit.manifest)
-    return ""
-  }
-  let base = increment(old, level)
-  match pre {
-    Some(state) if state.mode == "active" && level != @model.None => {
+  let mut highest_current = "0.0.0"
+  let mut highest_baseline = "0.0.0"
+  let mut counter = 0
+  for unit in units {
+    guard unit.version is Some(old) else {
+      invalid("Release unit has no version: " + unit.id, path=unit.manifest)
+      return ""
+    }
+    if parse_version(old).compare(parse_version(highest_current)) > 0 {
+      highest_current = old
+    }
+    if pre is Some(state) && state.mode == "active" {
       let current = parse_version(old)
-      let counter = state.next_numbers.get(unit.id).unwrap_or(0)
       if current.is_prerelease() &&
         (
           current.pre.length() != 2 ||
@@ -112,8 +123,41 @@ fn target_version(
           path=unit.manifest,
         )
       }
-      base + "-" + state.tag + ".\{counter}"
+      let baseline = state.initial_versions.get(unit.id).unwrap_or(old)
+      if parse_version(baseline).compare(parse_version(highest_baseline)) > 0 {
+        highest_baseline = baseline
+      }
+      counter = counter.max(state.next_numbers.get(unit.id).unwrap_or(0))
     }
-    _ => base
   }
+  if level == @model.None {
+    return highest_current
+  }
+  match pre {
+    Some(state) if state.mode == "active" => {
+      let bumped = parse_version(increment(highest_baseline, level))
+      let current_parsed = parse_version(highest_current)
+      let base_ver = if current_parsed.is_prerelease() {
+        let current_core = parse_version(strip_prerelease(current_parsed))
+        if current_core.compare(bumped) > 0 {
+          strip_prerelease(current_core)
+        } else {
+          strip_prerelease(bumped)
+        }
+      } else {
+        strip_prerelease(bumped)
+      }
+      base_ver + "-" + state.tag + ".\{counter}"
+    }
+    _ => increment(highest_current, level)
+  }
+}
+
+///|
+fn target_version(
+  unit : @model.ReleaseUnit,
+  level : @model.Bump,
+  pre : @model.PreState?,
+) -> String raise @model.MoonsetError {
+  compute_group_target_version([unit], level, pre)
 }

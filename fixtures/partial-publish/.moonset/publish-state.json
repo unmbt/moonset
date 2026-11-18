@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "planId": "plan-partial-1",
+  "statuses": [
+    {
+      "planId": "plan-partial-1",
+      "unitId": "moonbit:acme/a",
+      "version": "0.1.1",
+      "target": "source",
+      "registry": "mooncakes",
+      "state": "published",
+      "digest": null,
+      "externalId": null,
+      "message": null
+    },
+    {
+      "planId": "plan-partial-1",
+      "unitId": "npm:@acme/b",
+      "version": "0.1.1",
+      "target": "source",
+      "registry": "npm",
+      "state": "failed",
+      "digest": null,
+      "externalId": null,
+      "message": "transient failure"
+    }
+  ]
+}

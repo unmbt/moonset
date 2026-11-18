@@ -128,3 +128,39 @@ test "pre states reject corrupt modes tags and counters" {
     assert_true(rejected)
   }
 }
+
+///|
+test "schema validates propertyNames pattern and config reads changelog disabled and repo" {
+  let bad_unit_key = try {
+    ignore(
+      @engine.parse_config(
+        "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"coexist\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\".\",\"manager\":\"npm\",\"includeRoot\":false}],\"units\":{\"invalid key\":{}}}}}",
+      ),
+    )
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(bad_unit_key)
+
+  let bad_bridge = try {
+    ignore(
+      @engine.parse_config(
+        "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\".\",\"manager\":\"npm\",\"includeRoot\":false}],\"bridges\":[{\"consumer\":\"bad\",\"producer\":\"npm:@a/b\",\"kind\":\"build\",\"bump\":\"patch\",\"waitFor\":\"build\"}]}}}",
+      ),
+    )
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(bad_bridge)
+
+  let disabled = @engine.parse_config("{\"changelog\":false}")
+  assert_true(!disabled.changelog_enabled)
+
+  let with_repo = @engine.parse_config(
+    "{\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"unmbt/moonset\",\"disableThanks\":true}}}",
+  )
+  assert_eq(with_repo.github, Some("unmbt/moonset"))
+  assert_true(!with_repo.github_thanks)
+}

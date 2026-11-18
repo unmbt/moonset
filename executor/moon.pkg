@@ -1,0 +1,26 @@
+import {
+  "unmbt/moonset/model",
+  "unmbt/moonset/engine",
+  "unmbt/moonset/workspace",
+  "unmbt/moonset/adapters",
+  "moonbitlang/core/json",
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/path",
+  "moonbitlang/core/env",
+}
+
+supported_targets = "native"
+
+options(
+  "allow-experimental-packages": [
+    "moonbitlang/core/async",
+    "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/shell",
+  ],
+)
+
+import {
+  "moonbitlang/core/encoding/utf8",
+} for "test"

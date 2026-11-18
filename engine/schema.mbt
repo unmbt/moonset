@@ -7,6 +7,31 @@ fn property(value : Json, key : String) -> Json {
 }
 
 ///|
+fn has_whitespace(text : String) -> Bool {
+  text.contains(" ") ||
+  text.contains("\t") ||
+  text.contains("\n") ||
+  text.contains("\r")
+}
+
+///|
+fn matches_schema_pattern(text : String, pattern : String) -> Bool {
+  if pattern == "^(moonbit|npm|cargo):[^\\s]+$" {
+    let suffix = if text.has_prefix("moonbit:") {
+      text[8:].to_owned()
+    } else if text.has_prefix("npm:") {
+      text[4:].to_owned()
+    } else if text.has_prefix("cargo:") {
+      text[6:].to_owned()
+    } else {
+      return false
+    }
+    return suffix != "" && !has_whitespace(suffix)
+  }
+  true
+}
+
+///|
 fn schema_issue(
   value : Json,
   schema : Json,
@@ -63,6 +88,21 @@ fn schema_issue(
           }
         }
       }
+      match property(schema, "propertyNames") {
+        Object(_) as key_schema =>
+          for key, _ in fields {
+            if schema_issue(
+                Json::string(key),
+                key_schema,
+                root,
+                path + "." + key,
+              )
+              is Some(issue) {
+              return Some(issue)
+            }
+          }
+        _ => ()
+      }
       let props = property(schema, "properties")
       for key, item in fields {
         let child = property(props, key)
@@ -95,10 +135,24 @@ fn schema_issue(
         }
       }
     }
-    String(text) =>
+    String(text) => {
       if property(schema, "minLength") is Number(min, ..) &&
         text.length().to_double() < min {
         return Some(path + ": empty string")
+      }
+      if property(schema, "pattern") is String(pattern) &&
+        !matches_schema_pattern(text, pattern) {
+        return Some(path + ": string does not match required pattern")
+      }
+    }
+    _ => ()
+  }
+  match (property(schema, "if"), property(schema, "then")) {
+    (Object(_) as condition, Object(_) as branch) =>
+      if schema_issue(value, condition, root, path) is None {
+        if schema_issue(value, branch, root, path) is Some(issue) {
+          return Some(issue)
+        }
       }
     _ => ()
   }

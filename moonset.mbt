@@ -81,3 +81,22 @@ pub using @api {
   trait OperationalAdapter,
   generator_result,
 }
+
+///|
+pub using @executor {
+  type PackOptions,
+  type PublishOptions,
+  type TagOptions,
+  type TagResult,
+  type DoctorCheck,
+  type DoctorReport,
+  trait ExecutionHost,
+  apply_version_plan,
+  commit_changes,
+  recover_version,
+  stage_lockfiles,
+  pack_artifacts,
+  publish_release,
+  create_tags,
+  run_doctor,
+}

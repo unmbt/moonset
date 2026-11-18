@@ -114,6 +114,33 @@ fn plugin_specs(value : Json) -> Map[String, @model.GeneratorPluginConfig] {
 }
 
 ///|
+fn locate_json_path(source : String, json_path : String) -> (Int32, Int32) {
+  let mut offset = 0
+  for segment in json_path.split(".") {
+    let raw = segment.to_owned()
+    if raw == "$" || raw == "" {
+      continue
+    }
+    let key = match raw.find("[") {
+      Some(index) => raw[:index].to_owned()
+      None => raw
+    }
+    if key == "" {
+      continue
+    }
+    let needle = Json::string(key).stringify()
+    if source[offset:].find(needle) is Some(found) {
+      offset = offset + found
+    }
+  }
+  let prefix = source[:offset].to_owned()
+  (
+    prefix.split("\n").count(),
+    prefix.split("\n").last().map(x => x.length() + 1).unwrap_or(1),
+  )
+}
+
+///|
 pub fn parse_config(
   source : String,
   path~ : String = ".changeset/config.json",
@@ -122,16 +149,14 @@ pub fn parse_config(
   let schema = parse_json(config_schema_text, "builtin-config-schema")
   if schema_issue(raw, schema, schema, "$") is Some(issue) {
     let json_path = issue.split(":").next().unwrap_or("$").to_owned()
-    let key = json_path.split(".").last().unwrap_or("").to_owned()
-    let offset = source.find(Json::string(key).stringify()).unwrap_or(0)
-    let prefix = source[:offset].to_owned()
+    let (line, column) = locate_json_path(source, json_path)
     raise @model.Invalid(
       @model.diagnostic(
         "invalid-config",
         issue,
         path~,
-        line=prefix.split("\n").count(),
-        column=prefix.split("\n").last().map(x => x.length() + 1).unwrap_or(1),
+        line~,
+        column~,
         json_path~,
       ),
     )
@@ -283,18 +308,50 @@ pub fn parse_config(
       code="unsupported-capability",
     )
   }
-  let changelog = match property(raw, "changelog") {
+  let format_mode = match property(raw, "format") {
+    False => "false"
+    String(s) => s
+    _ => defaults.format_mode
+  }
+  if format_mode != "auto" && format_mode != "false" {
+    invalid(
+      "External formatters are not implemented",
+      path~,
+      code="unsupported-capability",
+    )
+  }
+  let changelog_raw = property(raw, "changelog")
+  let changelog_enabled = changelog_raw != Json::boolean(false)
+  let changelog = match changelog_raw {
+    False => "none"
     String(s) => s
     { "generator": String(s), .. } => s
     _ => defaults.changelog
   }
-  let changelog_file = match property(raw, "changelog") {
+  let changelog_file = match changelog_raw {
     { "file": String(file), .. } => file
     _ => defaults.changelog_file
   }
-  let github = match property(raw, "changelog") {
-    { "repo": String(s), .. } => Some(s)
-    _ => None
+  let changelog_options = property(changelog_raw, "options")
+  let github_section = property(raw, "github")
+  let github = match property(changelog_options, "repo") {
+    String(s) if s != "" => Some(s)
+    _ =>
+      match property(github_section, "repo") {
+        String(s) if s != "" => Some(s)
+        _ =>
+          match property(changelog_raw, "repo") {
+            String(s) if s != "" => Some(s)
+            _ => None
+          }
+      }
+  }
+  let github_links = property(github_section, "links") != Json::boolean(false)
+  let github_thanks = if property(changelog_options, "disableThanks") ==
+    Json::boolean(true) {
+    false
+  } else {
+    property(github_section, "thanks") != Json::boolean(false)
   }
   let access = match property(raw, "access") {
     String(s) => s
@@ -303,6 +360,42 @@ pub fn parse_config(
   let base_branch = match property(raw, "baseBranch") {
     String(s) => s
     _ => defaults.base_branch
+  }
+  let commit_raw = property(raw, "commit")
+  let commit_mode = match commit_raw {
+    False => "never"
+    { "mode": String(mode), .. } => mode
+    _ => defaults.commit_mode
+  }
+  let commit_add_message = match property(commit_raw, "addMessage") {
+    String(msg) if msg.trim() != "" => msg
+    _ => defaults.commit_add_message
+  }
+  let commit_version_message = match property(commit_raw, "versionMessage") {
+    String(msg) if msg.trim() != "" => msg
+    _ => defaults.commit_version_message
+  }
+  let publisher = property(raw, "publisher")
+  let publisher_kind = match property(publisher, "kind") {
+    String(kind) => kind
+    _ => defaults.publisher_kind
+  }
+  let publisher_registry = match property(publisher, "registry") {
+    String(registry) => registry
+    _ => defaults.publisher_registry
+  }
+  let publisher_dry_run_first = property(publisher, "dryRunFirst") !=
+    Json::boolean(false)
+  let publisher_command = strings(property(publisher, "command"))
+  let publisher_token_env = match property(publisher, "tokenEnv") {
+    String(name) if name.trim() != "" => Some(name)
+    _ => None
+  }
+  if publisher_kind == "command" && publisher_command.is_empty() {
+    invalid(
+      "publisher.command is required when publisher.kind is 'command'",
+      path~,
+    )
   }
   let private_packages = property(raw, "privatePackages")
   let private_version = property(private_packages, "version") ==
@@ -359,12 +452,23 @@ pub fn parse_config(
       String(s) => s
       _ => defaults.pre_file
     },
+    pre_directory: match property(property(raw, "pre"), "directory") {
+      String(s) => s
+      _ => defaults.pre_directory
+    },
     mixed: mixed != Json::null(),
     formatter,
+    format_mode,
+    changelog_enabled,
     changelog,
     github,
+    github_links,
+    github_thanks,
     access,
     base_branch,
+    commit_mode,
+    commit_add_message,
+    commit_version_message,
     private_version,
     private_tag,
     private_publish,
@@ -373,6 +477,11 @@ pub fn parse_config(
     tag_after_publish,
     tag_format,
     tag_push,
+    publisher_kind,
+    publisher_registry,
+    publisher_dry_run_first,
+    publisher_command,
+    publisher_token_env,
     lockfiles,
     mixed_workspaces,
     bridges,

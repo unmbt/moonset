@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "fixed": [["acme/a", "acme/b"]],
+  "linked": [["acme/c", "acme/d"]]
+}

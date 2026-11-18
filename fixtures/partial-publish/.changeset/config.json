@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "experimental": {
+    "mixedWorkspaces": {
+      "mode": "unified",
+      "workspaces": [
+        { "id": "native", "ecosystem": "moonbit", "root": ".", "manager": "moon", "includeRoot": false },
+        { "id": "js", "ecosystem": "npm", "root": "b", "manager": "npm", "includeRoot": true }
+      ]
+    }
+  }
+}

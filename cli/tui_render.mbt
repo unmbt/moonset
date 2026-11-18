@@ -1,7 +1,7 @@
 ///|
 /// Deterministic, terminal-width independent views used by the interactive adapter
 /// and golden tests. ANSI is deliberately added by the terminal adapter only.
-pub fn render_package_page(
+fn render_package_page(
   labels : Array[String],
   versions : Array[String],
   state : SelectState,
@@ -20,7 +20,7 @@ pub fn render_package_page(
 }
 
 ///|
-pub fn render_bump_page(
+fn render_bump_page(
   unit_id : String,
   version : String,
   cursor : Int32,
@@ -38,7 +38,7 @@ pub fn render_bump_page(
 }
 
 ///|
-pub fn render_confirmation(
+fn render_confirmation(
   summary : String,
   changes : Array[@model.Change],
 ) -> String {

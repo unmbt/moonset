@@ -135,12 +135,20 @@ pub(all) struct Config {
   update_dependents : String
   changed_patterns : Array[String]
   pre_file : String
+  pre_directory : String
   mixed : Bool
   formatter : String
+  format_mode : String
+  changelog_enabled : Bool
   changelog : String
   github : String?
+  github_links : Bool
+  github_thanks : Bool
   access : String
   base_branch : String
+  commit_mode : String
+  commit_add_message : String
+  commit_version_message : String
   private_version : Bool
   private_tag : Bool
   private_publish : Bool
@@ -149,6 +157,11 @@ pub(all) struct Config {
   tag_after_publish : Bool
   tag_format : String
   tag_push : Bool
+  publisher_kind : String
+  publisher_registry : String
+  publisher_dry_run_first : Bool
+  publisher_command : Array[String]
+  publisher_token_env : String?
   lockfiles : String
   mixed_workspaces : Array[MixedWorkspaceSpec]
   bridges : Array[Bridge]
@@ -178,12 +191,20 @@ pub fn Config::default() -> Config {
     update_dependents: "out-of-range",
     changed_patterns: ["**"],
     pre_file: ".changeset/pre.json",
+    pre_directory: ".changeset/pre",
     mixed: false,
     formatter: "builtin",
+    format_mode: "auto",
+    changelog_enabled: true,
     changelog: "builtin",
     github: None,
+    github_links: true,
+    github_thanks: true,
     access: "public",
     base_branch: "main",
+    commit_mode: "never",
+    commit_add_message: "chore: add changeset",
+    commit_version_message: "chore: release",
     private_version: false,
     private_tag: false,
     private_publish: false,
@@ -192,6 +213,11 @@ pub fn Config::default() -> Config {
     tag_after_publish: true,
     tag_format: "auto",
     tag_push: false,
+    publisher_kind: "moon",
+    publisher_registry: "default",
+    publisher_dry_run_first: true,
+    publisher_command: [],
+    publisher_token_env: None,
     lockfiles: "refresh",
     mixed_workspaces: [],
     bridges: [],

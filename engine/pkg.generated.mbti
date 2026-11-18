@@ -10,13 +10,15 @@ import {
 // Values
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
-pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry) -> @model.VersionPlan raise @model.MoonsetError
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String]) -> @model.VersionPlan raise @model.MoonsetError
 
 pub fn canonical_id(String) -> String
 
-pub fn changelog_contexts(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String) -> Array[@changelog.ChangelogContext]
+pub fn changelog_contexts(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String]) -> Array[@changelog.ChangelogContext]
 
 pub fn format_changeset(@model.ChangesetDraft) -> String raise @model.MoonsetError
+
+pub fn format_tag_name(String, String, String, String) -> String
 
 pub fn matches_pattern(String, String) -> Bool
 
@@ -35,6 +37,8 @@ pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset],
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
 pub fn validate_changeset_draft(@model.ChangesetDraft) -> Unit raise @model.MoonsetError
+
+pub fn validate_git_tag_name(String) -> Unit raise @model.MoonsetError
 
 pub fn version_matches(String, String) -> Bool raise @model.MoonsetError
 

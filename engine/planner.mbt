@@ -1,7 +1,8 @@
 ///|
-fn visit(
+fn visit_execution(
   id : String,
   units : Map[String, @model.ReleaseUnit],
+  bridges : Array[@model.Bridge],
   marks : Map[String, Int32],
   trail : Array[String],
 ) -> Unit raise @model.MoonsetError {
@@ -18,10 +19,93 @@ fn visit(
   marks[id] = 1
   for dep in units[id].dependencies {
     if units.contains(dep.producer) {
-      visit(dep.producer, units, marks, trail + [id])
+      visit_execution(dep.producer, units, bridges, marks, trail + [id])
+    }
+  }
+  for bridge in bridges {
+    if bridge.consumer == id && units.contains(bridge.producer) {
+      visit_execution(bridge.producer, units, bridges, marks, trail + [id])
     }
   }
   marks[id] = 2
+}
+
+///|
+fn propagate_bridges(
+  bridges : Array[@model.Bridge],
+  ignore : Array[@model.UnitId],
+  levels : Map[String, @model.Bump],
+  reasons : Map[String, Array[String]],
+) -> Unit raise @model.MoonsetError {
+  for bridge in bridges {
+    if levels.contains(bridge.producer) {
+      let current = levels.get(bridge.consumer).unwrap_or(@model.None)
+      if bridge.bump.rank() > current.rank() {
+        if ignore.contains(bridge.consumer) {
+          invalid(
+            "Build bridge propagation requires ignored unit: " + bridge.consumer,
+            code="unsupported-capability",
+          )
+        }
+        levels[bridge.consumer] = bridge.bump
+      }
+      add_reason(
+        reasons,
+        bridge.consumer,
+        "bridge:" + bridge.producer + ":" + bridge.wait_for,
+      )
+    }
+  }
+}
+
+///|
+fn is_npm_protocol(requirement : String) -> Bool {
+  requirement == "*" ||
+  requirement.has_prefix("workspace:") ||
+  requirement.has_prefix("file:") ||
+  requirement.has_prefix("link:")
+}
+
+///|
+fn npm_range_matches(
+  requirement : String,
+  target : String,
+) -> Bool raise @model.MoonsetError {
+  let trimmed = requirement.trim().to_owned()
+  if is_npm_protocol(trimmed) {
+    return true
+  }
+  if trimmed.contains("|") ||
+    trimmed.contains(" ") ||
+    trimmed.contains(">") ||
+    trimmed.contains("<") {
+    invalid(
+      "Unsupported npm version requirement: " + requirement,
+      code="unsupported-capability",
+    )
+  }
+  let actual = parse_version(target)
+  if trimmed.has_prefix("^") {
+    let expected = parse_version(trimmed[1:].trim().to_owned())
+    if actual.compare(expected) < 0 {
+      return false
+    }
+    if expected.major > 0 {
+      actual.major == expected.major
+    } else if expected.minor > 0 {
+      actual.major == 0 && actual.minor == expected.minor
+    } else {
+      actual.major == 0 && actual.minor == 0 && actual.patch == expected.patch
+    }
+  } else if trimmed.has_prefix("~") {
+    let expected = parse_version(trimmed[1:].trim().to_owned())
+    actual.compare(expected) >= 0 &&
+    actual.major == expected.major &&
+    actual.minor == expected.minor
+  } else {
+    let expected = parse_version(trimmed)
+    actual.compare(expected) == 0
+  }
 }
 
 ///|
@@ -43,8 +127,11 @@ fn ecosystem_range_matches(
   requirement : String,
   target : String,
 ) -> Bool raise @model.MoonsetError {
-  if ecosystem != "cargo" {
+  if ecosystem == "moonbit" {
     return version_matches(requirement, target)
+  }
+  if ecosystem == "npm" {
+    return npm_range_matches(requirement, target)
   }
   if requirement == "*" {
     return true
@@ -83,12 +170,18 @@ fn ecosystem_range_rewrite(
   requirement : String,
   target : String,
 ) -> String {
-  if ecosystem == "cargo" {
-    if requirement.has_prefix("^") {
+  if ecosystem == "cargo" || ecosystem == "npm" {
+    let trimmed = requirement.trim().to_owned()
+    if trimmed == "*" ||
+      trimmed.has_prefix("workspace:") ||
+      trimmed.has_prefix("file:") ||
+      trimmed.has_prefix("link:") {
+      trimmed
+    } else if trimmed.has_prefix("^") {
       "^" + target
-    } else if requirement.has_prefix("~") {
+    } else if trimmed.has_prefix("~") {
       "~" + target
-    } else if requirement.has_prefix("=") {
+    } else if trimmed.has_prefix("=") {
       "=" + target
     } else {
       target
@@ -179,11 +272,35 @@ pub fn build_plan(
     fields[key] = ownership.owner
   }
   for id in ids {
-    visit(id, units, marks, [])
+    visit_execution(id, units, config.bridges, marks, [])
   }
   for id in config.fixed.flatten() + config.linked.flatten() + config.ignore {
     if !units.contains(id) {
       invalid("Unknown configured unit: " + id)
+    }
+  }
+  let effective_fixed = config.fixed.copy()
+  let cargo_version_paths : Map[String, Array[String]] = Map([])
+  for id in ids {
+    let unit = units[id]
+    if unit.ecosystem == "cargo" && unit.version_field == "workspace.package" {
+      let group = cargo_version_paths.get(unit.version_path).unwrap_or([])
+      group.push(unit.id)
+      cargo_version_paths[unit.version_path] = group
+    }
+  }
+  for _, group in cargo_version_paths {
+    if group.length() > 1 {
+      let occupied = effective_fixed.flatten() + config.linked.flatten()
+      if group.any(id => occupied.contains(id)) {
+        if !effective_fixed.any(existing => existing == group) {
+          invalid(
+            "Cargo packages sharing workspace.package.version must share a fixed version group",
+          )
+        }
+      } else {
+        effective_fixed.push(group)
+      }
     }
   }
   for bridge in config.bridges {
@@ -276,25 +393,7 @@ pub fn build_plan(
       }
     }
   }
-  for bridge in config.bridges {
-    if levels.contains(bridge.producer) {
-      let current = levels.get(bridge.consumer).unwrap_or(@model.None)
-      if bridge.bump.rank() > current.rank() {
-        if config.ignore.contains(bridge.consumer) {
-          invalid(
-            "Build bridge propagation requires ignored unit: " + bridge.consumer,
-            code="unsupported-capability",
-          )
-        }
-        levels[bridge.consumer] = bridge.bump
-      }
-      add_reason(
-        reasons,
-        bridge.consumer,
-        "bridge:" + bridge.producer + ":" + bridge.wait_for,
-      )
-    }
-  }
+  propagate_bridges(config.bridges, config.ignore, levels, reasons)
   for ;; {
     let before = @model.canonical_json({
       "levels": levels.map((k, v) => (k, v.text())),
@@ -309,60 +408,29 @@ pub fn build_plan(
         }
       }
     }
-    for bridge in config.bridges {
-      if levels.contains(bridge.producer) {
-        let current = levels.get(bridge.consumer).unwrap_or(@model.None)
-        if bridge.bump.rank() > current.rank() {
-          if config.ignore.contains(bridge.consumer) {
-            invalid(
-              "Build bridge propagation requires ignored unit: " +
-              bridge.consumer,
-              code="unsupported-capability",
-            )
-          }
-          levels[bridge.consumer] = bridge.bump
-        }
-        add_reason(
-          reasons,
-          bridge.consumer,
-          "bridge:" + bridge.producer + ":" + bridge.wait_for,
-        )
-      }
-    }
+    propagate_bridges(config.bridges, config.ignore, levels, reasons)
     for kind in ["fixed", "linked"] {
-      let groups = if kind == "fixed" { config.fixed } else { config.linked }
+      let groups = if kind == "fixed" { effective_fixed } else { config.linked }
       for group in groups {
         let active = group.filter(id => levels.contains(id))
         if active.is_empty() {
           continue
         }
         let mut level = @model.Patch
-        let mut highest = "0.0.0"
-        let mut max_counter = 0
+        let group_units : Array[@model.ReleaseUnit] = []
         for id in group {
-          guard units[id].version is Some(version) else {
+          let unit = units[id]
+          if unit.version is None {
             invalid("Version group contains versionless unit: " + id)
             continue
           }
-          if parse_version(version).compare(parse_version(highest)) > 0 {
-            highest = version
-          }
+          group_units.push(unit)
           let member_level = levels.get(id).unwrap_or(@model.None)
           if member_level.rank() > level.rank() {
             level = member_level
           }
-          if pre is Some(state) {
-            max_counter = max_counter.max(
-              state.next_numbers.get(id).unwrap_or(0),
-            )
-          }
         }
-        let target = increment(highest, level) +
-          (match pre {
-            Some(state) if state.mode == "active" =>
-              "-" + state.tag + ".\{max_counter}"
-            _ => ""
-          })
+        let target = compute_group_target_version(group_units, level, pre)
         for id in group {
           if kind == "linked" && !levels.contains(id) {
             continue
@@ -385,12 +453,11 @@ pub fn build_plan(
       for dep in units[id].dependencies {
         if targets.get(dep.producer) is Some(target) {
           let comparable = (
-              units[id].ecosystem == "moonbit" || units[id].ecosystem == "cargo"
+              (units[id].ecosystem == "moonbit" && dep.kind == @model.Runtime) ||
+              units[id].ecosystem == "cargo" ||
+              (units[id].ecosystem == "npm" && dep.kind != @model.Development)
             ) &&
-            (dep.kind == @model.Runtime || units[id].ecosystem == "cargo") &&
-            !dep.requirement.has_prefix("workspace:") &&
-            !dep.requirement.has_prefix("file:") &&
-            !dep.requirement.has_prefix("link:")
+            !is_npm_protocol(dep.requirement)
           let outside = comparable &&
             !ecosystem_range_matches(
               units[id].ecosystem,
@@ -447,24 +514,28 @@ pub fn build_plan(
       affected_paths.push(unit.manifest)
       for dep in unit.dependencies {
         if targets.get(dep.producer) is Some(target) &&
-          target != dep.requirement &&
-          (unit.ecosystem == "moonbit" || unit.ecosystem == "cargo") &&
-          (dep.kind == @model.Runtime || unit.ecosystem == "cargo") &&
-          !dep.requirement.has_prefix("workspace:") &&
-          !dep.requirement.has_prefix("file:") &&
-          !dep.requirement.has_prefix("link:") {
-          if !ecosystem_range_matches(unit.ecosystem, dep.requirement, target) ||
-            levels[dep.producer].rank() >= config.update_dependencies.rank() {
+          (
+            (unit.ecosystem == "moonbit" && dep.kind == @model.Runtime) ||
+            unit.ecosystem == "cargo" ||
+            (unit.ecosystem == "npm" && dep.kind != @model.Development)
+          ) &&
+          !is_npm_protocol(dep.requirement) {
+          let next_requirement = ecosystem_range_rewrite(
+            unit.ecosystem,
+            dep.requirement,
+            target,
+          )
+          if next_requirement != dep.requirement &&
+            (
+              !ecosystem_range_matches(unit.ecosystem, dep.requirement, target) ||
+              levels[dep.producer].rank() >= config.update_dependencies.rank()
+            ) {
             dependency_updates.push({
               consumer: id,
               producer: dep.producer,
               path: dep.path,
               old_requirement: dep.requirement,
-              new_requirement: ecosystem_range_rewrite(
-                unit.ecosystem,
-                dep.requirement,
-                target,
-              ),
+              new_requirement: next_requirement,
               start: dep.start,
               end: dep.end,
             })

@@ -71,3 +71,33 @@ pub using @changelog {
   type GeneratorRegistry,
   trait ChangelogGenerator,
 }
+
+///|
+/// Operational execution facade backed by injectable ExecutionHost ports.
+pub using @executor {
+  type NativeHost,
+  type PackOptions,
+  type PublishOptions,
+  type TagOptions,
+  type TagResult,
+  type DoctorCheck,
+  type DoctorReport,
+  trait ExecutionHost,
+  native_host,
+  apply_version_plan,
+  apply_version_plan_with,
+  commit_changes,
+  commit_changes_with,
+  recover_version,
+  recover_version_with,
+  stage_lockfiles,
+  stage_lockfiles_with,
+  pack_artifacts,
+  pack_artifacts_with,
+  publish_release,
+  publish_release_with,
+  create_tags,
+  create_tags_with,
+  run_doctor,
+  run_doctor_with,
+}

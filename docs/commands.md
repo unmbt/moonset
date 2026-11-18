@@ -117,20 +117,20 @@ moonset pre status
 moonset pack [--package name ...] [--frozen] [--dry-run] [--json]
 ```
 
-对需要发布的单元调用相应 pack adapter。MoonBit 使用 `moon package`；JS 使用选定且固定版本的 npm/pnpm profile。捕获来源 commit、UnitId、版本、平台、归档路径和校验值；生成的 `dist/package.json` 与源码清单保持绑定。生命周期脚本由明确的打包阶段执行，查询命令不执行它们。
+对需要发布的单元调用相应 pack adapter。MoonBit 使用 `moon package`（`--dry-run` 调用 `moon package --dry-run`）；JS 使用选定且固定版本的 npm/pnpm profile（`--frozen` 附带 `--offline`）；Cargo 使用 `cargo package --allow-dirty`（`--dry-run` 使用 `cargo package --list --allow-dirty`，避免调用不存在的 `cargo package --dry-run`）。捕获来源 commit、UnitId、版本、平台、归档路径和校验值，并在非 dry-run 时记录到 `.moonset/pack-results.json`。生命周期脚本由明确的打包阶段执行，查询命令不执行它们。
 
 ## `publish`
 
 ```text
 moonset publish [--dry-run] [--registry name] [--only unit[,unit...]]
-  [--yes] [--retry count] [--json]
+  [--tag dist-tag] [--retry count] [--allow-uncommitted] [--no-tag] [--yes] [--json]
 ```
 
-发布前重新读取 workspace 和版本，校验存在 release commit 或显式 `--allow-uncommitted`。单生态默认 publisher 是 `moon publish`：先对全部目标执行 `--dry-run`，确认成功后才执行真实发布。混合模式按 UnitId/target 选择 publisher，并验证全部必需产物；不把 JS 单元传给 moon。真实发布不自动运行 `version`。
+发布前重新读取 workspace 和版本，校验 `release-state.json` 与当前清单版本一致、若存在 `.moonset/pack-results.json` 则校验其版本/commit/文件有效性，并校验存在 release commit 或显式 `--allow-uncommitted`。支持按 `publisher.kind`（`moon` / `command`）或 `units.<id>.publisher` 路由，并按 `publisher.dryRunFirst` 决定是否在真实发布前先执行全量 preflight `--dry-run`。混合模式按 UnitId/target 选择 publisher，不把 JS/Cargo 单元传给 `moon`。真实发布不自动运行 `version`。
 
-混合模式 `--only` 使用完整 UnitId，缺少 fixed/bridge 闭包成员时失败。`--registry`、`--tag` 只有在所有选中目标均支持且含义一致时才允许覆盖，否则要求按 target 配置；npm dist-tag 不映射为 Git tag。
+混合模式 `--only` 使用完整 UnitId，缺少 fixed/bridge/runtime 闭包成员时失败（返回退出码 `1`）。`--registry`、`--tag` 只有在所有选中目标均支持且含义一致时才允许覆盖：MoonBit 不支持 `--registry` 与 `--tag`，Cargo 不支持 `--tag`；npm dist-tag 不映射为 Git tag。缺少 `--yes` 确认或工作树脏（未传 `--allow-uncommitted`）时返回退出码 `1`。
 
-默认在所有目标成功后交给 `tag` adapter 创建标签；`--no-tag` 或 `config.tag.afterPublish=false` 可关闭。部分成功返回 `3`，JSON 结果列出每个包的 published/skipped/failed 状态。
+默认在所有目标成功后（且工作树干净时）交给 `tag` adapter 创建标签；`--no-tag`、`config.tag.afterPublish=false` 或 `--allow-uncommitted` 下的脏工作树会跳过自动创建标签。部分成功返回 `3`，JSON 结果列出每个包的 published/skipped/failed/blocked/unknown 状态。
 
 ## `doctor`
 
@@ -138,7 +138,7 @@ moonset publish [--dry-run] [--registry name] [--only unit[,unit...]]
 moonset doctor [--fix] [--registry] [--output human|json]
 ```
 
-检查 MoonBit 工具链版本、Git 可用性和工作树、workspace/manifest 解析、`.changeset` 配置、publisher 登录状态（默认只做 dry-run）以及 Action 所需环境变量。默认只读；`--fix` 仅执行明确且可逆的初始化修复，并逐项确认。
+检查 MoonBit 工具链版本、Git 可用性和工作树、workspace/manifest 解析、未完成 `version-journal.json`、`.changeset` 配置、publisher 登录/preflight 状态（`--registry` 覆盖 `moon` / `npm` / `cargo`）以及 CI/Action 所需环境变量（只读校验是否存在，不输出凭据正文）。默认只读；`--fix` 执行安全可逆的初始化补缺（创建缺失的 `.changeset/config.json`、`README.md`、`.gitignore` 与 `.moonset/.gitignore`，不覆盖已有文件）。
 
 ## `tag`
 
@@ -160,7 +160,7 @@ moonset tag [--dry-run] [--push] [--force] [--format template]
 - `--yes`：跳过确认；CI 中必须显式提供。
 - `--json` 是 `--output json` 的别名。
 
-错误输出包含稳定 `code`、短消息、建议和可选 `path`/`line`/`column`。脚本不应依赖 message 文本。
+错误输出包含稳定 `code`、短消息、建议和可选 `path`/`line`/`column`。脚本不应依赖 message 文本。在 `--json` 模式下：`status` 报错保持兼容 `status` 结构（包含 `ok: false` 与 `errors` 数组）；其余命令统一返回简洁错误信封 `{"schemaVersion":1,"ok":false,"command":"<cmd>","errors":[...]}`。退出码遵循 `1`（策略/确认拦截，如 `missing-changeset`、`confirmation-required`、`dirty-working-tree`、`incomplete-selection`）、`2`（配置/changeset/参数/workspace 无效）、`3`（外部工具/Git/网络失败）。
 
 
 

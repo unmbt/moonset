@@ -1,7 +1,7 @@
 ///|
 /// Pure keyboard state used by both the native TUI and headless tests.
-#derive(Eq, Debug)
-pub(all) enum TuiKey {
+#derive(Eq)
+priv enum TuiKey {
   Up
   Down
   Left
@@ -15,13 +15,7 @@ pub(all) enum TuiKey {
 }
 
 ///|
-pub extend TuiKey with Eq::{equal, not_equal}
-
-///|
-pub extend TuiKey with Debug::{to_repr}
-
-///|
-pub(all) struct SelectState {
+priv struct SelectState {
   cursor : Int32
   selected : Array[Bool]
   cancelled : Bool
@@ -29,7 +23,7 @@ pub(all) struct SelectState {
 }
 
 ///|
-pub fn SelectState::new(length : Int32) -> SelectState {
+fn SelectState::new(length : Int32) -> SelectState {
   {
     cursor: 0,
     selected: Array::make(length, false),
@@ -39,7 +33,7 @@ pub fn SelectState::new(length : Int32) -> SelectState {
 }
 
 ///|
-pub fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
+fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
   let next = { ..state, }
   let length = state.selected.length()
   if length == 0 {
@@ -84,7 +78,7 @@ pub fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
 }
 
 ///|
-pub fn reduce_choice(
+fn reduce_choice(
   cursor : Int32,
   length : Int32,
   key : TuiKey,
@@ -105,7 +99,7 @@ pub fn reduce_choice(
 }
 
 ///|
-pub fn edit_summary(value : String, key : TuiKey) -> (String, Bool, Bool) {
+fn edit_summary(value : String, key : TuiKey) -> (String, Bool, Bool) {
   match key {
     Backspace | Delete => {
       let chars = value.to_array()

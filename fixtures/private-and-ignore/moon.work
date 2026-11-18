@@ -1,0 +1,1 @@
+members = ["./pub-pkg", "./priv-pkg", "./ignored-pkg"]

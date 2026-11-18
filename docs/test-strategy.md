@@ -2,9 +2,9 @@
 
 测试跟随 SDD 需求 ID 命名，避免只测试实现细节。
 
-Phase 1 实际验证：`moon test --target native`（engine 解析/规划 golden 与 workspace 临时目录/Git 集成）、`moon run scripts/cli-integration.mbtx`（真实可执行文件黑盒），以及 `moon run scripts/embed-schema.mbtx --check`（编译内置 schema 与文档一致）。`.github/workflows/ci.yml` 在 Windows/Linux/macOS 固定 MoonBit 0.10.20 执行 check/test/build、CLI、格式与接口检查。
+当前验证基线：`moon check --target native --deny-warn`、`moon check --target wasm-gc`、`moon test --target native`（覆盖 `model`/`engine`/`changelog`/`workspace`/`adapters`/`executor`/`cli`/`fixtures`）、`moon test --target wasm-gc`（验证纯计算核心无宿主依赖）、`moon run scripts/cli-integration.mbtx`（真实可执行文件黑盒），以及 `moon run scripts/embed-schema.mbtx --check`（编译内置 schema 与文档一致）。`.github/workflows/ci.yml` 在 Windows/Linux/macOS 固定 MoonBit 工具链执行 check/test/build、CLI、格式与接口检查。
 
-这些测试覆盖 FR-003/004/005/006、Phase 2/3 CLI 基线和 FR-018/019/023 的共存边界。Phase 4 的 registry、平台产物与跨目标续跑还需 fake adapter 集成矩阵验证；GitHub App 不属于 Phase 4。
+这些测试覆盖 FR-001～FR-013（内置/外部 CLI 插件）、FR-016～FR-022 与 FR-023/024 核心边界，以及 `fixtures/` 最小测试集和 `MIX-001`～`MIX-012` 关键场景；GitHub Action/App 服务端（FR-014/015）与跨分区自动导出（FR-023 扩展）仍待后续环境验证。
 
 ## 1. 测试层次
 
@@ -59,7 +59,7 @@ moon info
 
 变更公共 API 时审查 `pkg.generated.mbti`；文档中的 MoonBit 示例若放入 `.mbt.md`，必须用 `moon check --deny-warn` 验证。Markdown 交叉链接和 YAML workflow 也要在 CI 检查。
 
-## 5. 混合 workspace 验收矩阵（待实现）
+## 5. 混合 workspace 验收矩阵（已落地关键用例，持续扩充）
 
 | 测试编号 | 输入 | 应观察结果 |
 |---|---|---|

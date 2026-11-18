@@ -5,6 +5,7 @@ import {
   "moonbitlang/core/json",
   "unmbt/moonset/adapters",
   "unmbt/moonset/changelog",
+  "unmbt/moonset/executor",
   "unmbt/moonset/model",
   "unmbt/moonset/workspace",
 }
@@ -12,13 +13,31 @@ import {
 // Values
 pub let api_version : String
 
+pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResult
+
+pub async fn[H : @executor.ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
+
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
-pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry) -> @model.VersionPlan raise @model.MoonsetError
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String]) -> @model.VersionPlan raise @model.MoonsetError
+
+pub async fn commit_changes(String, Array[String], String) -> Bool
+
+pub async fn[H : @executor.ExecutionHost] commit_changes_with(H, String, Array[String], String) -> Bool
+
+pub async fn create_tags(@workspace.LoadedWorkspace, @executor.TagOptions) -> @executor.TagResult
+
+pub async fn[H : @executor.ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, @executor.TagOptions) -> @executor.TagResult
 
 pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
 
 pub fn generator_result(@adapters.JsonlResponse) -> (String, @json.Json) raise @model.MoonsetError
+
+pub fn native_host() -> @executor.NativeHost
+
+pub async fn pack_artifacts(@workspace.LoadedWorkspace, @executor.PackOptions) -> Array[@model.PackResult]
+
+pub async fn[H : @executor.ExecutionHost] pack_artifacts_with(H, @workspace.LoadedWorkspace, @executor.PackOptions) -> Array[@model.PackResult]
 
 pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
 
@@ -26,7 +45,23 @@ pub fn parse_config(String, path? : String) -> @model.Config raise @model.Moonse
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
+pub async fn publish_release(@workspace.LoadedWorkspace, @executor.PublishOptions) -> @model.PublishResult
+
+pub async fn[H : @executor.ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, @executor.PublishOptions) -> @model.PublishResult
+
+pub async fn recover_version(String) -> Array[String]
+
+pub async fn[H : @executor.ExecutionHost] recover_version_with(H, String) -> Array[String]
+
+pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
+
+pub async fn[H : @executor.ExecutionHost] run_doctor_with(H, String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
+
 pub async fn run_jsonl(@adapters.PluginSpec, @adapters.JsonlRequest) -> @adapters.JsonlResponse raise @model.MoonsetError
+
+pub async fn stage_lockfiles(String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
+
+pub async fn[H : @executor.ExecutionHost] stage_lockfiles_with(H, String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
 
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
@@ -57,6 +92,10 @@ pub using @model {type DependencyKind}
 
 pub using @model {type Diagnostic}
 
+pub using @executor {type DoctorCheck}
+
+pub using @executor {type DoctorReport}
+
 pub using @model {type FileEdit}
 
 pub using @adapters {type FileHost}
@@ -73,7 +112,11 @@ pub using @workspace {type LoadedWorkspace}
 
 pub using @model {type MoonsetError}
 
+pub using @executor {type NativeHost}
+
 pub using @model {type Ownership}
+
+pub using @executor {type PackOptions}
 
 pub using @model {type PackResult}
 
@@ -82,6 +125,8 @@ pub using @adapters {type PluginSpec}
 pub using @model {type PreState}
 
 pub using @adapters {type ProcessHost}
+
+pub using @executor {type PublishOptions}
 
 pub using @model {type PublishTarget}
 
@@ -94,6 +139,10 @@ pub using @model {type ReleaseState}
 pub using @model {type ReleaseUnit}
 
 pub using @model {type TagIntent}
+
+pub using @executor {type TagOptions}
+
+pub using @executor {type TagResult}
 
 pub type UnitId = String
 
@@ -108,6 +157,8 @@ pub using @adapters {trait ArtifactPort}
 pub using @changelog {trait ChangelogGenerator}
 
 pub using @adapters {trait DiscoveryPort}
+
+pub using @executor {trait ExecutionHost}
 
 pub using @adapters {trait LockfilePort}
 

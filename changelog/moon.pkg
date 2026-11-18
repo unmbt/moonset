@@ -1,5 +1,3 @@
 import {
   "unmbt/moonset/model",
 }
-
-supported_targets = "native"

@@ -1,0 +1,11 @@
+{
+  "mode": "active",
+  "tag": "alpha",
+  "initialVersions": {
+    "moonbit:acme/pre": "0.1.0"
+  },
+  "nextNumbers": {
+    "moonbit:acme/pre": 1
+  },
+  "consumed": ["first"]
+}

@@ -4,529 +4,19 @@ async fn stderr(message : String) -> Unit {
 }
 
 ///|
-async fn safe_exists(path : String) -> Bool raise @model.MoonsetError {
-  @fs.exists(path) catch {
-    error => raise @model.Io(error.to_string())
-  }
-}
-
-///|
-async fn safe_read(path : String) -> String raise @model.MoonsetError {
-  @fs.read_text(path) catch {
-    error => raise @model.Io(error.to_string())
-  }
-}
-
-///|
-async fn safe_write(
-  path : String,
-  text : String,
-) -> Unit raise @model.MoonsetError {
-  @fs.write_text(path, text) catch {
-    error => raise @model.Io(error.to_string())
-  }
-}
-
-///|
-async fn safe_mkdir(path : String) -> Unit raise @model.MoonsetError {
-  @fs.mkdir(path, recursive=true, allow_exist=true) catch {
-    error => raise @model.Io(error.to_string())
-  }
-}
-
-///|
-async fn safe_remove(path : String) -> Unit raise @model.MoonsetError {
-  @fs.remove(path, allow_missing=true) catch {
-    error => raise @model.Io(error.to_string())
-  }
-}
-
-///|
-/// Convert the host UTC millisecond clock to the stable YYYY-MM-DD form used
-/// by the builtin changelog generator.
-fn utc_date(milliseconds : UInt64) -> String {
-  let days = milliseconds.reinterpret_as_int64() / 86400000L
-  let z = days + 719468L
-  let era = if z >= 0L { z / 146097L } else { (z - 146096L) / 146097L }
-  let doe = z - era * 146097L
-  let yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
-  let year0 = yoe + era * 400L
-  let doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
-  let month0 = (5L * doy + 2L) / 153L
-  let day = doy - (153L * month0 + 2L) / 5L + 1L
-  let month = month0 + (if month0 < 10L { 3L } else { -9L })
-  let year = year0 + (if month <= 2L { 1L } else { 0L })
-  let pad = fn(value : Int64) -> String {
-    if value < 10L {
-      "0" + value.to_string()
-    } else {
-      value.to_string()
-    }
-  }
-  year.to_string() + "-" + pad(month) + "-" + pad(day)
-}
-
-///|
-fn absolute(root : String, relative_path : String) -> String {
-  @path.Path(root).join(@path.Path(relative_path)).to_string()
-}
-
-///|
-/// Windows exposes npm/pnpm through command shims; invoke them directly.
-fn package_manager_program(name : String) -> String {
-  if @env.get_env_var("ComSpec") is Some(_) && (name == "npm" || name == "pnpm") {
-    name + ".cmd"
-  } else {
-    name
-  }
-}
-
-///|
-fn manager_for_unit(
-  snapshot : @model.WorkspaceSnapshot,
-  unit : @model.ReleaseUnit,
-) -> String {
-  for workspace in snapshot.workspaces {
-    if workspace.id == unit.workspace_id {
-      return workspace.manager
-    }
-  }
-  if unit.ecosystem == "cargo" {
-    "cargo"
-  } else if unit.ecosystem == "moonbit" {
-    "moon"
-  } else {
-    "npm"
-  }
-}
-
-///|
-fn workspace_root_for_unit(
-  snapshot : @model.WorkspaceSnapshot,
-  unit : @model.ReleaseUnit,
-) -> String {
-  for workspace in snapshot.workspaces {
-    if workspace.id == unit.workspace_id {
-      return workspace.root
-    }
-  }
-  unit.root
-}
-
-///|
-async fn binary_fingerprint(path : String) -> String {
-  let bytes = @fs.read_binary(path)
-  let mut hash : UInt64 = 14695981039346656037UL
-  for byte in bytes.iter() {
-    hash = (hash ^ byte.to_uint64()) * 1099511628211UL
-  }
-  "fnv1a64:" + hash.to_string(radix=16)
-}
-
-///|
-/// Query registry presence without exposing registry diagnostics in structured state.
-async fn registry_lookup(
-  ecosystem : String,
-  manager : String,
-  name : String,
-  version : String,
-  cwd : String,
-) -> String {
-  if ecosystem == "moonbit" {
-    return "absent"
-  }
-  let package_id = name + "@" + version
-  let (program, args) = if ecosystem == "cargo" {
-    ("cargo", ["info", package_id])
-  } else {
-    (
-      package_manager_program(manager),
-      ["view", package_id, "version", "--json"],
-    )
-  }
-  let output = @shell.Cmd(program, args, cwd~).output()
-  if output.exit_code() == 0 {
-    "present"
-  } else if ecosystem == "cargo" &&
-    (
-      output.stderr().contains("could not find") ||
-      output.stderr().contains("does not exist") ||
-      output.stderr().contains("not found")
-    ) {
-    "absent"
-  } else if ecosystem == "npm" &&
-    (
-      output.stderr().contains("E404") ||
-      output.stderr().contains("404 Not Found")
-    ) {
-    "absent"
-  } else {
-    "unknown"
-  }
-}
-
-///|
-async fn recover_version(root : String) -> Int32 raise @model.MoonsetError {
-  let journal_path = absolute(root, ".moonset/version-journal.json")
-  if !safe_exists(journal_path) {
-    usage_error("No version journal exists")
-  }
-  let json = @json.parse(safe_read(journal_path)) catch {
-    _ =>
-      raise @model.Invalid(
-        @model.diagnostic("usage", "Version journal is not valid JSON"),
-      )
-  }
-  guard json is { "entries": Array(entries), .. } else {
-    raise @model.Invalid(
-      @model.diagnostic("usage", "Version journal has an invalid shape"),
-    )
-  }
-  for item in entries {
-    match item {
-      { "path": String(path), "existed": True, "content": String(content), .. } => {
-        let target = absolute(root, path)
-        safe_mkdir(@path.Path(target).dirname().to_string())
-        safe_write(target, content)
-      }
-      { "path": String(path), "existed": False, "content": String(_), .. } =>
-        safe_remove(absolute(root, path))
-      _ => usage_error("Version journal contains an invalid entry")
-    }
-  }
-  safe_remove(journal_path)
-  println("Recovered version files from " + journal_path)
-  0
-}
-
-///|
-async fn apply_version_plan(
-  root : String,
-  plan : @model.VersionPlan,
-) -> Unit raise @model.MoonsetError {
-  let originals : Array[Json] = []
-  for edit in plan.edits {
-    let target = absolute(root, edit.path)
-    let existed = safe_exists(target)
-    let current = if existed { safe_read(target) } else { "" }
-    if @model.fingerprint(Json::string(current)) != edit.before_hash {
-      usage_error("Stale version plan input: " + edit.path)
-    }
-    originals.push({ "path": edit.path, "existed": existed, "content": current })
-  }
-  let journal_dir = absolute(root, ".moonset")
-  let journal_path = absolute(root, ".moonset/version-journal.json")
-  safe_mkdir(journal_dir)
-  safe_write(
-    journal_path,
-    @model.canonical_json({
-      "planFingerprint": plan.fingerprint,
-      "entries": originals,
-    }) +
-    "\n",
-  )
-  try {
-    let mut index = 0
-    for edit in plan.edits {
-      let target = absolute(root, edit.path)
-      if edit.kind == "changeset" && edit.after_text == "" {
-        safe_remove(target)
-      } else {
-        let temporary = target + ".moonset-" + index.to_string() + ".tmp"
-        safe_mkdir(@path.Path(target).dirname().to_string())
-        safe_write(temporary, edit.after_text)
-        @fs.rename(temporary, target, replace=true)
-      }
-      index += 1
-    }
-    safe_remove(journal_path)
-  } catch {
-    error => {
-      for original in originals {
-        match original {
-          {
-            "path": String(path),
-            "existed": True,
-            "content": String(content),
-            ..
-          } => safe_write(absolute(root, path), content)
-          { "path": String(path), "existed": False, .. } =>
-            safe_remove(absolute(root, path))
-          _ => ()
-        }
-      }
-      safe_remove(journal_path)
-      raise @model.Io(error.to_string())
-    }
-  }
-}
-
-///|
-/// Copy the relevant source tree to an isolated temporary staging directory.
-async fn copy_staging_tree(source : String, destination : String) -> Unit {
-  safe_mkdir(destination)
-  for entry in @fs.readdir(source, include_hidden=true) {
-    if [".git", "node_modules", ".mooncakes", "_build", "target", ".moonset"].contains(
-        entry,
-      ) {
-      continue
-    }
-    let from = absolute(source, entry)
-    let to = absolute(destination, entry)
-    let kind = @fs.kind(from)
-    if kind == @fs.Directory {
-      copy_staging_tree(from, to)
-    } else if kind == @fs.Regular {
-      safe_mkdir(@path.Path(to).dirname().to_string())
-      @fs.write_binary(to, @fs.read_binary(from))
-    }
-  }
-}
-
-///|
-/// Apply planned edits in staging and produce lockfile edits with manager validation.
-async fn stage_lockfiles(
-  root : String,
-  loaded : @workspace.LoadedWorkspace,
-  plan : @model.VersionPlan,
-) -> @model.VersionPlan {
-  let npm_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
-    x.ecosystem == "npm"
-  })
-  let cargo_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
-    x.ecosystem == "cargo"
-  })
-  if npm_workspaces.is_empty() && cargo_workspaces.is_empty() {
-    return plan
-  }
-  let stage = @fs.tmpdir(prefix="moonset-lock-stage-")
-  defer (@fs.rmdir(stage, recursive=true, allow_missing=true) catch { _ => () })
-  copy_staging_tree(root, stage)
-  for edit in plan.edits {
-    let target = absolute(stage, edit.path)
-    if edit.kind == "changeset" && edit.after_text == "" {
-      safe_remove(target)
-    } else {
-      safe_mkdir(@path.Path(target).dirname().to_string())
-      safe_write(target, edit.after_text)
-    }
-  }
-  let lock_edits : Array[@model.FileEdit] = []
-  for workspace in npm_workspaces {
-    let workspace_root = if workspace.root == "." { "" } else { workspace.root }
-    let package_path = if workspace_root == "" {
-      "package.json"
-    } else {
-      workspace_root + "/package.json"
-    }
-    let package_json = @json.parse(safe_read(absolute(stage, package_path))) catch {
-      _ =>
-        raise @model.Invalid(
-          @model.diagnostic(
-            "invalid-package",
-            "Cannot parse package manager manifest",
-            path=package_path,
-          ),
-        )
-    }
-    let manager_value = match package_json {
-      { "packageManager": String(value), .. } => value
-      _ =>
-        raise @model.Invalid(
-          @model.diagnostic(
-            "package-manager-required",
-            "package.json must declare an exact packageManager version",
-            path=package_path,
-          ),
-        )
-    }
-    let expected_prefix = workspace.manager + "@"
-    if !manager_value.has_prefix(expected_prefix) {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "package-manager-conflict",
-          "packageManager does not match the configured workspace manager",
-          path=package_path,
-        ),
-      )
-    }
-    let version_parts = manager_value[expected_prefix.length():]
-      .to_owned()
-      .split("+")
-      .collect()
-    let exact_version = version_parts[0].to_owned()
-    if exact_version == "" || !exact_version.contains(".") {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "package-manager-required",
-          "packageManager must contain an exact version",
-          path=package_path,
-        ),
-      )
-    }
-    let manager_program = package_manager_program(workspace.manager)
-    let version_probe = @shell.Cmd(
-      manager_program,
-      ["--version"],
-      cwd=absolute(stage, workspace_root),
-    ).output()
-    if version_probe.exit_code() != 0 ||
-      version_probe.stdout().trim().to_owned() != exact_version {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "package-manager-version",
-          "Installed " +
-          workspace.manager +
-          " does not match packageManager " +
-          exact_version,
-          path=package_path,
-        ),
-      )
-    }
-    let args = if workspace.manager == "pnpm" {
-      ["install", "--lockfile-only", "--ignore-scripts", "--offline"]
-    } else {
-      ["install", "--package-lock-only", "--ignore-scripts", "--offline"]
-    }
-    let install = @shell.Cmd(
-      manager_program,
-      args,
-      cwd=absolute(stage, workspace_root),
-    ).output()
-    if install.exit_code() != 0 {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-stage-failed",
-          "Package manager could not resolve lockfile offline: " +
-          install.stderr(),
-          path=package_path,
-        ),
-      )
-    }
-    let lock_path = if workspace.manager == "pnpm" {
-      if workspace_root == "" {
-        "pnpm-lock.yaml"
-      } else {
-        workspace_root + "/pnpm-lock.yaml"
-      }
-    } else if workspace_root == "" {
-      "package-lock.json"
-    } else {
-      workspace_root + "/package-lock.json"
-    }
-    let generated_path = absolute(stage, lock_path)
-    if !safe_exists(generated_path) {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-missing",
-          "Package manager did not produce its declared lockfile",
-          path=lock_path,
-        ),
-      )
-    }
-    let after = safe_read(generated_path)
-    let source_path = absolute(root, lock_path)
-    let before = if safe_exists(source_path) {
-      safe_read(source_path)
-    } else {
-      ""
-    }
-    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-out-of-date",
-          "Generated lockfile differs in verify-only mode",
-          path=lock_path,
-        ),
-      )
-    }
-    if before != after {
-      lock_edits.push({
-        path: lock_path,
-        kind: "lockfile",
-        owner: workspace.id,
-        before_hash: @model.fingerprint(Json::string(before)),
-        after_text: after,
-        atomic_write: true,
-      })
-    }
-  }
-  for workspace in cargo_workspaces {
-    let workspace_root = if workspace.root == "." { "" } else { workspace.root }
-    let cwd = absolute(stage, workspace_root)
-    let generated = @shell.Cmd(
-      "cargo",
-      ["generate-lockfile", "--offline"],
-      cwd~,
-    ).output()
-    if generated.exit_code() != 0 {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-stage-failed",
-          "Cargo could not stage Cargo.lock: " + generated.stderr(),
-        ),
-      )
-    }
-    let lock_path = if workspace_root == "" {
-      "Cargo.lock"
-    } else {
-      workspace_root + "/Cargo.lock"
-    }
-    let generated_path = absolute(stage, lock_path)
-    if !safe_exists(generated_path) {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-missing",
-          "Cargo did not produce Cargo.lock",
-          path=lock_path,
-        ),
-      )
-    }
-    let after = safe_read(generated_path)
-    let source_path = absolute(root, lock_path)
-    let before = if safe_exists(source_path) {
-      safe_read(source_path)
-    } else {
-      ""
-    }
-    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "lockfile-out-of-date",
-          "Cargo.lock differs in verify-only mode",
-          path=lock_path,
-        ),
-      )
-    }
-    if before != after {
-      lock_edits.push({
-        path: lock_path,
-        kind: "lockfile",
-        owner: workspace.id,
-        before_hash: @model.fingerprint(Json::string(before)),
-        after_text: after,
-        atomic_write: true,
-      })
-    }
-  }
-  if loaded.snapshot.config.lockfiles == "verify-only" {
-    return plan
-  }
-  let edits = plan.edits + lock_edits
-  {
-    ..plan,
-    edits,
-    fingerprint: @model.fingerprint({
-      "base": plan.fingerprint,
-      "lockfiles": lock_edits.map(x => x.to_json()),
-    }),
-  }
-}
-
-///|
 async fn version_command(options : Options) -> Int32 {
   if options.recover {
-    return recover_version(options.cwd)
+    let recovered = @executor.recover_version(options.cwd)
+    if options.json {
+      println(@model.canonical_json({ "recovered": recovered }))
+    } else if !options.quiet {
+      println(
+        "Recovered " +
+        recovered.length().to_string() +
+        " files from .moonset/version-journal.json",
+      )
+    }
+    return 0
   }
   let loaded = @workspace.discover(
     options.cwd,
@@ -547,8 +37,10 @@ async fn version_command(options : Options) -> Int32 {
   }
   let texts : Map[String, String] = Map([])
   let metadata : Map[String, Json] = Map([])
-  if !options.no_changelog &&
-    !["builtin", "git", "github"].contains(generator_name) {
+  let today = @executor.utc_date(@env.now())
+  if loaded.snapshot.config.changelog_enabled &&
+    !options.no_changelog &&
+    !["builtin", "git", "github", "none"].contains(generator_name) {
     let plugin = match loaded.snapshot.config.generators.get(generator_name) {
       Some(plugin) => plugin
       None =>
@@ -571,7 +63,8 @@ async fn version_command(options : Options) -> Int32 {
       loaded.snapshot,
       analysis,
       version_options,
-      generated_at=utc_date(@env.now()),
+      generated_at=today,
+      changeset_commits=loaded.changeset_commits,
     )
     for context in contexts {
       let response = @adapters.run_jsonl(
@@ -607,8 +100,9 @@ async fn version_command(options : Options) -> Int32 {
     loaded.snapshot,
     analysis,
     version_options,
-    generated_at=utc_date(@env.now()),
+    generated_at=today,
     generators~,
+    changeset_commits=loaded.changeset_commits,
   )
   let changelogs = raw_plan.changelogs.map(entry => {
     let key = entry.unit_id + "\u0000" + entry.version
@@ -641,193 +135,102 @@ async fn version_command(options : Options) -> Int32 {
     })
     { ..raw_plan, changelogs, fingerprint, }
   }
-  let plan = stage_lockfiles(loaded.snapshot.root, loaded, enriched)
-  let rendered = if options.pretty {
-    plan.to_json().stringify(indent=2)
-  } else {
-    @model.canonical_json(plan.to_json())
-  }
-  if options.dry_run || options.json {
+  let plan = @executor.stage_lockfiles(loaded.snapshot.root, loaded, enriched)
+  if options.json {
+    let rendered = if options.pretty {
+      plan.to_json().stringify(indent=2)
+    } else {
+      @model.canonical_json(plan.to_json())
+    }
     println(rendered)
   }
   if options.dry_run {
+    if !options.json && !options.quiet {
+      println(
+        "Dry run: \{plan.analysis.releases.length()} releases, \{plan.edits.length()} planned edits",
+      )
+      for release in plan.analysis.releases {
+        println(
+          "  " +
+          release.unit_id +
+          ": " +
+          release.old_version +
+          " -> " +
+          release.new_version,
+        )
+      }
+      for edit in plan.edits {
+        println("  [" + edit.kind + "] " + edit.path)
+      }
+    }
     return 0
   }
   if plan.edits.is_empty() {
     if !options.quiet && !options.json {
-      println("No releases")
+      if options.empty {
+        println("No releases (acknowledged with --empty)")
+      } else {
+        println("No releases")
+      }
     }
     return 0
   }
-  apply_version_plan(loaded.snapshot.root, plan)
+  ignore(@executor.apply_version_plan(loaded.snapshot.root, plan))
+  let mut committed = false
+  if !options.no_commit &&
+    options.snapshot is None &&
+    (
+      loaded.snapshot.config.commit_mode == "version" ||
+      loaded.snapshot.config.commit_mode == "both"
+    ) {
+    committed = @executor.commit_changes(
+      loaded.snapshot.root,
+      plan.edits.map(x => x.path),
+      loaded.snapshot.config.commit_version_message,
+    )
+  }
   if !options.quiet && !options.json {
     println("Applied " + plan.edits.length().to_string() + " version edits")
+    if committed {
+      println("Committed release changes")
+    }
   }
   0
 }
 
 ///|
-async fn git_result(
-  root : String,
-  args : Array[String],
-) -> (Int32, String, String) {
-  let output = @shell.Cmd("git", args, cwd=root).output()
-  (output.exit_code(), output.stdout(), output.stderr())
-}
-
-///|
-fn formatted_tag(intent : @model.TagIntent, template : String) -> String {
-  if template == "" {
-    return intent.name
-  }
-  let parts = intent.unit_id.split(":").collect()
-  let ecosystem = if parts.length() > 0 {
-    parts[0].to_owned()
-  } else {
-    "moonbit"
-  }
-  let name = if intent.unit_id.find(":") is Some(index) {
-    intent.unit_id[index + 1:].to_owned()
-  } else {
-    intent.unit_id
-  }
-  template
-  .replace_all(old="{ecosystem}", new=ecosystem)
-  .replace_all(old="{name}", new=name)
-  .replace_all(old="{version}", new=intent.version)
-}
-
-///|
 async fn tag_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  let state_path = absolute(loaded.snapshot.root, ".moonset/release-state.json")
-  if !@fs.exists(state_path) {
-    usage_error("No release state exists; run version first")
-  }
-  let state = @json.parse(@fs.read_text(state_path)) catch {
-    _ =>
-      raise @model.Invalid(
-        @model.diagnostic("usage", "Release state is not valid JSON"),
-      )
-  }
-  guard state is { "tags": Array(items), .. } else {
-    raise @model.Invalid(
-      @model.diagnostic("usage", "Release state has no tag intents"),
-    )
-  }
-  let intents : Array[@model.TagIntent] = []
-  for item in items {
-    guard item
-      is {
-        "unitId": String(unit_id),
-        "version": String(version),
-        "name": String(name),
-        ..
-      } else {
-      usage_error("Release state contains an invalid tag intent")
-    }
-    intents.push({ unit_id, version, name, })
-  }
-  let configured_format = if options.tag_format == "" {
-    loaded.snapshot.config.tag_format
-  } else {
-    options.tag_format
-  }
-  let configured_format = if configured_format == "auto" {
-    ""
-  } else {
-    configured_format
-  }
-  for intent in intents {
-    let mut unit : @model.ReleaseUnit? = None
-    for candidate in loaded.snapshot.units {
-      if candidate.id == intent.unit_id {
-        unit = Some(candidate)
-      }
-    }
-    if unit is Some(value) &&
-      value.visibility == "private" &&
-      !loaded.snapshot.config.private_tag {
-      usage_error("Tagging private unit is disabled: " + intent.unit_id)
-    }
-  }
-  let names = intents.map(intent => formatted_tag(intent, configured_format))
-  for name in names {
-    if name == "" ||
-      name.contains(" ") ||
-      name.contains("..") ||
-      name.has_prefix("-") {
-      usage_error("Invalid Git tag name: " + name)
-    }
-  }
-  let (head_code, head_out, head_err) = git_result(loaded.snapshot.root, [
-    "rev-parse", "HEAD",
-  ])
-  if head_code != 0 {
-    raise @model.Io(head_err)
-  }
-  match state {
-    { "sourceHead": String(source_head), .. } if source_head != "" &&
-      source_head != head_out.trim().to_owned() =>
-      usage_error("Git HEAD changed since version plan was applied")
-    _ => ()
-  }
-  let (dirty_code, dirty_out, _) = git_result(loaded.snapshot.root, [
-    "status", "--porcelain",
-  ])
-  if dirty_code == 0 && dirty_out.trim() != "" {
-    usage_error("Working tree is dirty; commit version changes before tagging")
-  }
-  if options.dry_run || options.json {
-    let output : Json = {
-      "schemaVersion": 1,
-      "head": head_out.trim(),
-      "tags": names,
-      "dryRun": options.dry_run,
-    }
+  let result = @executor.create_tags(loaded, {
+    dry_run: options.dry_run,
+    push: options.tag_push,
+    force: options.tag_force,
+    yes: options.yes,
+    format: options.tag_format,
+  })
+  if options.json {
+    let json = result.to_json()
     println(
       if options.pretty {
-        output.stringify(indent=2)
+        json.stringify(indent=2)
       } else {
-        @model.canonical_json(output)
+        @model.canonical_json(json)
       },
     )
-  }
-  if options.dry_run {
-    return 0
-  }
-  if options.tag_force && !options.yes {
-    usage_error("--force requires --yes for tag")
-  }
-  for name in names {
-    let (existing_code, _, _) = git_result(loaded.snapshot.root, [
-      "rev-parse",
-      "--verify",
-      "refs/tags/" + name,
-    ])
-    if existing_code == 0 && !options.tag_force {
-      usage_error("Tag already exists: " + name)
-    }
-    let args = if options.tag_force {
-      ["tag", "-f", name, "HEAD"]
+  } else if !options.quiet {
+    if result.dry_run {
+      println("Planned tags: " + result.tags.join(", "))
     } else {
-      ["tag", name, "HEAD"]
-    }
-    let (created_code, _, created_err) = git_result(loaded.snapshot.root, args)
-    if created_code != 0 {
-      raise @model.Io(created_err)
-    }
-    if options.tag_push {
-      let (pushed_code, _, pushed_err) = git_result(loaded.snapshot.root, [
-        "push", "origin", name,
-      ])
-      if pushed_code != 0 {
-        raise @model.Io(pushed_err)
+      if !result.created.is_empty() {
+        println("Created " + result.created.join(", "))
+      }
+      if !result.skipped.is_empty() {
+        println("Skipped existing tags: " + result.skipped.join(", "))
+      }
+      if !result.pushed.is_empty() {
+        println("Pushed " + result.pushed.join(", "))
       }
     }
-  }
-  if !options.quiet && !options.json {
-    println("Created " + names.join(", "))
   }
   0
 }
@@ -836,125 +239,25 @@ async fn tag_command(options : Options) -> Int32 {
 /// Execute the native pack adapter and return a machine-readable result.
 async fn pack_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  let adapter_registry = @adapters.AdapterRegistry::with_builtins()
-  let results : Array[Json] = []
-  for unit in loaded.snapshot.units {
-    adapter_registry.require(unit.ecosystem, @adapters.Artifact)
-    match unit.version {
-      None => ()
-      Some(version) => {
-        if options.dry_run && unit.ecosystem == "moonbit" {
-          let result : @model.PackResult = {
-            artifact_id: unit.id + "@" + version,
-            unit_id: unit.id,
-            version,
-            target: "source",
-            archive_path: "",
-            source_commit: loaded.snapshot.git_head,
-            content_hash: "",
-            verified: false,
-          }
-          results.push(result.to_json())
-          continue
-        }
-        let cwd = absolute(loaded.snapshot.root, unit.root)
-        let args = if unit.ecosystem == "moonbit" {
-          ["package", "--frozen"]
-        } else if unit.ecosystem == "cargo" {
-          if options.dry_run {
-            ["package", "--allow-dirty", "--dry-run"]
-          } else {
-            ["package", "--allow-dirty"]
-          }
-        } else if options.dry_run {
-          ["pack", "--dry-run", "--ignore-scripts", "--json"]
-        } else {
-          ["pack", "--ignore-scripts", "--json"]
-        }
-        let program = if unit.ecosystem == "moonbit" {
-          "moon"
-        } else if unit.ecosystem == "cargo" {
-          "cargo"
-        } else {
-          package_manager_program(manager_for_unit(loaded.snapshot, unit))
-        }
-        let output = @shell.Cmd(program, args, cwd~).output()
-        if output.exit_code() != 0 {
-          raise @model.Io(
-            program + " pack failed for " + unit.id + ": " + output.stderr(),
-          )
-        }
-        let (archive, content_hash, verified) = if unit.ecosystem == "cargo" {
-          if options.dry_run {
-            ("", "", false)
-          } else {
-            let workspace_root = workspace_root_for_unit(loaded.snapshot, unit)
-            let relative_archive = (if workspace_root == "" {
-                ""
-              } else {
-                workspace_root + "/"
-              }) +
-              "target/package/" +
-              unit.native_name +
-              "-" +
-              version +
-              ".crate"
-            let archive_path = absolute(loaded.snapshot.root, relative_archive)
-            if safe_exists(archive_path) {
-              (archive_path, binary_fingerprint(archive_path), true)
-            } else {
-              raise @model.Invalid(
-                @model.diagnostic(
-                  "artifact-missing",
-                  "cargo package did not produce the expected .crate archive",
-                  path=relative_archive,
-                ),
-              )
-            }
-          }
-        } else {
-          let packed = @json.parse(output.stdout()) catch { _ => Json::null() }
-          let (filename, integrity) = match packed {
-            Array(
-              [
-                {
-                  "filename": String(filename),
-                  "integrity": String(integrity),
-                  ..
-                },
-                ..,
-              ]
-            ) => (filename, integrity)
-            _ => ("", "")
-          }
-          (
-            filename,
-            integrity,
-            unit.ecosystem == "npm" && filename != "" && integrity != "",
-          )
-        }
-        let result : @model.PackResult = {
-          artifact_id: unit.id + "@" + version,
-          unit_id: unit.id,
-          version,
-          target: "source",
-          archive_path: archive,
-          source_commit: loaded.snapshot.git_head,
-          content_hash,
-          verified,
-        }
-        results.push(result.to_json())
-      }
-    }
-  }
-  let result : Json = {
+  let results = @executor.pack_artifacts(loaded, {
+    dry_run: options.dry_run,
+    frozen: options.frozen,
+    packages: options.packages,
+  })
+  let output : Json = {
     "schemaVersion": 1,
     "dryRun": options.dry_run,
-    "results": results,
+    "results": results.map(x => x.to_json()),
   }
   if options.json {
-    println(@model.canonical_json(result))
-  } else {
+    println(
+      if options.pretty {
+        output.stringify(indent=2)
+      } else {
+        @model.canonical_json(output)
+      },
+    )
+  } else if !options.quiet {
     println("Packed " + results.length().to_string() + " artifacts")
   }
   0
@@ -964,375 +267,76 @@ async fn pack_command(options : Options) -> Int32 {
 /// Publish versioned units with durable per-target status.
 async fn publish_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  let adapter_registry = @adapters.AdapterRegistry::with_builtins()
-  let state_path = absolute(loaded.snapshot.root, ".moonset/release-state.json")
-  if !safe_exists(state_path) {
-    usage_error("No release state exists; run version first")
-  }
-  let state = @json.parse(safe_read(state_path)) catch {
-    _ =>
-      raise @model.Invalid(
-        @model.diagnostic("usage", "Release state is not valid JSON"),
-      )
-  }
-  guard state
-    is { "planFingerprint": String(plan_id), "releases": Array(items), .. } else {
-    raise @model.Invalid(
-      @model.diagnostic("usage", "Release state has an invalid shape"),
-    )
-  }
-  for item in items {
-    guard item is { "unitId": String(unit_id), "publish": True, .. } else {
-      continue
-    }
-    if !options.only.is_empty() && !options.only.contains(unit_id) {
-      continue
-    }
-    for unit in loaded.snapshot.units {
-      if unit.id == unit_id {
-        adapter_registry.require(unit.ecosystem, @adapters.Publish)
-      }
-    }
-  }
-  let statuses : Array[Json] = []
-  let completed : Map[String, Bool] = Map([])
-  let uncertain : Map[String, Bool] = Map([])
-  let mut failed = false
-  let previous_path = absolute(
-    loaded.snapshot.root,
-    ".moonset/publish-state.json",
-  )
-  if safe_exists(previous_path) {
-    let previous = @json.parse(safe_read(previous_path)) catch {
-      _ => Json::null()
-    }
-    match previous {
-      {
-        "planId": String(previous_plan),
-        "statuses": Array(previous_statuses),
-        ..
-      } if previous_plan == plan_id =>
-        for previous_status in previous_statuses {
-          match previous_status {
-            {
-              "unitId": String(previous_unit),
-              "version": String(previous_version),
-              "target": String(previous_target),
-              "state": String(previous_state),
-              ..
-            } =>
-              if previous_state == "published" {
-                completed[previous_unit +
-                "@" +
-                previous_version +
-                "/" +
-                previous_target] = true
-              } else if previous_state == "unknown" ||
-                previous_state == "publishing" {
-                uncertain[previous_unit +
-                "@" +
-                previous_version +
-                "/" +
-                previous_target] = true
-              }
-            _ => ()
-          }
-          statuses.push(previous_status)
-        }
-      _ => ()
-    }
-  }
-  let targets : Array[(String, String, String, String, String)] = []
-  for item in items {
-    guard item
-      is {
-        "unitId": String(unit_id),
-        "newVersion": String(version),
-        "publish": True,
-        ..
-      } else {
-      continue
-    }
-    if !options.only.is_empty() && !options.only.contains(unit_id) {
-      continue
-    }
-    if completed.contains(unit_id + "@" + version + "/source") {
-      continue
-    }
-    if uncertain.contains(unit_id + "@" + version + "/source") {
-      failed = true
-      statuses.push({
-        "planId": plan_id,
-        "unitId": unit_id,
-        "version": version,
-        "target": "source",
-        "state": "blocked",
-        "message": "Previous publish outcome is unknown; verify the registry before retrying",
-      })
-      continue
-    }
-    let mut unit : @model.ReleaseUnit? = None
-    for candidate in loaded.snapshot.units {
-      if candidate.id == unit_id {
-        unit = Some(candidate)
-      }
-    }
-    match unit {
-      None => {
-        failed = true
-        statuses.push({
-          "unitId": unit_id,
-          "version": version,
-          "target": "source",
-          "state": "blocked",
-          "message": "unit not found",
-        })
-      }
-      Some(unit) => {
-        let cwd = absolute(loaded.snapshot.root, unit.root)
-        let registry_state = registry_lookup(
-          unit.ecosystem,
-          manager_for_unit(loaded.snapshot, unit),
-          unit.native_name,
-          version,
-          cwd,
-        )
-        if registry_state == "present" {
-          statuses.push({
-            "planId": plan_id,
-            "unitId": unit_id,
-            "version": version,
-            "target": "source",
-            "registry": if unit.ecosystem == "cargo" {
-              "crates.io"
-            } else if unit.ecosystem == "npm" {
-              "npm"
-            } else {
-              "mooncakes"
-            },
-            "state": "published",
-            "message": "already published",
-          })
-          completed[unit_id + "@" + version + "/source"] = true
-          continue
-        }
-        if registry_state == "unknown" {
-          failed = true
-          statuses.push({
-            "planId": plan_id,
-            "unitId": unit_id,
-            "version": version,
-            "target": "source",
-            "registry": if unit.ecosystem == "cargo" {
-              "crates.io"
-            } else if unit.ecosystem == "npm" {
-              "npm"
-            } else {
-              "mooncakes"
-            },
-            "state": "blocked",
-            "message": "Could not determine whether the package is already published",
-          })
-          continue
-        }
-        let program = if unit.ecosystem == "moonbit" {
-          "moon"
-        } else if unit.ecosystem == "cargo" {
-          "cargo"
-        } else {
-          package_manager_program(manager_for_unit(loaded.snapshot, unit))
-        }
-        let preflight_args = if unit.ecosystem == "moonbit" {
-          ["publish", "--dry-run"]
-        } else if unit.ecosystem == "cargo" {
-          ["publish", "--dry-run", "--allow-dirty"]
-        } else {
-          ["publish", "--dry-run", "--ignore-scripts"]
-        }
-        let preflight = @shell.Cmd(program, preflight_args, cwd~).output()
-        let ok = preflight.exit_code() == 0
-        if !ok {
-          failed = true
-        }
-        statuses.push({
-          "planId": plan_id,
-          "unitId": unit_id,
-          "version": version,
-          "target": "source",
-          "registry": if unit.ecosystem == "npm" {
-            "npm"
-          } else if unit.ecosystem == "cargo" {
-            "crates.io"
-          } else {
-            "mooncakes"
-          },
-          "state": if ok {
-            "preflighted"
-          } else {
-            "blocked"
-          },
-          "message": if ok {
-            Json::null()
-          } else {
-            Json::string("Registry preflight failed")
-          },
-        })
-        if ok {
-          targets.push(
-            (
-              unit_id,
-              version,
-              unit.ecosystem,
-              manager_for_unit(loaded.snapshot, unit),
-              cwd,
-            ),
-          )
-        }
-      }
-    }
-  }
-  safe_mkdir(absolute(loaded.snapshot.root, ".moonset"))
-  safe_write(
-    absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
-    @model.canonical_json({
-      "schemaVersion": 1,
-      "planId": plan_id,
-      "statuses": statuses,
-    }) +
-    "\n",
-  )
-  if options.dry_run || failed {
-    let result : Json = {
-      "schemaVersion": 1,
-      "planId": plan_id,
-      "dryRun": options.dry_run,
-      "complete": false,
-      "statuses": statuses,
-    }
-    if options.json {
-      println(@model.canonical_json(result))
-    } else {
-      println(
-        if failed {
-          "Publish preflight failed"
-        } else {
-          "Publish preflight complete"
-        },
-      )
-    }
-    return if failed { 3 } else { 0 }
-  }
-  for (unit_id, version, ecosystem, manager, cwd) in targets {
-    let program = if ecosystem == "moonbit" {
-      "moon"
-    } else if ecosystem == "cargo" {
-      "cargo"
-    } else {
-      package_manager_program(manager)
-    }
-    let args = if ecosystem == "moonbit" {
-      ["publish"]
-    } else if ecosystem == "cargo" {
-      ["publish", "--allow-dirty"]
-    } else {
-      ["publish", "--ignore-scripts"]
-    }
-    statuses.push({
-      "planId": plan_id,
-      "unitId": unit_id,
-      "version": version,
-      "target": "source",
-      "registry": if ecosystem == "npm" {
-        "npm"
-      } else if ecosystem == "cargo" {
-        "crates.io"
-      } else {
-        "mooncakes"
-      },
-      "state": "publishing",
-      "message": Json::null(),
-    })
-    safe_write(
-      absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
-      @model.canonical_json({
-        "schemaVersion": 1,
-        "planId": plan_id,
-        "statuses": statuses,
-      }) +
-      "\n",
-    )
-    let output = @shell.Cmd(program, args, cwd~).output()
-    let ok = output.exit_code() == 0
-    if !ok {
-      failed = true
-    }
-    statuses.push({
-      "planId": plan_id,
-      "unitId": unit_id,
-      "version": version,
-      "target": "source",
-      "registry": if ecosystem == "npm" {
-        "npm"
-      } else if ecosystem == "cargo" {
-        "crates.io"
-      } else {
-        "mooncakes"
-      },
-      "state": if ok {
-        "published"
-      } else {
-        "unknown"
-      },
-      "message": if ok {
-        Json::null()
-      } else {
-        Json::string(
-          "Publisher failed after invocation; verify registry state before retrying",
-        )
-      },
-    })
-    safe_write(
-      absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
-      @model.canonical_json({
-        "schemaVersion": 1,
-        "planId": plan_id,
-        "statuses": statuses,
-      }) +
-      "\n",
-    )
-  }
-  safe_mkdir(absolute(loaded.snapshot.root, ".moonset"))
-  safe_write(
-    absolute(loaded.snapshot.root, ".moonset/publish-state.json"),
-    @model.canonical_json({
-      "schemaVersion": 1,
-      "planId": plan_id,
-      "statuses": statuses,
-    }) +
-    "\n",
-  )
-  let result : Json = {
-    "schemaVersion": 1,
-    "planId": plan_id,
-    "dryRun": options.dry_run,
-    "complete": !failed,
-    "statuses": statuses,
-  }
+  let result = @executor.publish_release(loaded, {
+    dry_run: options.dry_run,
+    only: options.only,
+    registry: options.registry,
+    tag: options.dist_tag,
+    yes: options.yes,
+    allow_uncommitted: options.allow_uncommitted,
+    retry: options.retry,
+    no_tag: options.no_tag,
+  })
+  let json = result.to_json()
   if options.json {
-    println(@model.canonical_json(result))
-  } else {
     println(
-      if failed {
-        "Publish failed; see .moonset/publish-state.json"
+      if options.pretty {
+        json.stringify(indent=2)
       } else {
-        "Publish complete"
+        @model.canonical_json(json)
       },
     )
+  } else if !options.quiet {
+    if options.dry_run {
+      println("Publish preflight complete")
+    } else if result.complete {
+      println("Publish complete")
+    } else {
+      println("Publish incomplete; see .moonset/publish-state.json")
+    }
   }
-  if failed {
+  let has_failed = result.statuses.any(s => {
+    s.state == @model.Failed ||
+    s.state == @model.Blocked ||
+    s.state == @model.Unknown
+  })
+  if has_failed || (!options.dry_run && !result.complete) {
     3
   } else {
     0
+  }
+}
+
+///|
+async fn doctor_command(options : Options) -> Int32 {
+  let report = @executor.run_doctor(
+    options.cwd,
+    config_path?=options.config,
+    check_registry=options.check_registry,
+    fix=options.fix,
+  )
+  if options.json {
+    let json = report.to_json()
+    println(
+      if options.pretty {
+        json.stringify(indent=2)
+      } else {
+        @model.canonical_json(json)
+      },
+    )
+  } else if !options.quiet {
+    for check in report.checks {
+      let badge = if check.ok { "PASS" } else { "FAIL" }
+      println("[" + badge + "] " + check.name + ": " + check.message)
+      if check.suggestion is Some(tip) {
+        println("  hint: " + tip)
+      }
+    }
+  }
+  if report.ok {
+    0
+  } else {
+    1
   }
 }
 
@@ -1355,22 +359,53 @@ async fn write_new_file(path : String, content : String) -> Bool {
 ///|
 async fn init_command(options : Options) -> Int32 {
   let _force = options.force
-  let dir = @path.Path(options.cwd).join(@path.Path(".changeset")).to_string()
-  let config_path = @path.Path(dir).join(@path.Path("config.json")).to_string()
-  let config = "{\n  \"changelog\": {\"generator\": \"builtin\"},\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"commit\": {\"mode\": \"never\"},\n  \"formatter\": \"builtin\"\n}\n"
+  let config_path = match options.config {
+    Some(custom) =>
+      if @path.Path(custom).is_absolute() {
+        custom
+      } else {
+        @path.Path(options.cwd).join(@path.Path(custom)).to_string()
+      }
+    None =>
+      @path.Path(options.cwd)
+      .join(@path.Path(".changeset/config.json"))
+      .to_string()
+  }
+  let dir = @path.Path(config_path).dirname().to_string()
+  let config = "{\n  \"schemaVersion\": 1,\n  \"changelog\": {\"generator\": \"builtin\"},\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"commit\": {\"mode\": \"never\"},\n  \"formatter\": \"builtin\"\n}\n"
   let created : Array[String] = []
+  let skipped : Array[String] = []
+  let conflicts : Array[String] = []
+  let rel_config = @path.Path(config_path)
+    .relative(base=@path.Path(options.cwd))
+    .to_string()
+    .replace_all(old="\\", new="/")
   if write_new_file(config_path, config) {
-    created.push(".changeset/config.json")
+    created.push(rel_config)
+  } else {
+    skipped.push(rel_config)
   }
   let readme = @path.Path(dir).join(@path.Path("README.md")).to_string()
+  let rel_readme = @path.Path(readme)
+    .relative(base=@path.Path(options.cwd))
+    .to_string()
+    .replace_all(old="\\", new="/")
   if write_new_file(
       readme, "# Changesets\n\nRun moonset add to record a release.\n",
     ) {
-    created.push(".changeset/README.md")
+    created.push(rel_readme)
+  } else {
+    skipped.push(rel_readme)
   }
   let gitignore = @path.Path(dir).join(@path.Path(".gitignore")).to_string()
+  let rel_gitignore = @path.Path(gitignore)
+    .relative(base=@path.Path(options.cwd))
+    .to_string()
+    .replace_all(old="\\", new="/")
   if write_new_file(gitignore, "pre.json\n") {
-    created.push(".changeset/.gitignore")
+    created.push(rel_gitignore)
+  } else {
+    skipped.push(rel_gitignore)
   }
   let state_dir = @path.Path(options.cwd)
     .join(@path.Path(".moonset"))
@@ -1380,15 +415,24 @@ async fn init_command(options : Options) -> Int32 {
     .to_string()
   if write_new_file(state_ignore, "version-journal.json\n") {
     created.push(".moonset/.gitignore")
+  } else {
+    skipped.push(".moonset/.gitignore")
   }
   if options.json {
-    println(@model.canonical_json({ "created": created, "config": config }))
+    println(
+      @model.canonical_json({
+        "created": created,
+        "skipped": skipped,
+        "conflicts": conflicts,
+        "config": config,
+      }),
+    )
   } else if !options.quiet {
     println(
       if created.is_empty() {
         "Changeset configuration already exists"
       } else {
-        "Initialized .changeset"
+        "Initialized " + dir
       },
     )
   }
@@ -1396,22 +440,48 @@ async fn init_command(options : Options) -> Int32 {
 }
 
 ///|
+async fn write_unique_changeset(
+  root : String,
+  base : String,
+  preferred_id : String?,
+  text : String,
+) -> (String, String) {
+  let original = preferred_id.unwrap_or("change-" + @env.now().to_string())
+  let mut stem = original
+  let mut attempt = 0
+  for ;; {
+    let path = @path.Path(root)
+      .join(@path.Path(base))
+      .join(@path.Path(stem + ".md"))
+      .to_string()
+    if !@fs.exists(path) {
+      @fs.mkdir(
+        @path.Path(path).dirname().to_string(),
+        recursive=true,
+        allow_exist=true,
+      )
+      let file = @fs.create(path, allow_existing=false)
+      defer file.close()
+      file.write(@utf8.encode(text))
+      return (stem, path)
+    }
+    attempt += 1
+    stem = original + "-" + attempt.to_string()
+  }
+}
+
+///|
 async fn add_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  if !options.json && @io.is_tty() {
+  if !options.json &&
+    options.packages.is_empty() &&
+    !options.empty &&
+    options.summary is None &&
+    @io.is_tty() &&
+    @env.get_env_var("CI") is None {
     return interactive_add(options, loaded)
   }
-  let summary = options.summary.unwrap_or("")
-  let package_text = options.package_name.unwrap_or("")
-  let names : Array[String] = if package_text == "" {
-    []
-  } else {
-    package_text
-    .split(",")
-    .map(x => x.trim().to_owned())
-    .filter(x => x != "")
-    .collect()
-  }
+  let summary = options.summary.unwrap_or("").trim().to_owned()
   let bump_text = options.bump.unwrap_or("patch")
   let bump = match bump_text {
     "major" => @model.Major
@@ -1425,48 +495,76 @@ async fn add_command(options : Options) -> Int32 {
         ),
       )
   }
-  let selected : Array[@model.Change] = if options.empty {
-    []
-  } else {
-    names.map(name => @model.Change::{
-      unit_id: @engine.canonical_id(name),
-      bump,
-    })
-  }
-  if selected.is_empty() && !options.empty {
-    raise @model.Invalid(
-      @model.diagnostic(
-        "usage", "add requires --package or --empty in non-interactive mode",
-      ),
-    )
+  let selected : Array[@model.Change] = []
+  if !options.empty {
+    if options.packages.is_empty() {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "usage", "add requires --package or --empty in non-interactive mode",
+        ),
+      )
+    }
+    for name in options.packages {
+      if loaded.snapshot.config.mixed && !name.contains(":") {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "invalid-input",
+            "Mixed mode requires ecosystem-prefixed UnitId: " + name,
+          ),
+        )
+      }
+      let unit_id = @engine.canonical_id(name)
+      if !loaded.snapshot.units.any(u => u.id == unit_id) {
+        raise @model.Invalid(
+          @model.diagnostic("unknown-unit", "Unknown package: " + name),
+        )
+      }
+      if !selected.any(c => c.unit_id == unit_id) {
+        selected.push({ unit_id, bump, })
+      }
+    }
+    if summary == "" {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "invalid-input", "Changeset summary cannot be empty without --empty",
+        ),
+      )
+    }
   }
   let text = if options.empty {
-    "---\n---\n\n" + summary.trim().to_owned() + "\n"
+    if summary == "" {
+      "---\n---\n"
+    } else {
+      "---\n---\n\n" + summary + "\n"
+    }
   } else {
     @engine.format_changeset(@model.ChangesetDraft::{
       releases: selected,
       summary,
     })
   }
-  let base = loaded.changeset_directory
-  let original = options.id.unwrap_or("change-" + @env.now().to_string())
-  let mut stem = original
-  let mut written = ""
-  let mut attempt = 0
-  while written == "" {
-    let path = @path.Path(loaded.snapshot.root)
-      .join(@path.Path(base))
-      .join(@path.Path(stem + ".md"))
-      .to_string()
-    if !@fs.exists(path) {
-      let file = @fs.create(path, allow_existing=false)
-      defer file.close()
-      file.write(@utf8.encode(text))
-      written = path
-    } else {
-      attempt += 1
-      stem = original + "-" + attempt.to_string()
-    }
+  let (stem, written) = write_unique_changeset(
+    loaded.snapshot.root,
+    loaded.changeset_directory,
+    options.id,
+    text,
+  )
+  let rel_written = @path.Path(written)
+    .relative(base=@path.Path(loaded.snapshot.root))
+    .to_string()
+    .replace_all(old="\\", new="/")
+  if !options.no_commit &&
+    (
+      loaded.snapshot.config.commit_mode == "add" ||
+      loaded.snapshot.config.commit_mode == "both"
+    ) {
+    ignore(
+      @executor.commit_changes(
+        loaded.snapshot.root,
+        [rel_written],
+        loaded.snapshot.config.commit_add_message,
+      ),
+    )
   }
   if options.json {
     println(
@@ -1502,40 +600,109 @@ async fn interactive_add(
   if state.cancelled || !state.confirmed {
     return 130
   }
-  let selected = []
+  let chosen_indices : Array[Int32] = []
   for i, chosen in state.selected {
     if chosen {
-      selected.push(@model.Change::{ unit_id: labels[i], bump: @model.Patch, })
+      chosen_indices.push(i)
     }
   }
-  if selected.is_empty() {
+  if chosen_indices.is_empty() {
     return 2
   }
-  @tui.print_raw("\u001b[2J\u001b[H? Enter a summary for this change\n")
-  let mut summary = ""
-  let mut submitted = false
-  while !submitted {
-    @tui.print_raw("  " + summary + "\u001b[K\r")
+  let bumps = Array::make(chosen_indices.length(), 2)
+  let choices = [@model.Major, @model.Minor, @model.Patch, @model.None]
+  let mut pkg_step = 0
+  while pkg_step < chosen_indices.length() {
+    let unit_idx = chosen_indices[pkg_step]
+    @tui.print_raw(
+      "\u001b[2J\u001b[H" +
+      render_bump_page(labels[unit_idx], versions[unit_idx], bumps[pkg_step]) +
+      "\n",
+    )
     let key = tui_key(@tui.read_key())
-    let (next, confirm, cancel) = edit_summary(summary, key)
-    summary = next
-    if cancel {
-      return 130
+    let (next_cursor, confirmed, back) = reduce_choice(bumps[pkg_step], 4, key)
+    bumps[pkg_step] = next_cursor
+    if back {
+      if key == Cancel {
+        return 130
+      }
+      if pkg_step > 0 {
+        pkg_step -= 1
+      }
+    } else if confirmed {
+      pkg_step += 1
     }
-    submitted = confirm
+  }
+  let selected : Array[@model.Change] = []
+  for i, unit_idx in chosen_indices {
+    selected.push({ unit_id: labels[unit_idx], bump: choices[bumps[i]], })
+  }
+  let mut summary = ""
+  let mut finalized = false
+  while !finalized {
+    @tui.print_raw("\u001b[2J\u001b[H? Enter a summary for this change\n")
+    let mut submitted = false
+    while !submitted {
+      @tui.print_raw("  " + summary + "\u001b[K\r")
+      let key = tui_key(@tui.read_key())
+      let (next, confirm, cancel) = edit_summary(summary, key)
+      summary = next
+      if cancel {
+        return 130
+      }
+      if confirm && summary.trim() != "" {
+        submitted = true
+      }
+    }
+    @tui.print_raw(
+      "\u001b[2J\u001b[H" +
+      render_confirmation(summary.trim().to_owned(), selected) +
+      "\n",
+    )
+    let mut decided = false
+    while !decided {
+      let key = tui_key(@tui.read_key())
+      match key {
+        Enter => {
+          decided = true
+          finalized = true
+        }
+        Left => decided = true
+        Cancel => return 130
+        _ => ()
+      }
+    }
   }
   let text = @engine.format_changeset(@model.ChangesetDraft::{
     releases: selected,
-    summary,
+    summary: summary.trim().to_owned(),
   })
-  let original = options.id.unwrap_or("change-" + @env.now().to_string())
-  let path = @path.Path(loaded.snapshot.root)
-    .join(@path.Path(loaded.changeset_directory))
-    .join(@path.Path(original + ".md"))
+  let (_, written) = write_unique_changeset(
+    loaded.snapshot.root,
+    loaded.changeset_directory,
+    options.id,
+    text,
+  )
+  let rel_written = @path.Path(written)
+    .relative(base=@path.Path(loaded.snapshot.root))
     .to_string()
-  let file = @fs.create(path, allow_existing=false)
-  defer file.close()
-  file.write(@utf8.encode(text))
+    .replace_all(old="\\", new="/")
+  if !options.no_commit &&
+    (
+      loaded.snapshot.config.commit_mode == "add" ||
+      loaded.snapshot.config.commit_mode == "both"
+    ) {
+    ignore(
+      @executor.commit_changes(
+        loaded.snapshot.root,
+        [rel_written],
+        loaded.snapshot.config.commit_add_message,
+      ),
+    )
+  }
+  if !options.quiet {
+    @tui.print_raw("\u001b[2J\u001b[HCreated " + written + "\n")
+  }
   0
 }
 
@@ -1547,16 +714,43 @@ async fn pre_command(options : Options) -> Int32 {
     .to_string()
   let action = options.pre_action.unwrap_or("status")
   if action == "status" {
-    if @fs.exists(path) {
-      println(@fs.read_text(path))
+    let raw_state : Json = if @fs.exists(path) {
+      @engine.parse_pre_state(@fs.read_text(path), path~).to_json()
     } else {
-      println("null")
+      Json::null()
+    }
+    if options.json {
+      println(
+        if options.pretty {
+          raw_state.stringify(indent=2)
+        } else {
+          @model.canonical_json(raw_state)
+        },
+      )
+    } else if !options.quiet {
+      println(raw_state.stringify(indent=2))
     }
     return 0
   }
   if action == "exit" {
-    if @fs.exists(path) {
-      @fs.remove(path, allow_missing=true)
+    if !@fs.exists(path) {
+      raise @model.Invalid(
+        @model.diagnostic("usage", "Not currently in prerelease mode", path~),
+      )
+    }
+    let current = @engine.parse_pre_state(@fs.read_text(path), path~)
+    if current.mode == "exit" {
+      raise @model.Invalid(
+        @model.diagnostic("usage", "Already exited prerelease mode", path~),
+      )
+    }
+    let updated : @model.PreState = { ..current, mode: "exit", }
+    let text = updated.to_json().stringify(indent=2) + "\n"
+    @fs.write_text(path, text)
+    if options.json {
+      println(@model.canonical_json(updated.to_json()))
+    } else if !options.quiet {
+      println("Exited prerelease mode; run `moonset version` to graduate")
     }
     return 0
   }
@@ -1564,6 +758,25 @@ async fn pre_command(options : Options) -> Int32 {
     raise @model.Invalid(
       @model.diagnostic("usage", "pre expects enter, exit, or status"),
     )
+  }
+  guard options.pre_tag is Some(tag) && tag != "" else {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "usage", "pre enter requires a tag, e.g. `pre enter alpha`",
+      ),
+    )
+  }
+  if @fs.exists(path) {
+    let existing = @engine.parse_pre_state(@fs.read_text(path), path~)
+    if existing.mode == "active" {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "usage",
+          "Already in active prerelease mode (" + existing.tag + ")",
+          path~,
+        ),
+      )
+    }
   }
   let initial : Map[String, String] = Map([])
   if options.initial_version {
@@ -1576,17 +789,24 @@ async fn pre_command(options : Options) -> Int32 {
   }
   let state : @model.PreState = {
     mode: "active",
-    tag: "next",
+    tag,
     initial_versions: initial,
     next_numbers: Map([]),
     consumed: [],
   }
+  let text = state.to_json().stringify(indent=2) + "\n"
+  ignore(@engine.parse_pre_state(text, path~))
   @fs.mkdir(
     @path.Path(path).dirname().to_string(),
     recursive=true,
     allow_exist=true,
   )
-  @fs.write_text(path, state.to_json().stringify(indent=2) + "\n")
+  @fs.write_text(path, text)
+  if options.json {
+    println(@model.canonical_json(state.to_json()))
+  } else if !options.quiet {
+    println("Entered prerelease mode with tag '" + tag + "'")
+  }
   0
 }
 
@@ -1655,10 +875,16 @@ async fn write_plan(
 
 ///|
 async fn execute(options : Options) -> Int32 {
-  let _ = options.no_commit
+  let _ = options.no_format
+  if options.command == "" {
+    if !options.json && @io.is_tty() && @env.get_env_var("CI") is None {
+      return add_command(options)
+    }
+    usage_error("Subcommand is required in non-interactive or CI mode")
+  }
   if options.command == "help" {
     println(
-      "moonset Phase 4\n  init [--force]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter|exit|status [--initial-version]\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--no-changelog] [--recover]\n  pack [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--format template]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
+      "moonset Phase 5\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
     )
     return 0
   }
@@ -1686,6 +912,9 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "publish" {
     return publish_command(options)
+  }
+  if options.command == "doctor" {
+    return doctor_command(options)
   }
   let loaded = @workspace.discover(
     options.cwd,
@@ -1762,20 +991,30 @@ async fn execute(options : Options) -> Int32 {
 ///|
 /// Run CLI arguments without the executable name. Errors never escape this boundary.
 pub async fn run(args : Array[String]) -> Int32 {
-  let wants_json = args.contains("--json") ||
-    args.contains("publish-plan") ||
-    args.contains("json")
+  let wants_json = wants_json_output(args)
+  let command_name = detect_subcommand(args)
   execute(arguments(args)) catch {
     error => {
       let (code, diagnostic) = match error {
-        @model.Invalid(diagnostic) => (2, diagnostic)
+        @model.Invalid(diagnostic) => {
+          let policy_codes = [
+            "missing-changeset", "confirmation-required", "dirty-working-tree", "incomplete-selection",
+          ]
+          let exit_code : Int32 = if policy_codes.contains(diagnostic.code) {
+            1
+          } else {
+            2
+          }
+          (exit_code, diagnostic)
+        }
         @model.Io(message) => (3, @model.diagnostic("external-error", message))
         _ => (3, @model.diagnostic("external-error", error.to_string()))
       }
       if wants_json {
-        println(
-          @model.canonical_json({
+        let payload : Json = if command_name == "status" {
+          {
             "schemaVersion": 1,
+            "ok": false,
             "workspace": Json::null(),
             "changesets": [],
             "releases": [],
@@ -1783,8 +1022,16 @@ pub async fn run(args : Array[String]) -> Int32 {
             "errors": [diagnostic.to_json()],
             "hasChanges": false,
             "hasRelease": false,
-          }),
-        )
+          }
+        } else {
+          {
+            "schemaVersion": 1,
+            "ok": false,
+            "command": command_name,
+            "errors": [diagnostic.to_json()],
+          }
+        }
+        println(@model.canonical_json(payload))
       }
       stderr(
         "\{diagnostic.path}:\{diagnostic.line}:\{diagnostic.column}: " +
