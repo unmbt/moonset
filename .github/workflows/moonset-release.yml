@@ -1,7 +1,6 @@
 name: moonset release example
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       moonbit_unit:
@@ -17,29 +16,6 @@ permissions:
   contents: read
 
 jobs:
-  changeset-check:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: hustcer/setup-moonbit@v1
-        with: { version: '0.10.20+65efd5b93', core-version: '0.10.20+65efd5b93' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.x' }
-      - run: moon update
-      - name: Prefetch and migrate registry manifests
-        shell: bash
-        run: |
-          for attempt in $(seq 1 12); do
-            moon check --target native --deny-warn && break || true
-            python scripts/migrate-registry-manifests.py
-          done
-      - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe status --since "${{ github.event.pull_request.base.sha }}" --output json > status.json
-      - uses: actions/upload-artifact@v4
-        with: { name: moonset-status, path: status.json }
-
   release-plan:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -95,8 +71,8 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --json > mooncakes-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --json > mooncakes-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --yes --no-tag --json > mooncakes-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --yes --no-tag --json > mooncakes-status.json
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: mooncakes-publish-status, path: mooncakes-status.json, if-no-files-found: ignore }
@@ -129,8 +105,8 @@ jobs:
             python scripts/migrate-registry-manifests.py
           done
       - run: moon build --target native --release
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --json > npm-status.json
-      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --json > npm-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --dry-run --yes --no-tag --json > npm-status.json
+      - run: ./_build/native/release/build/cmd/moonset/moonset.exe publish --only "$MOONSET_UNIT" --yes --no-tag --json > npm-status.json
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: npm-publish-status, path: npm-status.json, if-no-files-found: ignore }

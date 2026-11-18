@@ -1,0 +1,126 @@
+name: moonset PR Check
+description: Read-only PR changeset inspection producing Markdown comment and status outputs.
+inputs:
+  base-sha:
+    description: Base commit SHA for merge-base diff comparison
+    required: true
+  head-repo:
+    description: Head repository full name (owner/repo) for quick-add links
+    required: false
+    default: ''
+  head-ref:
+    description: Head branch name for quick-add links
+    required: false
+    default: ''
+  working-directory:
+    description: Workspace root relative to GITHUB_WORKSPACE
+    required: false
+    default: '.'
+  version:
+    description: moonset release tag to download
+    required: false
+    default: ''
+  binary-path:
+    description: Optional trusted local moonset binary path
+    required: false
+    default: ''
+  comment-on-no-changes:
+    description: Whether a comment should be created when no managed unit changed ('true' or 'false')
+    required: false
+    default: 'true'
+  github-token:
+    description: GitHub token used to download release assets
+    required: false
+    default: ${{ github.token }}
+outputs:
+  comment:
+    description: Rendered Markdown comment body
+    value: ${{ steps.inspect.outputs.comment }}
+  state:
+    description: Check state (release, missing, empty, none, or error)
+    value: ${{ steps.inspect.outputs.state }}
+  exit-code:
+    description: Raw exit code returned by moonset status
+    value: ${{ steps.inspect.outputs.exit-code }}
+  should-comment:
+    description: Whether pr-comment should create a new comment if none exists yet
+    value: ${{ steps.inspect.outputs.should-comment }}
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY_PATH: ${{ inputs.binary-path }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_ACTION_REPOSITORY: ${{ github.action_repository || 'unmbt/moonset' }}
+      run: |
+        bash "${{ github.action_path }}/../setup/install.sh"
+
+    - id: inspect
+      shell: bash
+      env:
+        MOONSET_BIN: ${{ steps.setup.outputs.path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_REPO: ${{ inputs.head-repo }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        WORK_DIR: ${{ inputs.working-directory }}
+        COMMENT_ON_NO_CHANGES: ${{ inputs.comment-on-no-changes }}
+      run: |
+        set -euo pipefail
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "$tmp_dir"' EXIT
+
+        md_args=(--cwd "$WORK_DIR" status --since "$BASE_SHA" --output markdown)
+        if [ -n "$HEAD_REPO" ]; then
+          md_args+=(--head-repo "$HEAD_REPO")
+        fi
+        if [ -n "$HEAD_REF" ]; then
+          md_args+=(--head-ref "$HEAD_REF")
+        fi
+
+        set +e
+        "$MOONSET_BIN" "${md_args[@]}" > "$tmp_dir/comment.md"
+        exit_code=$?
+        "$MOONSET_BIN" --cwd "$WORK_DIR" status --since "$BASE_SHA" --output json > "$tmp_dir/status.json"
+        json_code=$?
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
+          if [ "$json_code" -eq 0 ]; then
+            has_release="$(jq -r '.hasRelease // false' "$tmp_dir/status.json")"
+            cs_count="$(jq -r '.changesets | length' "$tmp_dir/status.json")"
+            if [ "$has_release" = "true" ]; then
+              state="release"
+            elif [ "$cs_count" -gt 0 ]; then
+              state="empty"
+            else
+              state="none"
+            fi
+          else
+            state="error"
+          fi
+        elif [ "$exit_code" -eq 1 ]; then
+          state="missing"
+        else
+          state="error"
+        fi
+
+        if [ "$state" = "none" ] && [ "$COMMENT_ON_NO_CHANGES" != "true" ]; then
+          should_comment="false"
+        else
+          should_comment="true"
+        fi
+
+        delimiter="MOONSET_EOF_$(date +%s)_$$"
+        {
+          echo "state=$state"
+          echo "exit-code=$exit_code"
+          echo "should-comment=$should_comment"
+          echo "comment<<$delimiter"
+          cat "$tmp_dir/comment.md"
+          echo ""
+          echo "$delimiter"
+        } >> "$GITHUB_OUTPUT"

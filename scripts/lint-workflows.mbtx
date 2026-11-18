@@ -1,0 +1,162 @@
+----
+import {
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+}
+----
+fn fail_lint(path : String, message : String) -> Unit raise {
+  fail(path + ": " + message)
+}
+
+fn check_run_blocks(path : String, lines : Array[String]) -> Unit raise {
+  let mut in_run = false
+  let mut run_indent = 0
+  for i, raw in lines {
+    let line = raw
+    let trimmed = line.trim().to_owned()
+    let indent = line.length() - line.trim_start().length()
+    if in_run {
+      if trimmed != "" && indent <= run_indent {
+        in_run = false
+      } else {
+        if line.contains("${{ github.event.") || line.contains("${{ inputs.") {
+          fail_lint(path, "line " + (i + 1).to_string() + ": unsafe template interpolation in run block; bind via env: first")
+        }
+        continue
+      }
+    }
+    if trimmed.has_prefix("run:") || trimmed.has_prefix("- run:") {
+      let after = match trimmed.find("run:") {
+        Some(idx) => trimmed[idx + 4:].trim().to_owned()
+        None => ""
+      }
+      if after == "|" || after == "|-" || after == ">" || after == ">-" || after == "" {
+        in_run = true
+        run_indent = indent
+      } else if after.contains("${{ github.event.") || after.contains("${{ inputs.") {
+        fail_lint(path, "line " + (i + 1).to_string() + ": unsafe inline run interpolation; bind via env: first")
+      }
+    }
+  }
+}
+
+fn check_composite_action(path : String, text : String) -> Unit raise {
+  let lines = text.replace_all(old="\r\n", new="\n").split("\n").map(x => x.to_owned()).collect()
+  if !text.contains("using: composite") {
+    fail_lint(path, "composite action must declare `using: composite`")
+  }
+  let mut run_count = 0
+  let mut shell_count = 0
+  for raw in lines {
+    let trimmed = raw.trim().to_owned()
+    if trimmed.has_prefix("run:") || trimmed.has_prefix("- run:") {
+      run_count += 1
+    }
+    if trimmed.has_prefix("shell:") || trimmed.has_prefix("- shell:") {
+      shell_count += 1
+    }
+  }
+  if run_count > 0 && shell_count < run_count {
+    fail_lint(path, "every composite `run:` step must specify `shell:`")
+  }
+  check_run_blocks(path, lines)
+}
+
+fn check_workflow(path : String, text : String) -> Unit raise {
+  let lines = text.replace_all(old="\r\n", new="\n").split("\n").map(x => x.to_owned()).collect()
+  check_run_blocks(path, lines)
+  if !text.contains("pull_request_target") {
+    return
+  }
+  // Split into job sections after `jobs:`
+  let mut in_jobs = false
+  let mut job_name = ""
+  let mut job_lines : Array[String] = []
+  let jobs : Array[(String, Array[String])] = []
+  for line in lines {
+    let trimmed = line.trim().to_owned()
+    let indent = line.length() - line.trim_start().length()
+    if trimmed == "jobs:" && indent == 0 {
+      in_jobs = true
+      continue
+    }
+    if in_jobs && indent == 2 && trimmed.has_suffix(":") && !trimmed.has_prefix("#") {
+      if job_name != "" {
+        jobs.push((job_name, job_lines))
+      }
+      job_name = trimmed[:trimmed.length() - 1].to_owned()
+      job_lines = []
+      continue
+    }
+    if in_jobs && job_name != "" {
+      job_lines.push(line)
+    }
+  }
+  if job_name != "" {
+    jobs.push((job_name, job_lines))
+  }
+  for pair in jobs {
+    let (name, jlines) = pair
+    let body = jlines.join("\n")
+    if body.contains("pull_request.head") {
+      if !body.contains("persist-credentials: false") {
+        fail_lint(path, "job `" + name + "` checks out PR head under pull_request_target without `persist-credentials: false`")
+      }
+      if body.contains(": write") {
+        fail_lint(path, "job `" + name + "` checks out PR head under pull_request_target and must not request write permissions")
+      }
+      // Verify any build command is strictly confined to a `working-directory: trusted` step
+      let mut in_trusted_step = false
+      for jline in jlines {
+        let jt = jline.trim().to_owned()
+        if jt.has_prefix("- ") {
+          in_trusted_step = false
+        }
+        if jt == "working-directory: trusted" {
+          in_trusted_step = true
+        }
+        if !in_trusted_step &&
+          (
+            jt.contains("moon build") ||
+            jt.contains("moon test") ||
+            jt.contains("npm install") ||
+            jt.contains("pnpm install") ||
+            jt.contains("cargo build")
+          ) {
+          fail_lint(path, "job `" + name + "` runs untrusted build/install command under pull_request_target: " + jt)
+        }
+      }
+    }
+  }
+}
+
+async fn main {
+  let actions = [
+    "action.yml",
+    "setup/action.yml",
+    "pr-check/action.yml",
+    "pr-comment/action.yml",
+  ]
+  for path in actions {
+    if !@fs.exists(path) {
+      fail_lint(path, "missing composite action file")
+    }
+    check_composite_action(path, @fs.read_text(path))
+  }
+
+  let workflows = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/moonset-release.yml",
+    ".github/workflows/release-binaries.yml",
+    ".github/workflows/moonset-pr-bot.yml",
+    "docs/examples/workflows/moonset-pr-bot.yml",
+    "docs/examples/workflows/moonset-release.yml",
+  ]
+  for path in workflows {
+    if !@fs.exists(path) {
+      fail_lint(path, "missing workflow file")
+    }
+    check_workflow(path, @fs.read_text(path))
+  }
+  println("Workflow & Action security lint passed (" + actions.length().to_string() + " actions, " + workflows.length().to_string() + " workflows)")
+}

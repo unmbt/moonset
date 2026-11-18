@@ -5,6 +5,7 @@ priv struct Options {
   config : String?
   since : String?
   json : Bool
+  markdown : Bool
   output : String
   pretty : Bool
   quiet : Bool
@@ -15,6 +16,8 @@ priv struct Options {
   summary : String?
   empty : Bool
   id : String?
+  head_repo : String?
+  head_ref : String?
   initial_version : Bool
   pre_action : String?
   pre_tag : String?
@@ -83,6 +86,8 @@ fn is_always_value_flag(arg : String) -> Bool {
     | "--type"
     | "--summary"
     | "--id"
+    | "--head-repo"
+    | "--head-ref"
     | "--snapshot"
     | "--only"
     | "--tag-format"
@@ -154,6 +159,30 @@ fn wants_json_output(args : Array[String]) -> Bool {
 }
 
 ///|
+fn wants_markdown_output(args : Array[String]) -> Bool {
+  let subcommand = detect_subcommand(args)
+  if subcommand != "status" {
+    return false
+  }
+  let mut i = 0
+  while i < args.length() {
+    let arg = args[i]
+    i += 1
+    if (arg == "--output" || arg == "--format") && i < args.length() {
+      if args[i] == "markdown" {
+        return true
+      }
+      i += 1
+      continue
+    }
+    if is_value_flag(arg, false) && i < args.length() {
+      i += 1
+    }
+  }
+  false
+}
+
+///|
 fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let detected_subcommand = detect_subcommand(args)
   let has_doctor = detected_subcommand == "doctor"
@@ -162,6 +191,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut config = None
   let mut since = None
   let mut json = false
+  let mut markdown = false
   let mut output = ""
   let mut pretty = false
   let mut quiet = false
@@ -173,6 +203,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut summary : String? = None
   let mut empty = false
   let mut id : String? = None
+  let mut head_repo : String? = None
+  let mut head_ref : String? = None
   let mut initial_version = false
   let mut pre_action : String? = None
   let mut pre_tag : String? = None
@@ -255,6 +287,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       | "--type"
       | "--summary"
       | "--id"
+      | "--head-repo"
+      | "--head-ref"
       | "--snapshot"
       | "--tag-format"
       | "--tag"
@@ -279,6 +313,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
             }
           "--type" => bump = Some(value)
           "--summary" => summary = Some(value)
+          "--head-repo" => head_repo = Some(value)
+          "--head-ref" => head_ref = Some(value)
           "--snapshot" => snapshot = Some(value)
           "--tag-format" => tag_format = value
           "--tag" => dist_tag = Some(value)
@@ -308,9 +344,21 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       }
     }
   }
-  if command == "status" || command == "doctor" {
+  if command == "status" {
+    if output != "" &&
+      output != "human" &&
+      output != "json" &&
+      output != "markdown" {
+      usage_error("status --output expects human, json, or markdown")
+    }
+    if output == "json" {
+      json = true
+    } else if output == "markdown" {
+      markdown = true
+    }
+  } else if command == "doctor" {
     if output != "" && output != "human" && output != "json" {
-      usage_error(command + " --output expects human or json")
+      usage_error("doctor --output expects human or json")
     }
     if output == "json" {
       json = true
@@ -331,7 +379,9 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     tag_format = format
     format = "human"
   }
-  if format != "human" && format != "json" {
+  if format == "markdown" && command == "status" {
+    markdown = true
+  } else if format != "human" && format != "json" {
     usage_error("--format expects human or json")
   }
   if format == "json" {
@@ -340,12 +390,16 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   if output == "json" {
     json = true
   }
+  if json && markdown {
+    usage_error("Cannot combine --json with --output markdown")
+  }
   {
     command,
     cwd,
     config,
     since,
     json,
+    markdown,
     output,
     pretty,
     quiet,
@@ -356,6 +410,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     summary,
     empty,
     id,
+    head_repo,
+    head_ref,
     initial_version,
     pre_action,
     pre_tag,

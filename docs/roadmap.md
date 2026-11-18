@@ -51,13 +51,14 @@
 
 ## Phase 4 — 发布与官方自动化（实现中）
 
-交付：`pack`、`publish`、Mooncakes/npm 命令适配基线、GitHub Actions 示例、逐目标状态和重试。
+交付：`pack`、`publish`、Mooncakes/npm 命令适配基线、模块化 GitHub Actions（`setup`/`pr-check`/`pr-comment`/根发布 Action）、三平台预编译二进制发布工作流、逐目标状态和重试。
 
 退出条件：
 
 - dry-run 不修改注册表和 Git 引用。
 - 发布失败能区分已发布和未发布模块，重复执行不会错误重发。
-- CI 参考 workflow 通过 YAML lint 和最小权限审查。
+- CI 参考 workflow 通过 `actionlint`、静态安全检查和最小权限审查。
+- 预编译二进制与 `SHA256SUMS` 由 tag 工作流自动构建并在 `setup` Action 中校验。
 - MoonBit + npm 双目标发布和 native addon 平台包完成端到端验证；分离 build/publish DAG，支持按 target 续跑及凭据隔离（FR-022）。
 
 ## Phase 5 — 扩展生态（首个完整交付切片）
@@ -71,13 +72,13 @@
 - 插件超时、非法输出和权限拒绝均有测试。
 - EcosystemAdapter/ArtifactProvider conformance suite 覆盖 discovery、range、ownership、lockfile、artifact、publish 能力。Cargo/Tauri 类适配在此后按需求接入，未完成前保持 Deferred（FR-024）。
 
-## Phase 6 — GitHub App 与规模化治理
+## Phase 6 — PR Bot Action 与规模化治理
 
-交付：App webhook 服务参考实现、PR 评论去重、标签策略、审计事件、1000 包/10000 changeset 基准和缓存。
+交付：模块化 PR Bot Action（`pr-check` + `pr-comment`）、PR 评论幂等去重、可选缺失标签策略、审计事件、1000 包/10000 changeset 基准和缓存。
 
 退出条件：
 
-- App 不保存长期 token，事件重放不会重复评论或触发发布。
+- Bot 重跑或连续推送不重复新建评论、不执行 Fork 代码、不触发发布。
 - 性能、并发、失败恢复和升级路径有数据。
 - 稳定版发布清单完成，Draft 需求全部处理。
 
@@ -86,4 +87,4 @@
 - Node Changesets 的配置、插件运行时及目录互写兼容：暂不承诺。npm/pnpm 混合 workspace 的原生支持已纳入 Phase 3/4，不再整体推迟。
 - 任意动态 MoonBit 模块加载：由编译期 API 和 JSONL 协议覆盖，等工具链提供稳定模块加载机制后再评估。
 - 自动提交/推送：保留显式开关；默认让 CI 或维护者控制 Git 提交边界。
-| Phase 5 second slice | In progress: operational ports, external generators, npm/pnpm and Cargo workspace support; other Cargo registries and Tauri remain deferred. |
+- 非 `crates.io` Cargo registry 与 Tauri 应用配置同步：保持 Deferred。

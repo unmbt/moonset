@@ -56,7 +56,7 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 | `publisher` | object | `moon`、`command` 或 API publisher；自定义命令走参数化 JSONL 协议。 |
 | `changedFilePatterns` | string[] | `status --since` 认定包发生变化的 glob。 |
 | `format` | string/false | `auto` 或已支持 formatter；false 表示不自动格式化。 |
-| `github` | object | changelog 链接和感谢语开关；App 行为另见 automation。 |
+| `github` | object | changelog 链接和感谢语开关；PR Bot 行为由 Action 输入控制，见 [自动化设计](automation.md) §5。 |
 | `experimental.mixedWorkspaces` | object | 混合 domain 的 workspace、UnitId 覆盖、bridge 和锁文件策略；Proposed，见下节。 |
 
 ## 4. 示例

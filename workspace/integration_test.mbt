@@ -123,6 +123,7 @@ async test "coexist uses a separate changeset directory and excludes nested chec
   write(root, "packages/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"")
   write(root, "vendor/.git", "gitdir: ../other")
   write(root, "vendor/moon.mod", "name = \"acme/vendor\"\nversion = \"9.0.0\"")
+  write(root, ".changeset/config.json", "{\"baseBranch\":\"main\"}")
   write(
     root, ".changeset/js.md", "This belongs to another tool and is not a Moonset changeset",
   )
@@ -135,9 +136,32 @@ async test "coexist uses a separate changeset directory and excludes nested chec
   assert_eq(loaded.snapshot.units[0].root, "packages/a")
   assert_eq(loaded.changesets.map(x => x.id), ["release"])
   assert_eq(loaded.snapshot.warnings[0].code, "nested-checkout-excluded")
+  assert_eq(loaded.snapshot.unmanaged, [
+    "changeset-config:.changeset/config.json",
+  ])
+  let plan = @engine.build_plan(loaded.snapshot, loaded.changesets)
+  assert_eq(plan.releases[0].new_version, "0.1.1")
+  assert_true(
+    @engine.status_json(
+      loaded.snapshot,
+      plan,
+      changeset_directory=loaded.changeset_directory,
+    )
+    is {
+      "coexistence": {
+        "mode": "coexist",
+        "managedWorkspaces": ["moon"],
+        "foreignChangesetDirectories": [".changeset"],
+        ..
+      },
+      ..
+    },
+  )
   assert_eq(
-    @engine.build_plan(loaded.snapshot, loaded.changesets).releases[0].new_version,
-    "0.1.1",
+    @fs.read_text(
+      @path.Path(root).join(@path.Path(".changeset/js.md")).to_string(),
+    ),
+    "This belongs to another tool and is not a Moonset changeset",
   )
 }
 

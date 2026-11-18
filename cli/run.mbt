@@ -884,7 +884,7 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "help" {
     println(
-      "moonset Phase 5\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
+      "moonset Phase 6\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color --help --version",
     )
     return 0
   }
@@ -920,6 +920,7 @@ async fn execute(options : Options) -> Int32 {
     options.cwd,
     config_path?=options.config,
     since?=options.since,
+    include_commits=false,
   )
   let plan = @engine.build_plan(
     loaded.snapshot,
@@ -949,6 +950,14 @@ async fn execute(options : Options) -> Int32 {
       @path.Path(options.cwd).join(@path.Path(options.output)).to_string()
     }
     write_plan(path, text, loaded.snapshot, loaded.changeset_directory)
+  } else if options.command == "status" && options.markdown {
+    let md = @engine.status_markdown(loaded.snapshot, plan, options={
+      ..@engine.CommentOptions::default(),
+      head_repo: options.head_repo,
+      head_ref: options.head_ref,
+      changeset_directory: loaded.changeset_directory,
+    })
+    @stdio.stdout.write(@utf8.encode(md))
   } else if options.json {
     println(text)
   } else if !options.quiet {
@@ -992,6 +1001,7 @@ async fn execute(options : Options) -> Int32 {
 /// Run CLI arguments without the executable name. Errors never escape this boundary.
 pub async fn run(args : Array[String]) -> Int32 {
   let wants_json = wants_json_output(args)
+  let wants_markdown = wants_markdown_output(args)
   let command_name = detect_subcommand(args)
   execute(arguments(args)) catch {
     error => {
@@ -1010,7 +1020,9 @@ pub async fn run(args : Array[String]) -> Int32 {
         @model.Io(message) => (3, @model.diagnostic("external-error", message))
         _ => (3, @model.diagnostic("external-error", error.to_string()))
       }
-      if wants_json {
+      if wants_markdown {
+        @stdio.stdout.write(@utf8.encode(@engine.error_markdown(diagnostic)))
+      } else if wants_json {
         let payload : Json = if command_name == "status" {
           {
             "schemaVersion": 1,

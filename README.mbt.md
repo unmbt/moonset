@@ -10,7 +10,7 @@ A refined versioning & changelog companion for MoonBit workspaces
 
 <br/>
 
-![Status](https://img.shields.io/badge/status-Phase%201%20alpha-8A7FBA?style=flat-square)
+![Status](https://img.shields.io/badge/status-Phase%205%20%2B%20Action%20Bot-8A7FBA?style=flat-square)
 ![MoonBit](https://img.shields.io/badge/MoonBit-native-3B82F6?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square)
 ![Inspired by](https://img.shields.io/badge/inspired%20by-Changesets-F59E0B?style=flat-square)
@@ -30,11 +30,11 @@ A refined versioning & changelog companion for MoonBit workspaces
 一个优秀的软件包，不仅在于代码精炼，更在于每一次发布皆有迹可循。
 **moonset** 取法 [Changesets](https://github.com/changesets/changesets) 的从容之道：让贡献者在提交改动之时，顺手写下一段「变更说明」；待到发布之日，工具自会将这些零散的笔墨，汇成一份清晰的版本计划与一卷整洁的更新日志。
 
-它专为 MoonBit 生态量身打造——理解 `moon.mod` 与 workspace，尊重 Mooncakes 的发布流程，亦为 Git、GitHub Actions 与 GitHub App 预留了优雅的接入之处。
+它专为 MoonBit 生态量身打造——理解 `moon.mod` 与 workspace，尊重 Mooncakes 的发布流程，同时支持 npm/pnpm 与 Cargo（crates.io）混合 workspace，并提供零运维的模块化 **GitHub Action PR Bot** 与自动发布流水线。
 
 > [!NOTE]
-> **当前状态：Phase 1 alpha。**
-> 已实现 MoonBit workspace 发现、changeset/config 解析、纯发布规划、`status` 和 `publish-plan`。其余命令仍为后续阶段设计；JS/Cargo adapter 尚未接入。详见 [Phase 1 契约](docs/phase-1-contract.md)。
+> **当前状态：Phase 1～5 核心能力与混合 workspace 已实现，PR Bot Action 已纳入主干。**
+> 已实现 `init`、`add`、`pre`、`status`（human/json/markdown）、`publish-plan`、`version`、`pack`、`publish`、`tag`、`doctor` 与 `unmbt/moonset/api` 扩展生态；Cargo 支持限定为 `crates.io`，其他 Cargo registry 与 Tauri 同步保持 Deferred。详见 [需求规格](docs/requirements.md) 与 [自动化设计](docs/automation.md)。
 
 ```sh
 moon run cmd/moonset -- status --json
@@ -111,21 +111,66 @@ flowchart LR
 
 更多字段详见 [配置规范](docs/configuration.md) 与 [JSON Schema](docs/schema/config-v1.json)。
 
+### PR Bot 快速接入（GitHub Action）
+
+无需注册或托管 GitHub App；复制下方工作流到 `.github/workflows/moonset-pr-bot.yml` 即可在 1 分钟内启用 PR 检查与自动评论更新（采用双 Job 隔离权限，安全支持 Fork PR）：
+
+```yaml
+name: moonset bot
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+concurrency:
+  group: moonset-pr-bot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions: { contents: read }
+    outputs:
+      comment: ${{ steps.check.outputs.comment }}
+      state: ${{ steps.check.outputs.state }}
+      should-comment: ${{ steps.check.outputs.should-comment }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: check
+        uses: unmbt/moonset/pr-check@v1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-repo: ${{ github.event.pull_request.head.repo.full_name }}
+          head-ref: ${{ github.event.pull_request.head.ref }}
+  comment:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions: { pull-requests: write }
+    steps:
+      - uses: unmbt/moonset/pr-comment@v1
+        with:
+          comment: ${{ needs.check.outputs.comment }}
+          state: ${{ needs.check.outputs.state }}
+          should-comment: ${{ needs.check.outputs.should-comment }}
+```
+
 ### 架构
 
 ```text
 moonset/
-├─ cmd/moonset/          入口、退出码与顶层错误
-├─ model/                领域类型与序列化 schema
-├─ engine/               discover · read · build · apply 的公共 facade
-└─ internal/
-   ├─ workspace/         moon.mod / moon.work 发现与依赖图
-   ├─ changeset/         front matter、摘要与预发布状态
-   ├─ config/            默认值、解析、合并与校验
-   ├─ planner/           纯 release plan 算法
-   ├─ changelog/         内置生成器与格式化
-   ├─ git/  publisher/   外部世界的适配器
-   └─ atomic/            哈希校验、临时文件与回滚
+├─ cmd/moonset/          CLI 入口、退出码与顶层错误
+├─ model/                领域类型与序列化 schema（纯核）
+├─ engine/               解析、校验、纯规划与 Markdown 评论渲染（纯核）
+├─ changelog/            内置 changelog 生成器与 registry（纯核）
+├─ workspace/            moon.mod / moon.work / npm / pnpm / Cargo 发现
+├─ adapters/             Capability 契约、PublisherRegistry 与 JSONL 插件
+├─ executor/             ExecutionHost、原子 journal、staging、pack/publish/tag/doctor
+├─ api/                  稳定编程 API facade
+├─ cli/                  参数解析、TUI 与输出渲染
+├─ setup/ pr-check/ pr-comment/   模块化 PR Bot GitHub Actions
+└─ action.yml            根发布 Action（version-pr / publish）
 ```
 
 异步与进程能力基于 `moonbitlang/core/async`；命令参数与程序名严格分离，绝不把用户输入拼接为 shell 字符串。详见 [系统架构](docs/architecture.md)。
@@ -134,13 +179,13 @@ moonset/
 
 | 阶段 | 主题 | 状态 |
 |:-:|---|:-:|
-| 0 | 规格与探针 | 已建立基线 |
-| 1 | 核心读模型与规划器（`status` · `publish-plan`） | alpha 已实现 |
-| 2 | 贡献工作流（`init` · `add` · `pre`） | ⏳ |
-| 3 | 版本与 Changelog（`version` · `tag`） | ⏳ |
-| 4 | 发布与官方自动化（`pack` · `publish`） | ⏳ |
-| 5 | 扩展生态（稳定 API 与插件协议） | 首个交付切片完成 |
-| 6 | GitHub App 与规模化治理 | ⏳ |
+| 0 | 规格与探针 | 已完成 |
+| 1 | 核心读模型与规划器（`status` · `publish-plan`） | 已实现 |
+| 2 | 贡献工作流（`init` · `add` · `pre`） | 已实现 |
+| 3 | 版本与 Changelog（`version` · `tag`） | 已实现 |
+| 4 | 发布与官方自动化（`pack` · `publish` · Actions） | 已实现（含发布 Action） |
+| 5 | 扩展生态（稳定 API 与插件协议） | 已实现 |
+| 6 | PR Bot Actions 与规模化治理 | PR Bot Action 已实现（1000 包规模待基准） |
 
 每个阶段皆有明确的退出条件，详见 [Roadmap](docs/roadmap.md)。
 
@@ -175,11 +220,11 @@ moon info && moon fmt   # 更新接口并格式化
 A fine package is measured not only by the elegance of its code, but by the clarity of its every release.
 **moonset** takes its quiet philosophy from [Changesets](https://github.com/changesets/changesets): while contributing, you leave a short note describing your change; when release day arrives, those scattered notes are gathered into a precise version plan and a tidy changelog.
 
-Crafted for the MoonBit ecosystem, it understands `moon.mod` and workspaces, respects the Mooncakes publishing flow, and leaves graceful extension points for Git, GitHub Actions and GitHub Apps.
+Crafted for the MoonBit ecosystem, it understands `moon.mod` and workspaces, respects the Mooncakes publishing flow, supports mixed npm/pnpm & Cargo (crates.io) workspaces, and provides zero-ops modular **GitHub Actions** for PR checks, comments, and releases.
 
 > [!NOTE]
-> **Current status: Phase 1 alpha.**
-> MoonBit workspace discovery, changeset/config parsing, pure release planning, `status`, and `publish-plan` are implemented. Other commands and JS/Cargo adapters remain future contracts. Plans are analysis-only and cannot execute releases.
+> **Current status: Phases 1–5 core & mixed workspaces implemented; PR Bot GitHub Actions integrated.**
+> `init`, `add`, `pre`, `status` (human/json/markdown), `publish-plan`, `version`, `pack`, `publish`, `tag`, `doctor`, and `unmbt/moonset/api` are implemented. Cargo support is limited to `crates.io`, and Tauri/other registries remain deferred. See [Requirements](docs/requirements.md) and [Automation](docs/automation.md).
 
 ### Philosophy
 
@@ -253,16 +298,16 @@ See the [configuration spec](docs/configuration.md) and the [JSON Schema](docs/s
 ```text
 moonset/
 ├─ cmd/moonset/          entry point, exit codes, top-level errors
-├─ model/                domain types and serialisation schema
-├─ engine/               public facade: discover · read · build · apply
-└─ internal/
-   ├─ workspace/         moon.mod / moon.work discovery, dependency graph
-   ├─ changeset/         front matter, summaries, pre-release state
-   ├─ config/            defaults, parsing, merging, validation
-   ├─ planner/           the pure release-plan algorithm
-   ├─ changelog/         built-in generators and formatting
-   ├─ git/  publisher/   adapters to the outside world
-   └─ atomic/            hash checks, temp files, rollback
+├─ model/                domain types and serialisation schema (pure core)
+├─ engine/               parsing, pure release planner, Markdown bot renderer (pure core)
+├─ changelog/            built-in generators & registry (pure core)
+├─ workspace/            moon.mod / moon.work / npm / pnpm / Cargo discovery
+├─ adapters/             capability contracts, PublisherRegistry & JSONL plugins
+├─ executor/             ExecutionHost, atomic journal, staging, pack/publish/tag/doctor
+├─ api/                  stable public API facade
+├─ cli/                  argument parsing, TUI & output rendering
+├─ setup/ pr-check/ pr-comment/   modular PR Bot GitHub Actions
+└─ action.yml            root release Action (version-pr / publish)
 ```
 
 Asynchrony and processes build on `moonbitlang/core/async`; program names and arguments are kept strictly apart, and user input is never spliced into a shell string. See the [architecture](docs/architecture.md).
@@ -271,13 +316,13 @@ Asynchrony and processes build on `moonbitlang/core/async`; program names and ar
 
 | Phase | Theme | Status |
 |:-:|---|:-:|
-| 0 | Specification & probes | Baseline established |
-| 1 | Core read model & planner (`status` · `publish-plan`) | alpha implemented |
-| 2 | Contribution workflow (`init` · `add` · `pre`) | ⏳ |
-| 3 | Versioning & changelog (`version` · `tag`) | ⏳ |
-| 4 | Publishing & official automation (`pack` · `publish`) | ⏳ |
-| 5 | Extension ecosystem (stable API & plugin protocol) | first delivery slice complete |
-| 6 | GitHub App & governance at scale | ⏳ |
+| 0 | Specification & probes | Completed |
+| 1 | Core read model & planner (`status` · `publish-plan`) | Implemented |
+| 2 | Contribution workflow (`init` · `add` · `pre`) | Implemented |
+| 3 | Versioning & changelog (`version` · `tag`) | Implemented |
+| 4 | Publishing & official automation (`pack` · `publish` · Actions) | Implemented |
+| 5 | Extension ecosystem (stable API & plugin protocol) | Implemented |
+| 6 | PR Bot Actions & governance at scale | PR Bot Actions implemented (1000-pkg scale pending) |
 
 Each phase has explicit exit criteria — see the [Roadmap](docs/roadmap.md).
 

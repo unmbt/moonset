@@ -1,48 +1,46 @@
 # 系统架构
 
-Phase 1 的实际依赖为 `cmd/moonset → cli → workspace + engine → model`；workspace 使用 manifest/core/async，engine 只包含纯解析、验证、版本规则和规划，不依赖 workspace 或 async。根包是便捷 facade。以下图和 internal 布局描述后续完整架构，executor、publisher、generator 尚未实现。
+当前实际依赖主干为 `cmd/moonset → cli → workspace + engine + executor + changelog + adapters → model`，其中 `model`、`engine`、`changelog` 为纯计算核心（同时通过 `native` 与 `wasm-gc` 双目标验证）；`workspace`、`executor`、`adapters`、`cli` 使用 `core/async` 执行宿主机 I/O；`api` 与根包为对外 facade。以下图与目录树反映当前代码架构及自动化编排边界。
 
 ## 1. 分层
 
 ```mermaid
 graph TD
-  CMD[cmd/moonset] --> CLI[cli]
+  ACTIONS[GitHub Actions: setup / pr-check / pr-comment / release] --> CLI[cli]
+  CMD[cmd/moonset] --> CLI
   CLI --> ENGINE[engine]
+  CLI --> WS[workspace]
+  CLI --> EXEC[executor]
   ENGINE --> MODEL[model]
-  ENGINE --> WS[workspace]
-  ENGINE --> CS[changeset]
-  ENGINE --> PLAN[release planner]
-  ENGINE --> EXEC[executor]
+  ENGINE --> CHANGELOG[changelog]
   WS --> MANIFEST[moon-manifest adapter]
-  WS --> ECO[Ecosystem adapters: MoonBit / npm / pnpm]
-  EXEC --> FS[core/async/fs]
-  EXEC --> GIT[Git adapter]
-  EXEC --> PROC[core/async/process/shell]
-  EXEC --> PUB[Publisher adapter]
-  PLAN --> CHANGELOG[Changelog generator]
+  WS --> MODEL
+  EXEC --> ADAPTERS[adapters]
+  EXEC --> MODEL
   CHANGELOG --> API[compiled API or JSONL plugin]
+  ADAPTERS --> MODEL
 ```
 
 ## 2. 目录与包边界
 
 ```text
 moonset/
-  cmd/moonset/                 # 仅负责入口、退出码和顶层错误
-  model/                       # 公共领域类型与序列化 schema
-  engine/                      # discover/read/build/apply 的公共 facade
-  internal/workspace/          # release domain、workspace 所有权与统一依赖图
-  internal/ecosystem/          # MoonBit / npm / pnpm 发现、编辑与锁文件适配
-  internal/changeset/          # front matter、摘要和 pre 状态
-  internal/config/             # 默认值、解析、合并、校验
-  internal/planner/            # 纯 release plan 算法
-  internal/changelog/          # 内置生成器、模板和格式化
-  internal/git/                # Git 命令和快照适配器
-  internal/publisher/          # Mooncakes 与外部 publisher
-  internal/cli/                # 参数、交互和人类输出
-  internal/atomic/              # beforeHash、临时文件、回滚
+  cmd/moonset/                 # CLI 二进制入口、退出码和顶层错误
+  model/                       # 公共领域类型与序列化 schema（跨目标纯库）
+  engine/                      # 解析、校验、纯 release planner、状态/Markdown 渲染（跨目标纯库）
+  changelog/                   # 内置 changelog 生成器与 registry（跨目标纯库）
+  workspace/                   # release domain 发现、Git 快照与清单/依赖解析
+  adapters/                    # Capability 契约、PublisherRegistry 与受限 JSONL 插件运行器
+  executor/                    # ExecutionHost、原子 journal、staging、pack、publish、tag、doctor
+  api/                         # 稳定编程 API facade
+  cli/                         # 参数解析、TUI、人类/JSON/Markdown 输出渲染
+  setup/                       # GitHub Action：下载并校验预编译 CLI
+  pr-check/                    # GitHub Action Job 1：只读执行 status 计算评论与状态
+  pr-comment/                  # GitHub Action Job 2：不拉代码幂等创建/更新 PR 评论
+  action.yml                   # 根 GitHub Action：version-pr 与 publish 编排
 ```
 
-`model` 和 `engine` 是有意公开的包；`internal/*` 不暴露公共具体类型。所有跨包类型由拥有它的 facade 定义，避免通过 `pub using` 暴露 internal 类型造成方法解析和 `.mbti` 不稳定。
+`model`、`engine`、`changelog`、`api` 是面向外部消费的公共包，同时保持纯计算层的跨目标可编译性；宿主能力集中在 `workspace`、`executor`、`adapters` 与 `cli`。所有跨包公共接口以各包生成的 `pkg.generated.mbti` 为准。
 
 ## 3. 运行时边界
 
@@ -87,3 +85,11 @@ inspect (read only)
 ## 7. 一致性与恢复
 
 `ReleasePlan` 记录 workspace/config/changesets fingerprint。执行期间发现文件变化则停止并返回 `stale_plan`。写文件失败时保留临时目录和恢复提示；Git 或 registry 部分失败时返回每个步骤状态，不自动猜测补偿动作。
+
+## 8. 自动化层
+
+GitHub Actions（`setup`、`pr-check`、`pr-comment` 与根发布 Action）仅作为薄编排壳层，不在 YAML/shell/JS 中重复实现 workspace 发现、changeset 解析、版本计算或 Markdown 渲染逻辑：
+
+1. 业务判断与评论 Markdown/JSON 生成全部收口在 `engine` 纯函数与 `moonset` CLI。
+2. `pr-check` 在只读权限下调用可信预编译 CLI 产出 `comment`、`state`、`exit-code` 与 `should-comment`。
+3. `pr-comment` 在无代码 checkout 权限的独立 Job 中仅通过 GitHub REST API（`gh api`）完成评论创建/更新、标签同步与门禁退出。

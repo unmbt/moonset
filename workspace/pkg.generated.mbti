@@ -6,7 +6,7 @@ import {
 }
 
 // Values
-pub async fn discover(String, config_path? : String, since? : String) -> LoadedWorkspace
+pub async fn discover(String, config_path? : String, since? : String, include_commits? : Bool) -> LoadedWorkspace
 
 // Errors
 

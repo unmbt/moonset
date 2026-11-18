@@ -62,16 +62,19 @@ moonset add [--package name ...] [--type major|minor|patch|none]
 ## `status`
 
 ```text
-moonset status [--since ref] [--verbose] [--output human|json]
+moonset status [--since ref] [--verbose] [--output human|json|markdown]
+  [--head-repo owner/name] [--head-ref branch]
 ```
 
 输出 workspace、待处理 changeset、预计 release 和诊断。不带 `--since` 时读取工作目录的全部待处理 changeset，无需 Git 仓库或干净工作区。`--since ref` 比较 `merge-base(ref, HEAD)..HEAD`，只读取 HEAD 已提交快照，以及范围内新增、修改或重命名后仍存在的 changeset；未提交内容明确警告并排除。不自动 fetch，也不默认比较 baseBranch。
 
-JSON 顶层固定：`schemaVersion`、`workspace`、`changesets`、`releases`、`warnings`、`errors`、`hasChanges`、`hasRelease`。字段新增只能向后兼容。
+JSON 顶层固定：`schemaVersion`、`workspace`、`changesets`、`releases`、`warnings`、`errors`、`hasChanges`、`hasRelease`，以及在共存或存在未受管清单时附加可选 `coexistence`。字段新增只能向后兼容。
+
+`--output markdown` 仅向 stdout 输出 PR Bot 评论 Markdown（警告写入 stderr），首行固定包含 `<!-- moonset-bot:changeset-check -->`，覆盖五种状态：`release`（版本变更表与转义后的 changeset 首行摘要）、`missing`（相关改动路径列表、`moonset add` 命令与提供 `--head-repo`/`--head-ref` 时的一键新建链接）、`empty`（空 changeset 放行说明）、`none`（未触及受管包）与 `error`（解析/配置报错）。所有用户文本经 HTML/Markdown 表格转义及 `@` 防提及处理，超长时按最大长度（默认 `60000` 字符）截断并保留头部。
 
 混合结果包含各生态 workspace、UnitId、unmanaged 项、bridge 传播原因、字段所有权和 adapter capability。未实现的 JS/Cargo adapter 不得默默跳过被配置的目标。
 
-退出码：范围内存在相关文件变化但没有任何 changeset 时为 `1`；空 changeset 可明确放行，且不逐模块强制覆盖。正常为 `0`，解析或配置错误为 `2`，I/O/Git 错误为 `3`。JSON 模式 stdout 只包含 JSON，stderr 用于诊断。
+退出码：范围内存在相关文件变化但没有任何 changeset 时为 `1`；空 changeset 可明确放行，且不逐模块强制覆盖。正常为 `0`，解析或配置错误为 `2`，I/O/Git 错误为 `3`。JSON 与 Markdown 模式 stdout 只包含对应渲染结果，stderr 用于诊断。出错时（退出码 `2` 或 `3`），Markdown 模式仍向 stdout 输出 `error` 状态评论以便 PR Bot 更新反馈。
 
 ## `publish-plan`
 

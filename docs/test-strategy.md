@@ -4,7 +4,7 @@
 
 当前验证基线：`moon check --target native --deny-warn`、`moon check --target wasm-gc`、`moon test --target native`（覆盖 `model`/`engine`/`changelog`/`workspace`/`adapters`/`executor`/`cli`/`fixtures`）、`moon test --target wasm-gc`（验证纯计算核心无宿主依赖）、`moon run scripts/cli-integration.mbtx`（真实可执行文件黑盒），以及 `moon run scripts/embed-schema.mbtx --check`（编译内置 schema 与文档一致）。`.github/workflows/ci.yml` 在 Windows/Linux/macOS 固定 MoonBit 工具链执行 check/test/build、CLI、格式与接口检查。
 
-这些测试覆盖 FR-001～FR-013（内置/外部 CLI 插件）、FR-016～FR-022 与 FR-023/024 核心边界，以及 `fixtures/` 最小测试集和 `MIX-001`～`MIX-012` 关键场景；GitHub Action/App 服务端（FR-014/015）与跨分区自动导出（FR-023 扩展）仍待后续环境验证。
+这些测试覆盖 FR-001～FR-024 核心边界（含 FR-023 共存协调导出）、NFR-005 性能基准、PR Bot Action 与渲染契约（FR-014/015/SEC-005/OPS-001），以及 `fixtures/` 最小测试集和 `MIX-001`～`MIX-012` 关键场景；在线 GitHub Runner 的实际 PR/Release 触发待推送到 GitHub 后验证。
 
 ## 1. 测试层次
 
@@ -15,7 +15,7 @@
 | 适配器 | lossless manifest 编辑、原子写入、Git 参数、publisher dry-run | 临时目录/测试 double | `moon test --target native` |
 | CLI 黑盒 | 退出码、人类输出、`--json` schema、交互禁用 | 构建出的 `moonset` | `moon test cmd/moonset` |
 | 集成 | init → add → status → version → pack → publish dry-run → tag | 临时 Git 仓库和 fake registry | CI native matrix |
-| 自动化 | workflow 权限、App 事件去重、重放和失败恢复 | fixture webhook | Action/App 测试环境 |
+| 自动化 | workflow 权限、`pull_request_target` 隔离、评论渲染快照与幂等 | `engine/pr_comment_test.mbt` + 静态 linter | `scripts/lint-workflows.mbtx`、`actionlint` |
 
 ## 2. 需求映射
 
@@ -25,7 +25,7 @@
 - FR-007/008/010：`apply_plan_*`、原子写入、tag conflict 和恢复测试。
 - FR-009/011：fake publisher/pack runner 的 dry-run、already-published、partial failure。
 - FR-012/013/016：配置 schema、生成器 registry、JSONL 超时和 API `.mbti` diff。
-- FR-014/015：workflow lint、最小权限审查、App webhook 幂等。
+- FR-014/015/SEC-005/OPS-001：`engine/pr_comment_test.mbt` 快照（5 种状态/转义/截断）、`scripts/cli-integration.mbtx`（`status --output markdown`）、`scripts/lint-workflows.mbtx`（静态权限与注入检查）与 `actionlint`。
 - FR-017：`doctor` 对缺工具、脏工作树、损坏配置和权限不足逐项给建议。
 - FR-018、FR-019、FR-023：混合成员发现、UnitId 与共存边界，详见下方 MIX-001 至 MIX-004。
 - FR-020、FR-021：bridge 闭包、原生协议与锁文件 ownership，MIX-005 至 MIX-008。

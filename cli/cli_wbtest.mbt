@@ -50,6 +50,36 @@ test "arguments parse pre tag, doctor, publish flags, and tag format without con
   assert_true(doc_reordered.json)
   assert_true(wants_json_output(["status", "--output", "json"]))
   assert_true(wants_json_output(["publish-plan"]))
+
+  let md_status = arguments([
+    "status", "--since", "main", "--output", "markdown", "--head-repo", "unmbt/moonset",
+    "--head-ref", "feat/bot",
+  ])
+  assert_eq(md_status.command, "status")
+  assert_true(md_status.markdown)
+  assert_true(!md_status.json)
+  assert_eq(md_status.head_repo, Some("unmbt/moonset"))
+  assert_eq(md_status.head_ref, Some("feat/bot"))
+  assert_true(wants_markdown_output(["status", "--output", "markdown"]))
+  assert_true(
+    !wants_markdown_output(["add", "--package", "a", "--summary", "markdown"]),
+  )
+  let rejected_yaml = try {
+    ignore(arguments(["status", "--output", "yaml"]))
+    false
+  } catch {
+    @model.Invalid(_) => true
+    _ => false
+  }
+  assert_true(rejected_yaml)
+  let rejected_conflict = try {
+    ignore(arguments(["status", "--json", "--output", "markdown"]))
+    false
+  } catch {
+    @model.Invalid(_) => true
+    _ => false
+  }
+  assert_true(rejected_conflict)
 }
 
 ///|

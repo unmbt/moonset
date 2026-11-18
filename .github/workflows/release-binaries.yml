@@ -1,0 +1,105 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag name to publish assets for (defaults to GITHUB_REF_NAME)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: moonset-linux-x64
+            ext: ''
+          - os: ubuntu-22.04-arm
+            asset: moonset-linux-arm64
+            ext: ''
+          - os: macos-15
+            asset: moonset-darwin-arm64
+            ext: ''
+          - os: windows-latest
+            asset: moonset-win32-x64.exe
+            ext: '.exe'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hustcer/setup-moonbit@v1
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: moon update
+      - name: Prefetch and migrate legacy registry packages
+        shell: bash
+        run: |
+          for attempt in $(seq 1 12); do
+            moon check --target native --deny-warn && break || true
+            python scripts/migrate-registry-manifests.py
+          done
+      - run: moon check --target native --deny-warn
+      - run: moon build --target native --release
+      - name: Package and smoke-test binary
+        shell: bash
+        env:
+          ASSET_NAME: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          src="_build/native/release/build/cmd/moonset/moonset.exe"
+          if [ ! -f "$src" ]; then
+            src="_build/native/release/build/cmd/moonset/moonset"
+          fi
+          cp "$src" "dist/$ASSET_NAME"
+          chmod +x "dist/$ASSET_NAME"
+          "./dist/$ASSET_NAME" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+      - name: Generate SHA256SUMS and upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [[ "$tag" != v* ]]; then
+            echo "Release tag must start with 'v', got: $tag" >&2
+            exit 1
+          fi
+          (cd dist && sha256sum moonset-* > SHA256SUMS && sha256sum -c SHA256SUMS)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/moonset-* dist/SHA256SUMS --clobber
+          else
+            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --generate-notes
+          fi

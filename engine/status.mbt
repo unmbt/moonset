@@ -43,6 +43,26 @@ pub fn matches_pattern(path : String, pattern : String) -> Bool {
 }
 
 ///|
+fn is_excluded_path(path : String) -> Bool {
+  path
+  .split("/")
+  .any(x => {
+    [".git", "node_modules", "_build", "target", ".mooncakes"].contains(
+      x.to_owned(),
+    )
+  })
+}
+
+///|
+fn unit_owns_path(path : String, unit : @model.ReleaseUnit) -> Bool {
+  if unit.root == "" {
+    true
+  } else {
+    path.has_prefix(unit.root + "/")
+  }
+}
+
+///|
 pub fn relevant_changes(
   snapshot : @model.WorkspaceSnapshot,
   changeset_directory~ : String = ".changeset",
@@ -51,13 +71,7 @@ pub fn relevant_changes(
     if path.has_prefix(changeset_directory + "/") {
       return false
     }
-    if path
-      .split("/")
-      .any(x => {
-        [".git", "node_modules", "_build", "target", ".mooncakes"].contains(
-          x.to_owned(),
-        )
-      }) {
+    if is_excluded_path(path) {
       return false
     }
     if path == "moon.work" {
@@ -67,12 +81,13 @@ pub fn relevant_changes(
       if snapshot.config.ignore.contains(unit.id) {
         return false
       }
+      if !unit_owns_path(path, unit) {
+        return false
+      }
       let unit_path = if unit.root == "" {
         path
-      } else if path.has_prefix(unit.root + "/") {
-        path[unit.root.length() + 1:].to_owned()
       } else {
-        return false
+        path[unit.root.length() + 1:].to_owned()
       }
       snapshot.config.changed_patterns.any(pattern => {
         matches_pattern(unit_path, pattern)
@@ -91,22 +106,34 @@ pub fn status_json(
   let missing = snapshot.git_head is Some(_) &&
     !changed.is_empty() &&
     plan.changesets.is_empty()
-  {
-    "schemaVersion": 1,
-    "workspace": snapshot.to_json(),
-    "changesets": plan.changesets.map(x => x.to_json()),
-    "releases": plan.releases.map(x => x.to_json()),
-    "warnings": plan.warnings.map(x => x.to_json()),
-    "errors": if missing {
-      [
-        @model.diagnostic(
-          "missing-changeset", "Relevant committed files changed without a changeset",
-        ).to_json(),
-      ]
-    } else {
-      []
-    },
-    "hasChanges": !changed.is_empty() || !plan.changesets.is_empty(),
-    "hasRelease": !plan.releases.is_empty(),
+  let fields : Map[String, Json] = Map([
+    ("schemaVersion", Json::number(1.0)),
+    ("workspace", snapshot.to_json()),
+    ("changesets", Json::array(plan.changesets.map(x => x.to_json()))),
+    ("releases", Json::array(plan.releases.map(x => x.to_json()))),
+    ("warnings", Json::array(plan.warnings.map(x => x.to_json()))),
+    (
+      "errors",
+      Json::array(
+        if missing {
+          [
+            @model.diagnostic(
+              "missing-changeset", "Relevant committed files changed without a changeset",
+            ).to_json(),
+          ]
+        } else {
+          []
+        },
+      ),
+    ),
+    (
+      "hasChanges",
+      Json::boolean(!changed.is_empty() || !plan.changesets.is_empty()),
+    ),
+    ("hasRelease", Json::boolean(!plan.releases.is_empty())),
+  ])
+  if coexistence_json(snapshot, changeset_directory~) is Some(coex) {
+    fields["coexistence"] = coex
   }
+  Json::object(fields)
 }

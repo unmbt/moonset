@@ -23,7 +23,7 @@ pub async fn commit_changes(String, Array[String], String) -> Bool
 
 pub async fn create_tags(@workspace.LoadedWorkspace, @executor.TagOptions) -> @executor.TagResult
 
-pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
+pub async fn discover(String, config_path? : String, since? : String, include_commits? : Bool) -> @workspace.LoadedWorkspace
 
 pub fn generator_kind(String) -> @changelog.GeneratorKind
 

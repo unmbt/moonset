@@ -49,7 +49,7 @@ moon package --help
 - 当前 MoonBit 工具链对 YAML 的可用包和错误位置；若没有稳定 YAML 依赖，使用受限 front matter parser。
 - SemVer、glob、GitHub API 客户端的 native 支持及许可证。
 - Mooncakes registry 是否提供 OIDC、already-published 查询和 scoped/tag 语义。
-- GitHub App 的部署位置、签名验证和持久化策略。
+- 预编译 Action 二进制分发、`SHA256SUMS` 校验与 Linux runner glibc 兼容性（`ubuntu-22.04` 基线）。
 
 ## 5. 混合仓库补充调查（2026-11-10）
 

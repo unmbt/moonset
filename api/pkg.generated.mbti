@@ -29,7 +29,7 @@ pub async fn create_tags(@workspace.LoadedWorkspace, @executor.TagOptions) -> @e
 
 pub async fn[H : @executor.ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, @executor.TagOptions) -> @executor.TagResult
 
-pub async fn discover(String, config_path? : String, since? : String) -> @workspace.LoadedWorkspace
+pub async fn discover(String, config_path? : String, since? : String, include_commits? : Bool) -> @workspace.LoadedWorkspace
 
 pub fn generator_result(@adapters.JsonlResponse) -> (String, @json.Json) raise @model.MoonsetError
 

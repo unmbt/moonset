@@ -34,7 +34,25 @@ jobs:
       - run: moon test --target native
       - run: moon build --target native --release
       - run: moon run scripts/embed-schema.mbtx --check
+      - run: moon run scripts/lint-workflows.mbtx
       - run: moon run scripts/cli-integration.mbtx
       - run: moon info
       - run: moon fmt --check
       - run: git diff --exit-code
+
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install and run actionlint
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          gh release download -R rhysd/actionlint -p 'actionlint_*_linux_amd64.tar.gz' -D "$tmp_dir"
+          tar -xzf "$tmp_dir"/actionlint_*_linux_amd64.tar.gz -C "$tmp_dir"
+          "$tmp_dir/actionlint"
+          "$tmp_dir/actionlint" docs/examples/workflows/*.yml

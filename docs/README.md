@@ -1,6 +1,6 @@
 # moonset 文档与规范
 
-> 状态：Phase 1 alpha 实现；完整产品规格仍按阶段推进。
+> 状态：Phase 1～5 核心能力、混合 workspace、FR-023 共存导出、NFR-005 性能基准与 PR Bot GitHub Action 已实现并完成本地验证；在线 GitHub Runner 演练待触发。
 >
 > 本目录是 moonset 的规格、设计和交付契约。实现尚未开始前，需求 ID、命令契约和数据不变量优先于代码；实现过程中必须回写状态和验证证据。
 
@@ -14,14 +14,15 @@
 4. [数据模型](data-model.md)：workspace、changeset、release plan、预发布状态和发布结果。
 5. [系统架构](architecture.md)：MoonBit 包边界、I/O 边界、纯规划器和适配器。
 6. [Changelog 规范](changelog.md)：生成格式和自定义生成器契约。
-7. [自动化设计](automation.md)：GitHub Actions、GitHub App 机器人和权限模型。
+7. [自动化设计](automation.md)：模块化 GitHub Actions、PR Bot 双 Job 隔离、二进制分发和权限模型。
 8. [编程 API](api.md)：给 MoonBit 库和外部工具使用的 API。
 9. [测试策略](test-strategy.md)：需求到测试的追踪、fixture 和交付前检查。
 10. [参考实现评估](references.md)：`moon-bump`、`moon-manifest`、`native-toolchain` 与 Changesets 源码的取舍。
 11. [Roadmap](roadmap.md)：按阶段交付和每个阶段的退出条件。
 12. [混合 workspace 设计](mixed-workspaces.md)：MoonBit + npm/pnpm 的共存、统一管理、跨生态构建与发布；包含 napi-rs/Tauri 类型场景和后续 Cargo 边界。
+13. [收口与性能优化记录](performance-and-closure.md)：存量修复、FR-023 共存导出、NFR-005 基准测试与 `git cat-file --batch` 优化。
 
-设计决策记录在 [decisions/](decisions/)。
+设计决策记录在 [decisions/](decisions/)；符合性审查与阶段历史记录见 [SDD 审查报告](sdd-review.md)。
 
 ## SDD 工作规则
 
@@ -52,6 +53,6 @@
 - 异步：优先使用 `moonbitlang/core/async` 及其 `fs`、`process`、`shell` 子包。已用 `moon ide doc` 验证导出 API。
 - 清单：优先复用 `unmbt/moon-manifest` 的无损读取和编辑能力，待该包发布可消费版本后再锁定依赖。
 - 发布：默认面向 Mooncakes 的 `moon publish`；发布器是可替换适配器，不能把 Mooncakes 假设写进核心规划器。
-- 混合生态：已补充 Proposed 规格与 [示例配置](examples/mixed-workspaces.json)，尚无实现。核心以 ReleaseUnit 建模；npm/pnpm 联合版本和发布纳入 Phase 3/4，Cargo/应用适配后续接入。
+- 混合生态：已实现 MoonBit、npm/pnpm 与 Cargo（crates.io）workspace 发现、联合版本规划、锁文件 staging、打包与按目标发布，见 [混合 workspace 设计](mixed-workspaces.md)；其他 Cargo registry 与 Tauri 同步保持 Deferred。
 
 

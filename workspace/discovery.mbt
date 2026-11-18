@@ -127,6 +127,7 @@ pub async fn discover(
   cwd : String,
   config_path? : String,
   since? : String,
+  include_commits~ : Bool = true,
 ) -> LoadedWorkspace {
   let (root, config_file) = locate(cwd, config_path, since)
   let (reader, changed_files, warnings) = make_reader(root, since)
@@ -206,6 +207,8 @@ pub async fn discover(
       ecosystem: "moonbit",
       manager: "moon",
     })
+    let member_manifests = members.map(m => slash(join(m, "moon.mod")))
+    reader.prefetch(member_manifests)
     for member_path in members {
       if member_path
         .split("/")
@@ -366,6 +369,14 @@ pub async fn discover(
     }
   }
   let inspection_roots = [""] + units.map(x => x.root)
+  let inspection_paths : Array[String] = []
+  for dir in inspection_roots {
+    for file in ["package.json", "pnpm-workspace.yaml", "Cargo.toml"] {
+      inspection_paths.push(slash(join(dir, file)))
+    }
+    inspection_paths.push(slash(join(dir, ".changeset/config.json")))
+  }
+  reader.prefetch(inspection_paths)
   for dir in inspection_roots {
     for file in ["package.json", "pnpm-workspace.yaml", "Cargo.toml"] {
       let path = slash(join(dir, file))
@@ -374,6 +385,13 @@ pub async fn discover(
         unmanaged.push(path)
       }
     }
+    let foreign_cs_cfg = slash(join(dir, ".changeset/config.json"))
+    let marker = "changeset-config:" + foreign_cs_cfg
+    if foreign_cs_cfg != config_file &&
+      !unmanaged.contains(marker) &&
+      reader.read(foreign_cs_cfg) is Some(_) {
+      unmanaged.push(marker)
+    }
   }
   units.sort_by((a, b) => a.id.compare(b.id))
   ownership.sort_by((a, b) => a.path.compare(b.path))
@@ -381,6 +399,16 @@ pub async fn discover(
   // Version planning needs the current changelog and persisted release state
   // in its immutable source snapshot so stale hashes can be checked before
   // any write occurs.
+  let preload_paths : Array[String] = [".moonset/release-state.json"]
+  for unit in units {
+    let changelog = if unit.root == "" {
+      config.changelog_file
+    } else {
+      slash(join(unit.root, config.changelog_file))
+    }
+    preload_paths.push(changelog)
+  }
+  reader.prefetch(preload_paths)
   for unit in units {
     let changelog = if unit.root == "" {
       config.changelog_file
@@ -392,11 +420,21 @@ pub async fn discover(
   ignore(reader.read(".moonset/release-state.json"))
   let changesets = []
   let changeset_commits : Map[String, String] = Map([])
-  let git_dir = match reader.git_root {
-    Some(dir) => Some(dir)
-    None => if @fs.exists(join(root, ".git")) { Some(root) } else { None }
+  let pending_commit_paths : Array[(String, String)] = []
+  let cs_files = reader.files(changeset_directory)
+  let cs_paths : Array[String] = []
+  for file in cs_files {
+    if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
+      continue
+    }
+    let path = slash(join(changeset_directory, file))
+    if since is Some(_) && !changed_files.contains(path) {
+      continue
+    }
+    cs_paths.push(path)
   }
-  for file in reader.files(changeset_directory) {
+  reader.prefetch(cs_paths)
+  for file in cs_files {
     let path = slash(join(changeset_directory, file))
     if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
       continue
@@ -412,26 +450,75 @@ pub async fn discover(
         mixed=config.mixed,
       )
       changesets.push(cs)
-      if git_dir is Some(repo) {
-        let repo_rel = relative(repo, join(root, path)) catch { _ => path }
-        let added_sha = (git(repo, [
-            "log", "--diff-filter=A", "--format=%H", "-n", "1", "--", repo_rel,
-          ]) catch {
-            _ => ""
-          })
-          .trim()
-          .to_owned()
-        let sha = if added_sha != "" {
-          added_sha
-        } else {
-          (git(repo, ["log", "--format=%H", "-n", "1", "--", repo_rel]) catch {
-            _ => ""
-          })
-          .trim()
-          .to_owned()
+      if include_commits {
+        pending_commit_paths.push((cs.id, path))
+      }
+    }
+  }
+  if include_commits && !pending_commit_paths.is_empty() {
+    let git_dir = match reader.git_root {
+      Some(dir) => Some(dir)
+      None => if @fs.exists(join(root, ".git")) { Some(root) } else { None }
+    }
+    if git_dir is Some(repo) {
+      let cs_dir_rel = relative(repo, join(root, changeset_directory)) catch {
+        _ => changeset_directory
+      }
+      let added_by_path : Map[String, String] = Map([])
+      let log_added = git(repo, [
+        "log", "--diff-filter=A", "--name-only", "--format=__MOONSET_COMMIT__%H",
+        "--", cs_dir_rel,
+      ]) catch {
+        _ => ""
+      }
+      let mut current_sha = ""
+      for raw in log_added.replace_all(old="\r\n", new="\n").split("\n") {
+        let line = raw.trim().to_owned()
+        if line == "" {
+          continue
         }
-        if sha != "" {
-          changeset_commits[cs.id] = sha
+        if line.has_prefix("__MOONSET_COMMIT__") {
+          current_sha = line[18:].to_owned()
+        } else if current_sha != "" && !added_by_path.contains(line) {
+          added_by_path[line] = current_sha
+        }
+      }
+      let mut need_fallback = false
+      for item in pending_commit_paths {
+        let (cs_id, path) = item
+        let repo_rel = relative(repo, join(root, path)) catch { _ => path }
+        match added_by_path.get(repo_rel) {
+          Some(sha) => changeset_commits[cs_id] = sha
+          None => need_fallback = true
+        }
+      }
+      if need_fallback {
+        let latest_by_path : Map[String, String] = Map([])
+        let log_all = git(repo, [
+          "log", "--name-only", "--format=__MOONSET_COMMIT__%H", "--", cs_dir_rel,
+        ]) catch {
+          _ => ""
+        }
+        current_sha = ""
+        for raw in log_all.replace_all(old="\r\n", new="\n").split("\n") {
+          let line = raw.trim().to_owned()
+          if line == "" {
+            continue
+          }
+          if line.has_prefix("__MOONSET_COMMIT__") {
+            current_sha = line[18:].to_owned()
+          } else if current_sha != "" && !latest_by_path.contains(line) {
+            latest_by_path[line] = current_sha
+          }
+        }
+        for item in pending_commit_paths {
+          let (cs_id, path) = item
+          if !changeset_commits.contains(cs_id) {
+            let repo_rel = relative(repo, join(root, path)) catch { _ => path }
+            if latest_by_path.get(repo_rel) is Some(sha) {
+              changeset_commits[cs_id] = sha
+            }
+          }
         }
       }
     }

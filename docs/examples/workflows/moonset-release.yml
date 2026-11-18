@@ -1,0 +1,53 @@
+name: moonset release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: moonset-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  version-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      has-changesets: ${{ steps.release.outputs.has-changesets }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: release
+        uses: unmbt/moonset@v1
+        with:
+          mode: version-pr
+
+  publish:
+    needs: version-pr
+    if: needs.version-pr.outputs.has-changesets == 'false'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: moonset-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      MOONCAKES_TOKEN: ${{ secrets.MOONCAKES_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: hustcer/setup-moonbit@v1
+        with:
+          version: '0.10.20+65efd5b93'
+          core-version: '0.10.20+65efd5b93'
+      - uses: unmbt/moonset@v1
+        with:
+          mode: publish

@@ -65,8 +65,102 @@ async fn git(root : String, args : Array[String]) -> String {
 }
 
 ///|
+fn parse_decimal_int(text : String) -> Int32? {
+  if text == "" {
+    return None
+  }
+  let mut acc : Int32 = 0
+  for ch in text.to_array() {
+    if ch < '0' || ch > '9' {
+      return None
+    }
+    acc = acc * 10 + (ch.to_int() - '0'.to_int())
+  }
+  Some(acc)
+}
+
+///|
+async fn Reader::prefetch(self : Reader, paths : Array[String]) -> Unit {
+  guard (self.git_root, self.head) is (Some(root), Some(head)) else { return }
+  let pending : Array[(String, String)] = []
+  let seen_repo : Map[String, Bool] = Map([])
+  for path in paths {
+    let domain_path = relative(self.root, join(self.root, path))
+    if self.sources.contains(domain_path) {
+      continue
+    }
+    let repo_path = relative(root, join(self.root, domain_path))
+    if self.tree.get(repo_path) is Some("100644" | "100755") &&
+      !seen_repo.contains(repo_path) {
+      seen_repo[repo_path] = true
+      pending.push((domain_path, repo_path))
+    }
+  }
+  if pending.is_empty() {
+    return
+  }
+  let mut start = 0
+  while start < pending.length() {
+    let end = if start + 200 < pending.length() {
+      start + 200
+    } else {
+      pending.length()
+    }
+    let chunk : Array[(String, String)] = []
+    let lines : Array[String] = []
+    for i in start..<end {
+      let item = pending[i]
+      chunk.push(item)
+      lines.push(head + ":" + item.1)
+    }
+    let output = @shell.Cmd(
+      "git",
+      ["cat-file", "--batch"],
+      cwd=root,
+      stdin=@shell.Stdin::Text(lines.join("\n") + "\n"),
+    ).output(max_output_bytes=33554432)
+    if output.exit_code() != 0 {
+      raise @model.Io("git cat-file --batch: " + output.stderr())
+    }
+    let bytes = output.stdout_bytes()
+    let mut pos = 0
+    for item in chunk {
+      let domain_path = item.0
+      let mut nl = pos
+      while nl < bytes.length() && bytes[nl] != b'\n' {
+        nl += 1
+      }
+      if nl >= bytes.length() {
+        raise @model.Io("Malformed git cat-file --batch header")
+      }
+      let header = @utf8.decode_lossy(bytes[pos:nl]).trim().to_owned()
+      pos = nl + 1
+      if header.has_suffix(" missing") {
+        continue
+      }
+      let size_str = header.split(" ").last().unwrap_or("").to_owned()
+      guard parse_decimal_int(size_str) is Some(size) else {
+        raise @model.Io("Malformed git cat-file --batch size: " + header)
+      }
+      if pos + size > bytes.length() {
+        raise @model.Io("Truncated git cat-file --batch body")
+      }
+      self.sources[domain_path] = @utf8.decode_lossy(bytes[pos:pos + size])
+      pos = pos + size
+      if pos < bytes.length() && bytes[pos] == b'\n' {
+        pos += 1
+      }
+    }
+    start = end
+  }
+}
+
+///|
 async fn Reader::read(self : Reader, path : String) -> String? {
   let domain_path = relative(self.root, join(self.root, path))
+  if self.sources.get(domain_path) is Some(cached) {
+    return Some(cached)
+  }
   let result = match (self.git_root, self.head) {
     (Some(root), Some(head)) => {
       let repo_path = relative(root, join(self.root, domain_path))

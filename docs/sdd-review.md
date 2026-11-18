@@ -146,3 +146,12 @@
   - 同步更新 [docs/README.md](README.md)、[需求规格](requirements.md)（补齐测试映射与验证证据）、[命令契约](commands.md)、[混合 workspace 设计](mixed-workspaces.md) 与 [测试策略](test-strategy.md)。
 - **尚余部分/延后事项**：
   - `FR-014`/`FR-015`（GitHub Action 在线演练与 GitHub App 服务端逻辑）、`FR-022`（多平台原生二进制目标产物矩阵）、`FR-023`（跨分区自动协调导出）以及非 `crates.io` Cargo registry / Tauri 同步仍维持 `Proposed`/`Partial`/`Deferred` 状态。
+
+---
+
+## 7. PR Bot Action 切换与收口记录（2026-11-18）
+
+- **SDD 切换（ADR-007）**：将 PR Bot 从需要外部托管与重写的 GitHub App 切换为模块化 Composite GitHub Action（`setup/`、`pr-check/`、`pr-comment/`、根 `action.yml`），并补齐 `SEC-005`（`pull_request_target` 权限与代码隔离红线）与 `OPS-001`（三平台预编译二进制与 `SHA256SUMS` 分发）。
+- **存量与未完成项收口**：修复 `.github/workflows/moonset-release.yml` 真实发布漏传 `--yes`、`README.md` 损坏符号链接与过期状态文档；完成 `FR-023` 共存模式只读协调导出（[engine/coexistence.mbt](../engine/coexistence.mbt)）与 `NFR-005` 性能基准（100 包 + 1000 changeset：纯规划 `27.66 ms`，CLI `status` `411 ms`，通过 `git cat-file --batch` 批量读取和单次 `git log` 将 `status --since` 从十余分钟优化至 `1495 ms`）。
+- **PR Bot 实现与静态审查**：实现纯计算渲染器 [engine/pr_comment.mbt](../engine/pr_comment.mbt)、`moonset status --output markdown [--head-repo] [--head-ref]`，以及参考/自用 workflows 与静态安全检查脚本 [scripts/lint-workflows.mbtx](../scripts/lint-workflows.mbtx)。
+- **尚余事项**：`FR-022` 多平台二进制产物发布矩阵、非 `crates.io` Cargo registry 与 Tauri 仍维持 `Partial`/`Deferred`；真实 GitHub Runner 触发演练与 `actionlint` 在线校验待推送到 GitHub 后验证。

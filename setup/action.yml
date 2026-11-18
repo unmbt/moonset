@@ -1,0 +1,35 @@
+name: Setup moonset CLI
+description: Download and SHA-256 verify the prebuilt moonset CLI binary (or register a trusted local binary).
+inputs:
+  version:
+    description: Release tag to download (defaults to action ref when v*, otherwise latest)
+    required: false
+    default: ''
+  binary-path:
+    description: Optional path to a trusted prebuilt moonset binary (skips download)
+    required: false
+    default: ''
+  github-token:
+    description: GitHub token used to download release assets
+    required: false
+    default: ${{ github.token }}
+outputs:
+  path:
+    description: Path to the moonset executable
+    value: ${{ steps.install.outputs.path }}
+  version:
+    description: Resolved moonset release tag or 'local'
+    value: ${{ steps.install.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_BINARY_PATH: ${{ inputs.binary-path }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_ACTION_REPOSITORY: ${{ github.action_repository || 'unmbt/moonset' }}
+      run: |
+        bash "${{ github.action_path }}/install.sh"

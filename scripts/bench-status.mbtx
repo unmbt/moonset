@@ -1,0 +1,111 @@
+----
+import {
+  "moonbitlang/core/async",
+  "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/core/path",
+  "moonbitlang/core/json",
+}
+----
+async fn write(root : String, path : String, text : String) -> Unit {
+  let file = @path.Path(root).join(@path.Path(path)).to_string()
+  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_exist=true)
+  @fs.write_text(file, text)
+}
+
+async fn git(root : String, args : Array[String]) -> String {
+  let result = @shell.Cmd("git", args, cwd=root).output()
+  if result.exit_code() != 0 { fail("git " + args.join(" ") + ": " + result.stderr()) }
+  result.stdout().trim().to_owned()
+}
+
+fn median_sorted(values : Array[Int64]) -> Int64 {
+  values.sort()
+  values[values.length() / 2]
+}
+
+async fn time_cmd(binary : String, args : Array[String]) -> Int64 {
+  let t0 = @env.now()
+  let res = @shell.Cmd(binary, args).output()
+  let t1 = @env.now()
+  if res.exit_code() != 0 {
+    fail("benchmark command failed: " + args.join(" ") + "\n" + res.stderr())
+  }
+  (t1 - t0).reinterpret_as_int64()
+}
+
+async fn main {
+  @shell.Cmd("moon", ["build", "--target", "native", "--release"]).run()
+  let project = @env.current_dir().unwrap()
+  let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
+  let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
+
+  let root = @fs.tmpdir(prefix="moonset-bench-")
+  defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
+
+  ignore(git(root, ["init", "-b", "main"]))
+  ignore(git(root, ["config", "user.name", "Moonset Bench"]))
+  ignore(git(root, ["config", "user.email", "bench@example.invalid"]))
+
+  let members : Array[String] = []
+  for i in 0..<100 {
+    let rel = "packages/pkg-" + i.to_string()
+    members.push("\"" + rel + "\"")
+    let dep = if i > 0 {
+      "\nimport {\n  \"acme/pkg-" + (i - 1).to_string() + "@1.0.0\",\n}\n"
+    } else {
+      "\n"
+    }
+    write(root, rel + "/moon.mod", "name = \"acme/pkg-" + i.to_string() + "\"\nversion = \"1.0.0\"" + dep)
+    write(root, rel + "/lib.mbt", "pub fn id() -> Int { " + i.to_string() + " }\n")
+  }
+  write(root, "moon.work", "members = [\n  " + members.join(",\n  ") + "\n]\n")
+  write(root, ".changeset/config.json", "{\"schemaVersion\":1,\"fixed\":[[\"acme/pkg-0\",\"acme/pkg-1\",\"acme/pkg-2\"]]}")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "base 100 units"]))
+
+  ignore(git(root, ["switch", "-c", "bench-pr"]))
+  for j in 0..<1000 {
+    let idx = j % 100
+    let bump = if j % 20 == 0 { "minor" } else { "patch" }
+    write(
+      root,
+      ".changeset/cs-" + j.to_string() + ".md",
+      "---\n\"acme/pkg-" + idx.to_string() + "\": " + bump + "\n---\nChange #" + j.to_string() + "\n",
+    )
+  }
+  write(root, "packages/pkg-0/lib.mbt", "pub fn id() -> Int { 999 }\n")
+  ignore(git(root, ["add", "."]))
+  ignore(git(root, ["commit", "-m", "1000 changesets"]))
+
+  // Warmup
+  ignore(time_cmd(binary, ["--cwd", root, "status", "--output", "json"]))
+
+  let status_times : Array[Int64] = []
+  let since_times : Array[Int64] = []
+  let md_times : Array[Int64] = []
+  for _ in 0..<3 {
+    status_times.push(time_cmd(binary, ["--cwd", root, "status", "--output", "json"]))
+    since_times.push(time_cmd(binary, ["--cwd", root, "status", "--since", "main", "--output", "json"]))
+    md_times.push(time_cmd(binary, ["--cwd", root, "status", "--since", "main", "--output", "markdown"]))
+  }
+
+  let report : Json = {
+    "schemaVersion": 1,
+    "units": 100,
+    "changesets": 1000,
+    "runs": 3,
+    "medianMs": {
+      "statusJson": median_sorted(status_times).to_double(),
+      "statusSinceJson": median_sorted(since_times).to_double(),
+      "statusSinceMarkdown": median_sorted(md_times).to_double(),
+    },
+    "samplesMs": {
+      "statusJson": Json::array(status_times.map(x => Json::number(x.to_double()))),
+      "statusSinceJson": Json::array(since_times.map(x => Json::number(x.to_double()))),
+      "statusSinceMarkdown": Json::array(md_times.map(x => Json::number(x.to_double()))),
+    },
+  }
+  println(report.stringify(indent=2))
+}
