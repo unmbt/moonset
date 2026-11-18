@@ -36,20 +36,21 @@ jobs:
       - run: moon build --target native --release
       - name: Stage trusted moonset CLI binary
         shell: bash
+        env:
+          CLI_OUT: ${{ runner.temp }}/moonset-cli
         run: |
           set -euo pipefail
-          mkdir -p dist
           src="_build/native/release/build/cmd/moonset/moonset.exe"
           if [ ! -f "$src" ]; then
             src="_build/native/release/build/cmd/moonset/moonset"
           fi
-          cp "$src" dist/moonset-cli
-          chmod +x dist/moonset-cli
+          cp "$src" "$CLI_OUT"
+          chmod +x "$CLI_OUT"
       - id: release
         uses: ./
         with:
           mode: version-pr
-          binary-path: dist/moonset-cli
+          binary-path: ${{ runner.temp }}/moonset-cli
 
   publish:
     needs: version-pr
@@ -92,21 +93,22 @@ jobs:
       - name: Stage trusted moonset CLI binary
         if: steps.check-state.outputs.present == 'true'
         shell: bash
+        env:
+          CLI_OUT: ${{ runner.temp }}/moonset-cli
         run: |
           set -euo pipefail
-          mkdir -p dist
           src="_build/native/release/build/cmd/moonset/moonset.exe"
           if [ ! -f "$src" ]; then
             src="_build/native/release/build/cmd/moonset/moonset"
           fi
-          cp "$src" dist/moonset-cli
-          chmod +x dist/moonset-cli
+          cp "$src" "$CLI_OUT"
+          chmod +x "$CLI_OUT"
       - id: release
         if: steps.check-state.outputs.present == 'true'
         uses: ./
         with:
           mode: publish
-          binary-path: dist/moonset-cli
+          binary-path: ${{ runner.temp }}/moonset-cli
           mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
       - name: Upload publish status artifact
         if: always() && steps.check-state.outputs.present == 'true'
