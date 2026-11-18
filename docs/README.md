@@ -20,7 +20,7 @@
 10. [参考实现评估](references.md)：`moon-bump`、`moon-manifest`、`native-toolchain` 与 Changesets 源码的取舍。
 11. [Roadmap](roadmap.md)：按阶段交付和每个阶段的退出条件。
 12. [混合 workspace 设计](mixed-workspaces.md)：MoonBit + npm/pnpm 的共存、统一管理、跨生态构建与发布；包含 napi-rs/Tauri 类型场景和后续 Cargo 边界。
-13. [收口与性能优化记录](performance-and-closure.md)：存量修复、FR-023 共存导出、NFR-005 基准测试与 `git cat-file --batch` 优化。
+13. [常见问题与排障指南（FAQ）](faq.md)：GitHub Actions PR 创建权限、审批界面与合并按钮、macOS Runner 排队、`MOONCAKES_CREDENTIALS` 与 `.moonset/` 目录规范。
 
 设计决策记录在 [decisions/](decisions/)；符合性审查与阶段历史记录见 [SDD 审查报告](sdd-review.md)。
 

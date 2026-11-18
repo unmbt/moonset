@@ -2,7 +2,7 @@
 
 > Roadmap 只描述可交付能力，不承诺日历日期。每个阶段完成后必须满足退出条件，才能进入下一阶段。
 
-## Phase 0 — 规格与探针（已建立基线）
+## Phase 0 — 规格与探针（已完成）
 
 交付：需求、命令契约、配置、数据模型、架构、API、自动化和 ADR；建立最小 fixtures 和工具链探针。
 
@@ -13,22 +13,20 @@
 - 规划器输入/输出 fixture 能覆盖单模块、workspace、fixed、linked、pre。
 - 补充评审 [混合 workspace 设计](mixed-workspaces.md) 与 ADR-006，明确共存分区和统一管理；不把“可换 publisher”当成已经支持混合 workspace。
 
-## Phase 1 — 核心读模型与规划器
+## Phase 1 — 核心读模型与规划器（已完成）
 
-实现已落地；验收命令与边界见 [Phase 1 契约](phase-1-contract.md)。完整发布流程完成前保持 alpha。共享 manifest 依赖采用经过三平台 CI 的 0.2.0 alpha；`native-toolchain` 不属于此阶段依赖。
-
-交付：workspace discovery、无损 manifest 读取、changeset parser、config loader、SemVer、依赖图和纯 release planner；实现 `status` 与 `publish-plan`。
+交付：workspace discovery、无损 manifest 读取、changeset parser、config loader、SemVer、依赖图和纯 release planner；实现 `status` 与 `publish-plan`。验收命令与边界见 [Phase 1 契约](phase-1-contract.md)。
 
 退出条件：
 
-- 规划器无 I/O 依赖，golden tests 在 native 通过。
+- 规划器无 I/O 依赖，golden tests 在 `native` 与 `wasm-gc` 通过。
 - 错误定位包含文件和行列；无效输入不会产生写入。
 - JSON 输出 schema 版本为 `1`，并有兼容性测试。
-- 核心从开始使用 UnitId、ReleaseUnit、ownership 和分类型依赖；支持同目录双清单的共存边界，JS/Cargo 未接入时明确报 capability。覆盖 FR-018、FR-019、FR-023 的基础场景。
+- 核心从开始使用 UnitId、ReleaseUnit、ownership 和分类型依赖；支持同目录双清单的共存边界，覆盖 FR-018、FR-019、FR-023 的基础场景。
 
-## Phase 2 — 贡献工作流
+## Phase 2 — 贡献工作流（已完成）
 
-交付：`init`、`add`、`pre`、交互式摘要、格式化和 changeset README；补充 PR 检查脚本。
+交付：`init`、`add`、`pre`、交互式 TUI 摘要、格式化和 changeset README；补充 PR 检查脚本与 `doctor`。
 
 退出条件：
 
@@ -36,55 +34,66 @@
 - 重复 `init` 不覆盖文件，`add` 生成 ID 不冲突。
 - CI 能使用 `status --since` 判断是否需要 changeset。
 
-## Phase 3 — 版本与 Changelog（实现中：核心流程与锁文件 staging 已接入）
+## Phase 3 — 版本与 Changelog（已完成）
 
-交付：`version`、内置 changelog 生成器、依赖范围更新、fixed/linked/private 策略、原子写盘、`tag`。
+交付：`version`、内置 changelog 生成器、依赖范围更新、fixed/linked/private 策略、原子写盘与 journal 恢复、`tag`、npm/pnpm/Cargo 混合清单发现与隔离锁文件 staging。
 
 退出条件：
 
-- 当前已实现 version-plan、内置 changelog、MoonBit/npm 版本编辑、release state、journal 恢复、tag CLI，以及 npm/pnpm 隔离 staging 锁文件更新与 `verify-only`。
-
-- 版本前后所有 manifest 的语法仍可被 MoonBit 解析。
+- 已实现 version-plan、内置 changelog（builtin/git/github）、MoonBit/npm/Cargo 版本编辑、release state、journal 恢复、tag CLI，以及 npm/pnpm/Cargo 隔离 staging 锁文件更新与 `verify-only`。
+- 版本前后所有 manifest 的语法仍可被对应生态工具链解析。
 - 失败演练后工作区可按恢复指令回到一致状态。
-- 生成的 changelog 有稳定格式、日期和链接策略。
-- 接入 npm/pnpm workspace discovery、JSON 编辑和锁文件 staging；用混合计划验证 bridge、fixed/linked、private 发布禁令和跨生态 tag/changelog 冲突（FR-018 至 FR-021）。
+- 生成的 changelog 有稳定格式、日期和链接策略；已覆盖 FR-018 至 FR-021。
 
-## Phase 4 — 发布与官方自动化（实现中）
+## Phase 4 — 发布与官方自动化（已完成）
 
-交付：`pack`、`publish`、Mooncakes/npm 命令适配基线、模块化 GitHub Actions（`setup`/`pr-check`/`pr-comment`/根发布 Action）、三平台预编译二进制发布工作流、逐目标状态和重试。
+交付：`pack`、`publish`、Mooncakes/npm/Cargo 命令适配、模块化 GitHub Actions（`setup`/`pr-check`/`pr-comment`/根发布 `action.yml`）、跨平台预编译二进制发布工作流与用户安装脚本（`scripts/install.sh`、`scripts/install.ps1`）、逐目标状态与失败续跑。
 
 退出条件：
 
 - dry-run 不修改注册表和 Git 引用。
-- 发布失败能区分已发布和未发布模块，重复执行不会错误重发。
-- CI 参考 workflow 通过 `actionlint`、静态安全检查和最小权限审查。
-- 预编译二进制与 `SHA256SUMS` 由 tag 工作流自动构建并在 `setup` Action 中校验。
-- MoonBit + npm 双目标发布和 native addon 平台包完成端到端验证；分离 build/publish DAG，支持按 target 续跑及凭据隔离（FR-022）。
+- 发布失败能区分已发布和未发布模块，重复执行不会错误重发（含 `moon view` 幂等查询与 `publish-state.json` 续跑）。
+- CI 工作流与 Action 通过 `actionlint` 与 `scripts/lint-workflows.mbtx` 静态安全审查。
+- 预编译二进制与 `SHA256SUMS` 由 tag / `workflow_call` 工作流自动构建并在安装时校验。
+- 已完成 `v0.1.0` 自举 Release PR、`mooncakes.io` 正式发布与多平台二进制分发流水线验证。
 
-## Phase 5 — 扩展生态（首个完整交付切片）
+## Phase 5 — 扩展生态（已完成）
 
-交付：`@moonset/api` 稳定接口、Git/GitHub changelog 生成器、JSONL generator/publisher 协议、第三方适配器示例。
+交付：`unmbt/moonset/api` 稳定接口、纯 `changelog` 生成器、JSONL generator/publisher 协议、第三方适配器示例与 Cargo (`crates.io`) 适配。
 
 退出条件：
 
-- API 版本策略和兼容承诺写入文档。
-- 一个外部 MoonBit 包和一个外部进程插件完成端到端测试。
+- API 版本策略（`api_version = "1.0.0"`）和兼容承诺写入 [Phase 5 API](phase-5-api.md)。
+- 一个外部 MoonBit 包（`fixtures/external-moonbit-api`）和一个外部进程 JSONL 插件完成端到端测试。
 - 插件超时、非法输出和权限拒绝均有测试。
-- EcosystemAdapter/ArtifactProvider conformance suite 覆盖 discovery、range、ownership、lockfile、artifact、publish 能力。Cargo/Tauri 类适配在此后按需求接入，未完成前保持 Deferred（FR-024）。
 
-## Phase 6 — PR Bot Action 与规模化治理
+## Phase 6 — PR Bot Action 与规模化治理（进行中 — 核心已随 `v0.1.0` 交付）
 
-交付：模块化 PR Bot Action（`pr-check` + `pr-comment`）、PR 评论幂等去重、可选缺失标签策略、审计事件、1000 包/10000 changeset 基准和缓存。
+已交付：模块化 PR Bot Action（`pr-check` + `pr-comment`）、PR 评论幂等去重与标签同步、HTML/Markdown/提及注入转义、`FR-023` 共存只读协调导出、`NFR-005` 100 包 / 1000 changeset 性能基准（`status --since` 实测 `1495 ms`）、以及 `v0.1.0` 自举发布流水线。
 
-退出条件：
+后续退出条件（`0.2.0+`）：
 
-- Bot 重跑或连续推送不重复新建评论、不执行 Fork 代码、不触发发布。
-- 性能、并发、失败恢复和升级路径有数据。
-- 稳定版发布清单完成，Draft 需求全部处理。
+- 完成外部贡献者 Fork PR 的 `pull_request_target` 真实线上联调，并发布/维护供外部仓库引用的 `v1` 浮动 Action 主标签。
+- **大规模性能与增量缓存**：将基准扩展至 1000 包 / 10000 changeset，按实测评估增量快照缓存。
+- **审计事件收敛**：统一 Action 审计日志字段（`schemaVersion`、`planFingerprint`、`duration`、脱敏摘要）。
 
-## 暂缓项目
+## 后续迭代规划（`v0.2.0+`）
 
-- Node Changesets 的配置、插件运行时及目录互写兼容：暂不承诺。npm/pnpm 混合 workspace 的原生支持已纳入 Phase 3/4，不再整体推迟。
+在 `0.1.0` 稳定基线之上，后续优先推进以下能力：
+
+1. **`FR-022` 多平台原生产物矩阵与 build/publish 分离 DAG**
+   - 完善 `napi-mbt` / `napi-rs` 等同目录双清单项目的平台衍生包（OS/arch/ABI）产物校验与 `optionalDependencies` 发布编排，隔离多平台构建 Job 与发布凭据。
+2. **更多平台与生态扩展（原 `Deferred` 项按需推进）**
+   - 预编译二进制按需扩展 Windows ARM64 / macOS x64 构建目标；
+   - 评估并接入非 `crates.io` 私有 Cargo registry；
+   - 评估 Tauri 应用版本同步适配器（如 `tauri.conf.json`）。
+3. **外部端口与生态一致性收敛（`FR-024`）**
+   - 进一步将实验性 `adapters` trait 与 `executor::ExecutionHost` 统一下沉，提供更完整的 conformance suite。
+4. **文档与示例演进**
+   - 扩充混合 workspace（MoonBit + pnpm / Cargo）实战模板与第三方 JSONL 插件示例仓库。
+
+## 明确暂缓项目
+
+- Node Changesets 的配置、插件运行时及目录互写兼容：暂不承诺，保持分区共存边界（`FR-023`）。
 - 任意动态 MoonBit 模块加载：由编译期 API 和 JSONL 协议覆盖，等工具链提供稳定模块加载机制后再评估。
-- 自动提交/推送：保留显式开关；默认让 CI 或维护者控制 Git 提交边界。
-- 非 `crates.io` Cargo registry 与 Tauri 应用配置同步：保持 Deferred。
+- 默认自动提交/推送：保留显式配置开关（`commit.mode`），默认让 CI 或维护者控制 Git 提交边界。

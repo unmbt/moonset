@@ -20,6 +20,9 @@
 
 单仓库内自用 release workflow 见 [.github/workflows/moonset-release.yml](../.github/workflows/moonset-release.yml)；PR Bot 自用 workflow 见 [.github/workflows/moonset-pr-bot.yml](../.github/workflows/moonset-pr-bot.yml)。混合发布继续遵循第 7 节的依赖图与 target 路由，不能把非 MoonBit 单元交给 `moon publish`。
 
+> [!IMPORTANT]
+> 启用 `version-pr` 前，请确保在仓库（或组织）**`Settings → Actions → General → Workflow permissions`** 勾选 **`Allow GitHub Actions to create and approve pull requests`**；发布 MoonBit 包需配置 `MOONCAKES_CREDENTIALS` Secret（`~/.moon/credentials.json` 内容）。常见问题与 UI 操作排障见 [FAQ](faq.md)。
+
 ## 3. 权限矩阵与安全红线
 
 | Job | `permissions` | Checkout 策略 | 凭据与秘密 |

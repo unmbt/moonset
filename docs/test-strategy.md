@@ -77,3 +77,29 @@ moon info
 | MIX-012 | Cargo adapter 缺失、registry 不支持 next channel、同目录 changelog/tag 重名 | capability/ownership/ref 错误；不能以“未发现变化”退出成功。 |
 
 分别对 npm 与 pnpm 维护固定 manager 版本的 fixtures。Cargo 和 Tauri 配置样例只作模型检验，真实支持需要额外 adapter conformance 证据。
+
+---
+
+## 6. `NFR-005` 性能基准与子进程瓶颈基线
+
+为验证 **100 个包 + 1000 个 changeset** 规模下的性能指标，建立了两层可重复基准：
+
+1. **纯计算核心基准（无 I/O）**：[engine/planner_bench_test.mbt](../engine/planner_bench_test.mbt)
+   - 合成 100 个 MoonBit 单元（含链式依赖、扇出依赖与 2 个 `fixed` 组）与 1000 份 changeset 文本。
+   - 测量 `parse_changeset` × 1000 + `build_plan` + `status_json` + `status_markdown` 全链路耗时，并配套等价正确性测试。
+2. **CLI 端到端基准（真实 Git 仓库）**：[scripts/bench-status.mbtx](../scripts/bench-status.mbtx)
+   - 在临时目录初始化包含 100 个成员的 `moon.work` 与 1000 个 `.changeset/cs-*.md` 文件及两条提交，编译 `--release` 二进制后预热 1 次、采样 3 轮取中位数。
+
+### 关键优化手段
+
+1. **批量 `git log` 与按需关闭**（[workspace/discovery.mbt](../workspace/discovery.mbt)、[cli/run.mbt](../cli/run.mbt)）：`changeset_commits` 收集改写为针对 `.changeset/` 目录的单次 `git log --diff-filter=A --name-only`；`status` 与 `publish-plan` 传入 `include_commits=false` 完全跳过提交历史查询。
+2. **`git cat-file --batch` 分批预读与缓存**（[workspace/reader.mbt](../workspace/reader.mbt)、[workspace/discovery.mbt](../workspace/discovery.mbt)）：`Reader::prefetch(paths)` 按每批最多 200 个路径通过 stdin 喂给 `git cat-file --batch` 并按字节长度精确切片缓存至 `Reader.sources`，将 `status --since` 所需 `git` 子进程从 2100+ 次降至 ~12 次。
+
+### 实测数据与冻结预算（2026-11-18，Windows `--release`）
+
+| 测试项 | 指标 | 实测结果 | 冻结预算（`NFR-005`） |
+|---|---|---|---|
+| `moon bench engine --target native` (`nfr005-100u-1000cs`) | mean ± σ（10 × 4 runs） | `27.36 ms ± 223.74 µs`（min `26.97 ms`, max `27.69 ms`） | p50 `< 1 s` |
+| `moonset status --output json`（100 包 / 1000 changesets） | 3 次中位数 | `411 ms`（样本 `[395, 411, 421]` ms） | p50 `< 5 s` |
+| `moonset status --since main --output json`（同规模） | 3 次中位数 | `1494 ms`（样本 `[1487, 1494, 1499]` ms） | p50 `< 5 s` |
+| `moonset status --since main --output markdown`（同规模） | 3 次中位数 | `1495 ms`（样本 `[1493, 1495, 1502]` ms） | p50 `< 5 s` |

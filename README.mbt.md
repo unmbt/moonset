@@ -70,15 +70,35 @@ irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 |
 - **[moon-bump](https://github.com/unmbt/moon-bump)**：适合单包或紧凑型 workspace 的**本地交互式一键发版**（修改 `moon.mod`、提交、打 tag、推送）。
 - **moonset**：适合**PR 协作与多包 / 混合生态（MoonBit + npm/pnpm + Cargo）发版治理**，通过 `.changeset/*.md` 记录变更意图、生成发布计划与 `CHANGELOG.md`，并配合模块化 GitHub Actions 自动化检查与发布。
 
-快速试跑：
+### 快速上手（本地完整流程）
 
-```sh
-moonset status --json
+```bash
+# 1. 初始化 .changeset/ 目录、默认配置与 .gitignore
+moonset init
+
+# 2. 检查本机工具链、Git 与 workspace 状态
+moonset doctor
+
+# 3. 记录一次变更（不传参数进入交互式 TUI，也可使用非交互参数）
+moonset add
+moonset add --package unmbt/example/core --type minor --summary "新增流式解析接口"
+
+# 4. 预览待发布版本计划（只读）
+moonset status --verbose
 moonset publish-plan --pretty
-moonset status --since main --json
+
+# 5. 应用版本号、更新依赖范围并生成 CHANGELOG.md 与 .moonset/release-state.json
+moonset version --dry-run
+moonset version
+
+# 6. 提交发布改动后，先预演发布再正式发布与打 tag
+git add -A && git commit -m "chore: release"
+moonset publish --dry-run
+moonset publish --yes   # 干净工作树下会自动触发 tag（可用 --no-tag 跳过后手动打标）
+moonset tag --push --yes
 ```
 
-`publish-plan` 输出不可执行的分析计划；不会改版本或发布。`--since` 使用已提交的 HEAD 快照，空 changeset 可以放行 PR 检查。
+> **预发布模式提示**：可通过 `moonset pre enter alpha --initial-version` 进入预发布，多次发布后执行 `moonset pre exit && moonset version` 毕业为正式版。`--since main` 只读取 `HEAD` 已提交快照，适合 CI 校验 PR 是否附带了 changeset。更多问题见 [常见问题与排障 FAQ](docs/faq.md)。
 
 ### 理念
 
@@ -192,6 +212,49 @@ jobs:
           should-comment: ${{ needs.check.outputs.should-comment }}
 ```
 
+### 自动 Release PR 与发布（GitHub Action）
+
+复制到 `.github/workflows/moonset-release.yml`，主分支合入带 changeset 的 PR 后会自动创建/更新 Release PR，合并 Release PR 后自动发布到 Mooncakes 并打 tag：
+
+```yaml
+name: moonset release
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: moonset-release-${{ github.ref }}
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  version-pr:
+    runs-on: ubuntu-latest
+    permissions: { contents: write, pull-requests: write }
+    outputs:
+      has-changesets: ${{ steps.release.outputs.has-changesets }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - id: release
+        uses: unmbt/moonset@v1
+        with:
+          mode: version-pr
+  publish:
+    needs: version-pr
+    if: needs.version-pr.outputs.has-changesets == 'false'
+    runs-on: ubuntu-latest
+    permissions: { contents: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: hustcer/setup-moonbit@v1
+      - uses: unmbt/moonset@v1
+        with:
+          mode: publish
+          mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
+```
+
+> **上线前两项必查**：① 在仓库 **`Settings → Actions → General → Workflow permissions`** 勾选 **`Allow GitHub Actions to create and approve pull requests`**；② 在 **`Settings → Secrets and variables → Actions`** 配置 `MOONCAKES_CREDENTIALS`（与 `~/.moon/credentials.json` 一致）。若默认分支为 `master`，请同步调整 `branches` 与 `.changeset/config.json` 中的 `baseBranch`。详细排障见 [FAQ](docs/faq.md) 与 [自动化设计](docs/automation.md)。
+
 ### 架构
 
 ```text
@@ -221,13 +284,13 @@ moonset/
 | 3 | 版本与 Changelog（`version` · `tag`） | 已实现 |
 | 4 | 发布与官方自动化（`pack` · `publish` · Actions） | 已实现（含发布 Action） |
 | 5 | 扩展生态（稳定 API 与插件协议） | 已实现 |
-| 6 | PR Bot Actions 与规模化治理 | PR Bot Action 已实现（1000 包规模待基准） |
+| 6 | PR Bot Actions 与规模化治理 | PR Bot Action 与 100 包基准已发布 `v0.1.0`（1000 包 / `FR-022` 矩阵见 `0.2.0+`） |
 
 每个阶段皆有明确的退出条件，详见 [Roadmap](docs/roadmap.md)。
 
 ### 文档索引
 
-[需求规格](docs/requirements.md) · [命令契约](docs/commands.md) · [配置规范](docs/configuration.md) · [数据模型](docs/data-model.md) · [系统架构](docs/architecture.md) · [Changelog 规范](docs/changelog.md) · [自动化设计](docs/automation.md) · [编程 API](docs/api.md) · [测试策略](docs/test-strategy.md) · [参考实现评估](docs/references.md) · [设计决策](docs/decisions/README.md)
+[常见问题 FAQ](docs/faq.md) · [需求规格](docs/requirements.md) · [命令契约](docs/commands.md) · [配置规范](docs/configuration.md) · [数据模型](docs/data-model.md) · [系统架构](docs/architecture.md) · [Changelog 规范](docs/changelog.md) · [自动化设计](docs/automation.md) · [编程 API](docs/api.md) · [测试策略](docs/test-strategy.md) · [参考实现评估](docs/references.md) · [设计决策](docs/decisions/README.md)
 
 ### 参与开发
 
@@ -296,6 +359,36 @@ irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 |
 - **[moon-bump](https://github.com/unmbt/moon-bump)**: streamlined interactive version bumping for single modules or lockstep MoonBit workspaces.
 - **moonset**: PR-centric changeset workflow, release planning, changelog generation, and multi-ecosystem (`MoonBit` + `npm/pnpm` + `Cargo`) automation with modular GitHub Actions.
 
+### Quick Start (CLI Workflow)
+
+```bash
+# 1. Initialise .changeset/ config, README, and .gitignore
+moonset init
+
+# 2. Verify local MoonBit, Git, and workspace configuration
+moonset doctor
+
+# 3. Create a changeset (interactive TUI by default, or pass flags)
+moonset add
+moonset add --package unmbt/example/core --type minor --summary "Add streaming parser"
+
+# 4. Preview pending releases (read-only)
+moonset status --verbose
+moonset publish-plan --pretty
+
+# 5. Apply version bumps, dependency ranges, CHANGELOG.md, and release-state.json
+moonset version --dry-run
+moonset version
+
+# 6. Commit release changes, preflight, publish, and push tags
+git add -A && git commit -m "chore: release"
+moonset publish --dry-run
+moonset publish --yes
+moonset tag --push --yes
+```
+
+> **Prereleases**: run `moonset pre enter alpha --initial-version` to enter prerelease mode, then graduate back to stable with `moonset pre exit && moonset version`. See [FAQ & Troubleshooting](docs/faq.md) for common questions.
+
 ### Philosophy
 
 | | Principle | In essence |
@@ -363,6 +456,19 @@ Add a streaming parser API; the CLI now handles line endings correctly.
 
 See the [configuration spec](docs/configuration.md) and the [JSON Schema](docs/schema/config-v1.json) for every field.
 
+### GitHub Actions Integration (PR Bot & Releases)
+
+Add the ready-to-use workflows from [docs/examples/workflows/](docs/examples/workflows/):
+
+- **PR Bot** ([moonset-pr-bot.yml](docs/examples/workflows/moonset-pr-bot.yml)): two-job `pull_request_target` check (`unmbt/moonset/pr-check@v1`) and idempotent PR comment updater (`unmbt/moonset/pr-comment@v1`), safe for external Fork PRs.
+- **Automated Release PR & Publish** ([moonset-release.yml](docs/examples/workflows/moonset-release.yml)): opens/updates the release PR on `push` (`mode: version-pr`), then publishes to `mooncakes.io` and pushes tags upon merge (`mode: publish`).
+
+> [!IMPORTANT]
+> Before enabling automated Release PRs:
+> 1. Enable **`Allow GitHub Actions to create and approve pull requests`** under **`Settings → Actions → General → Workflow permissions`**.
+> 2. Add repository secret **`MOONCAKES_CREDENTIALS`** (contents of `~/.moon/credentials.json` after `moon login`).
+> See [FAQ & Troubleshooting](docs/faq.md) if you hit permission or runner queuing issues.
+
 ### Architecture
 
 ```text
@@ -392,13 +498,13 @@ Asynchrony and processes build on `moonbitlang/core/async`; program names and ar
 | 3 | Versioning & changelog (`version` · `tag`) | Implemented |
 | 4 | Publishing & official automation (`pack` · `publish` · Actions) | Implemented |
 | 5 | Extension ecosystem (stable API & plugin protocol) | Implemented |
-| 6 | PR Bot Actions & governance at scale | PR Bot Actions implemented (1000-pkg scale pending) |
+| 6 | PR Bot Actions & governance at scale | PR Bot Actions & 100-pkg bench shipped in `v0.1.0` (`v0.2.0+` tracks 1000-pkg & `FR-022` matrix) |
 
 Each phase has explicit exit criteria — see the [Roadmap](docs/roadmap.md).
 
 ### Documentation
 
-[Requirements](docs/requirements.md) · [Commands](docs/commands.md) · [Configuration](docs/configuration.md) · [Data model](docs/data-model.md) · [Architecture](docs/architecture.md) · [Changelog](docs/changelog.md) · [Automation](docs/automation.md) · [API](docs/api.md) · [Test strategy](docs/test-strategy.md) · [References](docs/references.md) · [Decisions](docs/decisions/README.md)
+[FAQ](docs/faq.md) · [Requirements](docs/requirements.md) · [Commands](docs/commands.md) · [Configuration](docs/configuration.md) · [Data model](docs/data-model.md) · [Architecture](docs/architecture.md) · [Changelog](docs/changelog.md) · [Automation](docs/automation.md) · [API](docs/api.md) · [Test strategy](docs/test-strategy.md) · [References](docs/references.md) · [Decisions](docs/decisions/README.md)
 
 ### Contributing
 
