@@ -199,7 +199,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
   assert_true(cl.contains("New fix in alpha.1"))
   assert_true(!cl.contains("Old feature already released"))
   assert_true(cl.contains("https://github.com/unmbt/moonset/pull/77"))
-  assert_true(cl.contains("Thanks [@wyate]!"))
+  assert_true(cl.contains("Thanks [@wyate](https://github.com/wyate)!"))
   assert_true(cl.contains("abcdef12"))
 
   // Pre exit with zero prereleases still cleans up pre.json

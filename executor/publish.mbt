@@ -118,6 +118,7 @@ fn topological_release_order(
   release_ids : Array[String],
   units_map : Map[String, @model.ReleaseUnit],
   bridges : Array[@model.Bridge],
+  specs_by_unit : Map[String, Array[@engine.ArtifactTargetSpec]],
 ) -> Array[String] {
   let ordered : Array[String] = []
   let visited : Map[String, Bool] = Map([])
@@ -134,8 +135,18 @@ fn topological_release_order(
       }
     }
     for bridge in bridges {
-      if bridge.consumer == id && release_ids.contains(bridge.producer) {
+      if bridge.consumer == id &&
+        bridge.wait_for == "publish" &&
+        release_ids.contains(bridge.producer) {
         visit(bridge.producer)
+      }
+    }
+    for spec in specs_by_unit.get(id).unwrap_or([]) {
+      if spec.required &&
+        spec.package_unit_id is Some(pkg) &&
+        pkg != id &&
+        release_ids.contains(pkg) {
+        visit(pkg)
       }
     }
     ordered.push(id)
@@ -151,6 +162,7 @@ fn upstream_producers(
   unit_id : String,
   units_map : Map[String, @model.ReleaseUnit],
   bridges : Array[@model.Bridge],
+  specs_by_unit : Map[String, Array[@engine.ArtifactTargetSpec]],
 ) -> Array[String] {
   let producers : Array[String] = []
   if units_map.get(unit_id) is Some(unit) {
@@ -161,8 +173,18 @@ fn upstream_producers(
     }
   }
   for bridge in bridges {
-    if bridge.consumer == unit_id && !producers.contains(bridge.producer) {
+    if bridge.consumer == unit_id &&
+      bridge.wait_for == "publish" &&
+      !producers.contains(bridge.producer) {
       producers.push(bridge.producer)
+    }
+  }
+  for spec in specs_by_unit.get(unit_id).unwrap_or([]) {
+    if spec.required &&
+      spec.package_unit_id is Some(pkg) &&
+      pkg != unit_id &&
+      !producers.contains(pkg) {
+      producers.push(pkg)
     }
   }
   producers
@@ -195,12 +217,14 @@ fn persist_publish_state(
 }
 
 ///|
-pub async fn[H : ExecutionHost] publish_release_with(
+pub async fn[H : ExecutionHost] publish_release_with_artifacts_with(
   host : H,
   loaded : @workspace.LoadedWorkspace,
   options : PublishOptions,
+  artifacts_dir? : String,
 ) -> @model.PublishResult {
   let adapter_registry = @adapters.AdapterRegistry::with_builtins()
+  let specs_by_unit = @engine.parse_artifact_specs(loaded.snapshot.config)
   let state_path = absolute_path(
     loaded.snapshot.root,
     ".moonset/release-state.json",
@@ -280,6 +304,7 @@ pub async fn[H : ExecutionHost] publish_release_with(
           id,
           units_map,
           loaded.snapshot.config.bridges,
+          specs_by_unit,
         ) {
         if release_versions.contains(producer) &&
           !chosen.contains(producer) &&
@@ -353,12 +378,14 @@ pub async fn[H : ExecutionHost] publish_release_with(
       "confirmation-required", "Real publish requires explicit --yes confirmation",
     )
   }
+  let should_verify_matrix = artifacts_dir is Some(_) ||
+    (!specs_by_unit.is_empty() && !options.dry_run)
   let pack_state_path = absolute_path(
     loaded.snapshot.root,
     ".moonset/pack-results.json",
   )
   let packed_by_unit : Map[String, Json] = Map([])
-  if host.exists(pack_state_path) {
+  if !should_verify_matrix && host.exists(pack_state_path) {
     let pack_json = @json.parse(host.read_text(pack_state_path)) catch {
       _ => Json::null()
     }
@@ -516,10 +543,35 @@ pub async fn[H : ExecutionHost] publish_release_with(
       _ => ()
     }
   }
+  let artifact_blocked_messages : Map[String, String] = Map([])
+  if should_verify_matrix {
+    let report = verify_artifacts_with(host, loaded, artifacts_dir?)
+    for issue in report.issues {
+      if issue.blocking && !artifact_blocked_messages.contains(issue.unit_id) {
+        artifact_blocked_messages[issue.unit_id] = issue.message
+      }
+    }
+    for blocked_uid in report.blocked_units {
+      if !artifact_blocked_messages.contains(blocked_uid) {
+        let mut msg = "Required platform artifact verification failed for " +
+          blocked_uid
+        for spec in specs_by_unit.get(blocked_uid).unwrap_or([]) {
+          if spec.required && spec.package_unit_id is Some(pkg) {
+            if artifact_blocked_messages.get(pkg) is Some(sub_msg) {
+              msg = "Blocked by artifact verification failure: " + sub_msg
+              break
+            }
+          }
+        }
+        artifact_blocked_messages[blocked_uid] = msg
+      }
+    }
+  }
   let ordered_ids = topological_release_order(
     selected_ids,
     units_map,
     loaded.snapshot.config.bridges,
+    specs_by_unit,
   )
   let order_keys = ordered_ids.map(id => {
     status_key(id, release_versions[id], "source")
@@ -553,10 +605,27 @@ pub async fn[H : ExecutionHost] publish_release_with(
         continue
       }
     }
+    if artifact_blocked_messages.get(unit_id) is Some(block_msg) {
+      failed = true
+      failed_units[unit_id] = true
+      status_map[key] = {
+        plan_id,
+        unit_id,
+        version,
+        target: "source",
+        registry,
+        state: @model.Blocked,
+        digest: None,
+        external_id: None,
+        message: Some(block_msg),
+      }
+      continue
+    }
     let blocked_by = upstream_producers(
       unit_id,
       units_map,
       loaded.snapshot.config.bridges,
+      specs_by_unit,
     ).filter(p => failed_units.contains(p))
     if !blocked_by.is_empty() {
       failed = true
@@ -793,6 +862,7 @@ pub async fn[H : ExecutionHost] publish_release_with(
       unit_id,
       units_map,
       loaded.snapshot.config.bridges,
+      specs_by_unit,
     ).filter(p => failed_units.contains(p))
     if !blocked_by.is_empty() {
       failed = true
@@ -996,6 +1066,29 @@ pub async fn[H : ExecutionHost] publish_release_with(
       None
     },
   }
+}
+
+///|
+pub async fn publish_release_with_artifacts(
+  loaded : @workspace.LoadedWorkspace,
+  options : PublishOptions,
+  artifacts_dir? : String,
+) -> @model.PublishResult {
+  publish_release_with_artifacts_with(
+    native_host(),
+    loaded,
+    options,
+    artifacts_dir?,
+  )
+}
+
+///|
+pub async fn[H : ExecutionHost] publish_release_with(
+  host : H,
+  loaded : @workspace.LoadedWorkspace,
+  options : PublishOptions,
+) -> @model.PublishResult {
+  publish_release_with_artifacts_with(host, loaded, options)
 }
 
 ///|

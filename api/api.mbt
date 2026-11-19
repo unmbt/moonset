@@ -31,8 +31,20 @@ pub let api_version : String = "1.0.0"
 
 ///|
 pub using @engine {
+  type ArtifactTargetSpec,
+  type ExecutionNode,
+  type ExecutionDag,
+  type ArtifactIssue,
+  type ArtifactVerificationReport,
   build_plan,
   build_version_plan,
+  build_version_plan_with_metadata,
+  changelog_contexts_with_metadata,
+  render_release_pr_body,
+  release_pr_title,
+  build_execution_dag,
+  parse_artifact_specs,
+  verify_artifact_matrix,
   parse_changeset,
   parse_config,
   parse_pre_state,
@@ -70,6 +82,7 @@ pub using @changelog {
   type ChangelogContext,
   type GeneratorRegistry,
   trait ChangelogGenerator,
+  extract_release_notes,
 }
 
 ///|
@@ -94,8 +107,14 @@ pub using @executor {
   stage_lockfiles_with,
   pack_artifacts,
   pack_artifacts_with,
+  pack_artifacts_for_target,
+  pack_artifacts_for_target_with,
+  verify_artifacts,
+  verify_artifacts_with,
   publish_release,
   publish_release_with,
+  publish_release_with_artifacts,
+  publish_release_with_artifacts_with,
   create_tags,
   create_tags_with,
   run_doctor,

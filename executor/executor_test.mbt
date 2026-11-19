@@ -642,3 +642,242 @@ async test "publish uses moon view --json to skip already-published moonbit unit
   assert_true(publish_called)
   assert_eq(published.statuses[0].state, @model.Published)
 }
+
+///|
+async test "MIX-010 multi-platform artifact verification blocks missing required targets and preserves partial publish retry" {
+  let host = fake_host()
+  let cfg =
+    #|{
+    #|  "schemaVersion": 1,
+    #|  "experimental": {
+    #|    "mixedWorkspaces": {
+    #|      "mode": "unified",
+    #|      "workspaces": [
+    #|        {"id": "native", "ecosystem": "moonbit", "root": "native", "manager": "moon", "includeRoot": false},
+    #|        {"id": "js", "ecosystem": "npm", "root": "js", "manager": "npm", "includeRoot": false}
+    #|      ],
+    #|      "units": {
+    #|        "moonbit:acme/engine": { "publish": false },
+    #|        "npm:@acme/engine": {
+    #|          "artifacts": [
+    #|            { "target": "linux-x64", "package": "npm:@acme/engine-linux-x64", "required": true }
+    #|          ]
+    #|        }
+    #|      },
+    #|      "bridges": [
+    #|        {
+    #|          "consumer": "npm:@acme/engine",
+    #|          "producer": "moonbit:acme/engine",
+    #|          "kind": "build",
+    #|          "bump": "patch",
+    #|          "waitFor": "build"
+    #|        }
+    #|      ]
+    #|    }
+    #|  }
+    #|}
+  let units : Array[@model.ReleaseUnit] = [
+    {
+      id: "moonbit:acme/engine",
+      native_name: "acme/engine",
+      ecosystem: "moonbit",
+      workspace_id: "native",
+      root: "native",
+      manifest: "native/moon.mod",
+      version_path: "native/moon.mod",
+      version_field: "version",
+      version: Some("0.2.0"),
+      visibility: "public",
+      publish: false,
+      dependencies: [],
+    },
+    {
+      id: "npm:@acme/engine-linux-x64",
+      native_name: "@acme/engine-linux-x64",
+      ecosystem: "npm",
+      workspace_id: "js",
+      root: "js/linux",
+      manifest: "js/linux/package.json",
+      version_path: "js/linux/package.json",
+      version_field: "version",
+      version: Some("0.1.1"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+    {
+      id: "npm:@acme/engine",
+      native_name: "@acme/engine",
+      ecosystem: "npm",
+      workspace_id: "js",
+      root: "js/main",
+      manifest: "js/main/package.json",
+      version_path: "js/main/package.json",
+      version_field: "version",
+      version: Some("0.1.1"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+  ]
+  let loaded = sample_loaded(config_json=cfg, units~)
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "plan-mix-10",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/engine",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.2.0",
+            "level": "minor",
+            "reasons": [],
+            "changesets": [],
+            "publish": false,
+          },
+          {
+            "unitId": "npm:@acme/engine-linux-x64",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "npm:@acme/engine",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [
+          {
+            "unitId": "npm:@acme/engine",
+            "version": "0.1.1",
+            "name": "npm/@acme/engine@0.1.1",
+          },
+        ],
+        "consumedChangesets": [],
+        "artifacts": [
+          {
+            "id": "npm:@acme/engine@0.1.1",
+            "unitId": "npm:@acme/engine",
+            "version": "0.1.1",
+            "target": "source",
+            "required": true,
+          },
+          {
+            "id": "npm:@acme/engine-linux-x64@0.1.1/linux-x64",
+            "unitId": "npm:@acme/engine-linux-x64",
+            "version": "0.1.1",
+            "target": "linux-x64",
+            "required": true,
+          },
+        ],
+      } : Json).stringify(),
+  )
+  host.files["/repo/js/main/engine.tgz"] = @utf8.encode("main-pkg")
+  host.files["/repo/js/linux/linux.tgz"] = @utf8.encode("linux-pkg")
+
+  let mut tag_called = false
+  let publish_order : Array[String] = []
+  host.runner = (program, args, cwd) => {
+    if program == "git" && args == ["status", "--porcelain"] {
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if program == "git" && args.contains("tag") {
+      tag_called = true
+    }
+    if program == "npm" && args.contains("pack") {
+      if cwd.map(norm) == Some("/repo/js/main") {
+        return {
+          exit_code: 0,
+          stdout: "[{\"filename\":\"engine.tgz\",\"integrity\":\"sha512-main\"}]",
+          stderr: "",
+        }
+      }
+      return {
+        exit_code: 0,
+        stdout: "[{\"filename\":\"linux.tgz\",\"integrity\":\"sha512-linux\"}]",
+        stderr: "",
+      }
+    }
+    if program == "npm" && args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "E404", }
+    }
+    if program == "npm" &&
+      args.contains("publish") &&
+      !args.contains("--dry-run") {
+      if cwd is Some(dir) {
+        publish_order.push(norm(dir))
+      }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+
+  // Only pack main wrapper; missing linux-x64 must block BOTH linux-x64 and main!
+  ignore(
+    @executor.pack_artifacts_for_target_with(
+      host,
+      loaded,
+      { dry_run: false, frozen: false, packages: ["npm:@acme/engine"], },
+      target="source",
+    ),
+  )
+  let missing_report = @executor.verify_artifacts_with(host, loaded)
+  assert_true(!missing_report.ok)
+  assert_true(missing_report.blocked_units.contains("npm:@acme/engine"))
+
+  let blocked_pub = @executor.publish_release_with_artifacts_with(
+    host,
+    loaded,
+    {
+      dry_run: false,
+      only: [],
+      registry: None,
+      tag: None,
+      yes: true,
+      allow_uncommitted: false,
+      retry: 0,
+      no_tag: false,
+    },
+  )
+  assert_true(!blocked_pub.complete)
+  assert_true(!tag_called)
+  assert_true(blocked_pub.statuses.all(s => s.state == @model.Blocked))
+
+  // Now pack required linux-x64 target in its own manifest; publish succeeds in topological order
+  ignore(
+    @executor.pack_artifacts_for_target_with(
+      host,
+      loaded,
+      {
+        dry_run: false,
+        frozen: false,
+        packages: ["npm:@acme/engine-linux-x64"],
+      },
+      target="linux-x64",
+    ),
+  )
+  let ok_report = @executor.verify_artifacts_with(host, loaded)
+  assert_true(ok_report.ok)
+  // Reset publish-state from blocked run and publish cleanly
+  host.files.remove("/repo/.moonset/publish-state.json") |> ignore
+  let ok_pub = @executor.publish_release_with_artifacts_with(host, loaded, {
+    dry_run: false,
+    only: [],
+    registry: None,
+    tag: None,
+    yes: true,
+    allow_uncommitted: false,
+    retry: 0,
+    no_tag: true,
+  })
+  assert_true(ok_pub.complete)
+  assert_eq(publish_order, ["/repo/js/linux", "/repo/js/main"])
+}

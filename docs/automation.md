@@ -8,8 +8,8 @@
 
 1. **PR Check（Job 1，`pr-check`）**：在只读权限下运行 `moonset status --since "$BASE_SHA" --output markdown` 与 `--output json`，生成确定性评论 Markdown 与状态，并通过 Job outputs 导出。
 2. **PR Comment（Job 2，`pr-comment`）**：不 checkout 代码，仅持 `pull-requests: write` 权限读取 Job 1 outputs，按隐藏 marker + 可信作者幂等更新同一条 PR 评论，可选添加缺失标签或回传检查失败退出码。
-3. **Release PR（`moonset@v1`，`mode: version-pr`）**：默认分支合并后，若存在待消费 changeset，执行 `moonset version --no-commit`，更新或创建 release PR（默认分支 `moonset-release/<baseBranch>`），在 PR 正文列出预计版本表供维护者审阅。
-4. **Publish and Tag（`moonset@v1`，`mode: publish`）**：release PR 合并并存在 `.moonset/release-state.json` 时，按远端 Git tag 幂等检查未发布的发布目标，依次执行 `moonset publish --yes --no-tag --json` 与 `moonset tag --push --yes`，并上传 publish 状态 JSON 作为 artifact。
+3. **Release PR（`moonset@v1`，`mode: version-pr`）**：默认分支合并后，若存在待消费 changeset，先通过 GitHub API 为新增 changeset 的提交解析关联 PR 与作者元数据，再调用 `moonset version --dry-run --output markdown` 生成完整 Release PR 正文（包含说明引导、`pre` 预发布警告横幅、版本汇总表及 `# Releases` 逐包 Changelog 详情；处于 `pre` 模式时自动为 PR 标题追加 `(<tag>)`），并执行 `moonset version --no-commit` 更新分支 `moonset-release/<baseBranch>` 与 Release PR。
+4. **Publish and Tag（`moonset@v1`，`mode: publish`）**：release PR 合并并存在 `.moonset/release-state.json` 时，按远端 Git tag 幂等检查未发布的发布目标，依次执行 `moonset publish --yes --no-tag --json` 与 `moonset tag --push --yes`，并按 `create-github-releases`（默认 `'true'`）调用 `moonset release-notes --from-state --json` 幂等创建 GitHub Release（存在则跳过，无匹配章节时回退 `--generate-notes`）；随后上传 publish 状态 JSON 作为 artifact。`release-binaries.yml` 检测到 Release 已存在时仅执行资产上传（`gh release upload --clobber`）。
 
 ## 2. 参考 workflow
 
@@ -81,7 +81,23 @@
 
 ## 6. 审计事件
 
-Action 输出的 JSON 与工作流日志记录 `schemaVersion`、repository、`run_id` / `run_attempt`、plan fingerprint、command、result、duration 和 error code；删除 commit message、token、摘要中的敏感值。保留时间由仓库策略决定。
+`pr-check`、`pr-comment` 与根 `action.yml` 均输出单行紧凑 JSON `audit-event`（并附简洁 `$GITHUB_STEP_SUMMARY` 摘要），固定字段：
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "unmbt/moonset",
+  "runId": "123456",
+  "runAttempt": "1",
+  "command": "pr-check",
+  "planFingerprint": "fnv1a64:...",
+  "result": "release",
+  "durationMs": 412,
+  "errorCode": null
+}
+```
+
+审计事件只包含脱敏元数据，绝不写入 commit message、token、secrets 或 changeset 摘要正文。保留时间由仓库策略决定。
 
 ## 7. 混合发布与 native addon 流程
 
@@ -113,13 +129,13 @@ moonset/
   - 输出：`path`（二进制路径）、`version`（实际解析版本）。
 - **`pr-check/action.yml`**：
   - 输入：`base-sha`（必填）、`head-repo`、`head-ref`、`working-directory`（默认 `.`）、`version`、`binary-path`、`comment-on-no-changes`（默认 `'true'`）、`github-token`。
-  - 输出：`comment`（渲染好的 Markdown 文本）、`state`（`release|missing|empty|none|error`）、`exit-code`、`should-comment`（`'true'|'false'`）。
+  - 输出：`comment`（渲染好的 Markdown 文本）、`state`（`release|missing|empty|none|error`）、`exit-code`、`should-comment`（`'true'|'false'`）、`audit-event`（紧凑 JSON）。
 - **`pr-comment/action.yml`**：
   - 输入：`comment`（必填）、`state`（必填）、`should-comment`（默认 `'true'`）、`pr-number`（默认事件 PR 编号）、`github-token`（默认 `github.token`）、`bot-login`（默认 `'github-actions[bot]'`）、`label`（默认 `''`）、`fail-on-missing`（默认 `'false'`）。
-  - 输出：`comment-id`、`action`（`created|updated|skipped`）。
+  - 输出：`comment-id`、`action`（`created|updated|skipped`）、`audit-event`（紧凑 JSON）。
 - **根 `action.yml`**：
-  - 输入：`mode`（`version-pr` | `publish`，默认 `version-pr`）、`version`、`binary-path`、`working-directory`、`branch`（默认 `moonset-release/<base>`）、`title`（默认 `chore: release packages`）、`commit-message`（默认 `chore: release`）、`github-token`、`mooncakes-credentials`（可选，在 `publish` 模式下以 `0600` 权限写入 `~/.moon/credentials.json`）。
-  - 输出：`has-changesets`、`pull-request-number`、`published`、`tags`。
+  - 输入：`mode`（`version-pr` | `publish`，默认 `version-pr`）、`version`、`binary-path`、`working-directory`、`branch`（默认 `moonset-release/<base>`）、`title`（默认 `chore: release packages`）、`commit-message`（默认 `chore: release`）、`github-token`、`mooncakes-credentials`（可选，在 `publish` 模式下以 `0600` 权限写入 `~/.moon/credentials.json`）、`create-github-releases`（默认 `'true'`，在 `publish` 模式下为新建 tag 创建 GitHub Release）。
+  - 输出：`has-changesets`、`pull-request-number`、`published`、`tags`、`releases`（本次创建的 GitHub Release tag 列表）、`audit-event`（紧凑 JSON）。
 
 ### 预编译二进制分发（OPS-001）
 
@@ -129,4 +145,4 @@ moonset/
   - `moonset-darwin-arm64`（基于 `macos-15` 构建）
   - `moonset-win32-x64.exe`（基于 `windows-latest` 构建）
   - `SHA256SUMS`（覆盖上述全部资产的 SHA-256 校验文件）
-- CI Runner 由 `setup` Action（`setup/install.sh`）下载并校验 `SHA256SUMS` 后注入 `GITHUB_PATH`；普通开发者终端安装请使用 `scripts/install.sh`（Linux/macOS）或 `scripts/install.ps1`（Windows PowerShell），两者均安装到 `~/.unmbt` 并强制执行 `SHA256SUMS` 校验。Action major tag（如 `v1`）与对应 release 版本保持对齐。
+- CI Runner 由 `setup` Action（`setup/install.sh`）下载并校验 `SHA256SUMS` 后注入 `GITHUB_PATH`（支持 `v0.1.0` 精确 tag 与 `v1` 浮动主版本标签解析）；普通开发者终端安装请使用 `scripts/install.sh`（Linux/macOS）或 `scripts/install.ps1`（Windows PowerShell），两者均安装到 `~/.unmbt` 并强制执行 `SHA256SUMS` 校验。当 `release-binaries.yml` 完成正式 SemVer tag（不含 `-` 预发布后缀）的资产发布后，自动通过 GitHub API 将 `v1` 浮动标签对齐到该正式 release tag 的提交。

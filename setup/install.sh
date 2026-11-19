@@ -27,10 +27,7 @@ fi
 repo="${GITHUB_ACTION_REPOSITORY:-unmbt/moonset}"
 tag="${INPUT_VERSION:-}"
 if [ -z "$tag" ]; then
-  case "${ACTION_REF:-}" in
-    v[0-9]*) tag="$ACTION_REF" ;;
-    *) tag="latest" ;;
-  esac
+  tag="${ACTION_REF:-latest}"
 fi
 
 os="${RUNNER_OS:-$(uname -s)}"
@@ -69,11 +66,35 @@ esac
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-if [ "$tag" = "latest" ]; then
-  resolved_tag="$(gh release view -R "$repo" --json tagName --jq '.tagName')"
-else
-  resolved_tag="$tag"
-fi
+resolve_release_tag() {
+  requested="$1"
+  case "$requested" in
+    latest)
+      gh release view -R "$repo" --json tagName --jq '.tagName'
+      ;;
+    v[0-9]*)
+      suffix="${requested#v}"
+      case "$suffix" in
+        *[!0-9]*)
+          printf '%s\n' "$requested"
+          ;;
+        *)
+          matched="$(gh release list -R "$repo" --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq "[.[] | select(.tagName | test(\"^v${suffix}\\\\.\"))][0].tagName // empty" 2>/dev/null || true)"
+          if [ -n "$matched" ]; then
+            printf '%s\n' "$matched"
+          else
+            gh release view -R "$repo" --json tagName --jq '.tagName'
+          fi
+          ;;
+      esac
+      ;;
+    *)
+      gh release view -R "$repo" --json tagName --jq '.tagName'
+      ;;
+  esac
+}
+
+resolved_tag="$(resolve_release_tag "$tag")"
 
 gh release download "$resolved_tag" -R "$repo" -p "$asset" -p "SHA256SUMS" -D "$tmp_dir"
 

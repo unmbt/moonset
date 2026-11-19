@@ -157,7 +157,21 @@ let config_schema_text : String =
   #|            "properties": {
   #|              "publish": { "type": "boolean" },
   #|              "publisher": { "type": "string", "minLength": 1 },
-  #|              "tagFormat": { "type": "string", "minLength": 1 }
+  #|              "tagFormat": { "type": "string", "minLength": 1 },
+  #|              "artifacts": {
+  #|                "type": "array",
+  #|                "items": {
+  #|                  "type": "object",
+  #|                  "additionalProperties": false,
+  #|                  "required": ["target"],
+  #|                  "properties": {
+  #|                    "target": { "type": "string", "minLength": 1 },
+  #|                    "package": { "$ref": "#/$defs/unitId" },
+  #|                    "required": { "type": "boolean" },
+  #|                    "path": { "type": "string", "minLength": 1 }
+  #|                  }
+  #|                }
+  #|              }
   #|            }
   #|          }
   #|        },

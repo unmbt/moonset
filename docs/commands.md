@@ -17,6 +17,7 @@ Phase 4 提供 `pack`、`publish`、`tag` 以及此前的 changeset、版本和�
 | `pack` | 通过所选生态 adapter 生成包归档 | 可选 | adapter 决定并预先报告 |
 | `publish` | 发布已版本化模块 | 可选 | 是 |
 | `tag` | 创建当前版本 Git 标签 | 可选 | 否/可选推送 |
+| `release-notes` | 从 `CHANGELOG.md` 提取版本发布说明 | 否 | 否 |
 | `doctor` | 只读诊断本机和 workspace | 否 | 可选 registry dry-run |
 
 `git-tag` 作为兼容别名解析到 `tag`；`moonset` 不带子命令时等同于交互式 `add`，但在 CI 中必须报错并要求显式子命令。
@@ -84,7 +85,7 @@ moonset publish-plan [--since ref] [--output path|-] [--pretty]
 
 只构建并序列化 release plan，不读注册表、不创建 Git 引用。省略输出或 `--output -` 写 stdout；指定文件才写盘，校验成功后在同目录创建独占临时文件并原子替换。输入文件、清单和 changeset/Git 目录禁止覆盖。
 
-Phase 1 输出固定 `schemaVersion: 1`、`stage: "analysis"`、`executable: false`，包含发布、依赖声明更新和预发布下一状态意图。没有可执行文件补丁、Changelog 或 artifact；不能把这个 JSON 交给发布器直接执行。此命令不执行 status 的缺少 changeset 策略检查。
+Phase 1 输出固定 `schemaVersion: 1`、`stage: "analysis"`、`executable: false`，包含发布、依赖声明更新和预发布下一状态意图；若配置了多平台 `artifacts` 或混合 bridge，还向后兼容地附加只读 `artifacts` 意图列表与 `executionGraph`（分离 `buildNodes`、`publishNodes` 与 `publishOrder`）。没有可执行文件补丁或 Changelog；不能把这个 JSON 交给发布器直接执行。此命令不执行 status 的缺少 changeset 策略检查。
 
 已存在的输出文件必须是 moonset v1 analysis JSON，才允许替换；其他已有文件不会覆盖。相对输出路径以 `--cwd` 为基准。
 
@@ -92,7 +93,8 @@ Phase 1 输出固定 `schemaVersion: 1`、`stage: "analysis"`、`executable: fal
 
 ```text
 moonset version [--snapshot tag] [--since ref] [--dry-run]
-  [--empty] [--no-changelog] [--no-commit]
+  [--empty] [--no-changelog] [--no-commit] [--output human|json|markdown]
+  [--commit-metadata path]
 ```
 
 流程：解析配置和 workspace → 读取并验证所有 changeset → 构建 plan → 展示差异 →（可选确认）写 manifest、依赖范围和 changelog → 移动/删除已消费 changeset → 写 release state。
@@ -101,7 +103,8 @@ moonset version [--snapshot tag] [--since ref] [--dry-run]
 
 - 任何解析、规划或确认失败都不写盘。
 - 默认不创建 Git commit；若配置开启 commit，只能通过 Git adapter 使用参数数组执行。
-- `--dry-run` 只输出 plan 和文件 diff 摘要。
+- `--dry-run` 只输出 plan 和文件 diff 摘要；搭配 `--output markdown` 时只读渲染 Release PR 正文（含引导说明、`pre` 预发布警告横幅、版本汇总表与 `# Releases` 逐包 Changelog 正文，超长按 60000 字符安全截断）。
+- `--commit-metadata path` 传入只读 JSON 映射（`{ "<sha>": { "pr": "12", "author": "alice" } }`），供 `git`/`github` changelog 生成器补充关联 PR 与作者信息。
 - `--snapshot` 需要配置允许快照版本；快照不消费稳定 changeset，除非规格另行指定。
 
 ## `pre`
@@ -117,16 +120,18 @@ moonset pre status
 ## `pack`
 
 ```text
-moonset pack [--package name ...] [--frozen] [--dry-run] [--json]
+moonset pack [--package name ...] [--target name] [--manifest-out path]
+  [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]
 ```
 
-对需要发布的单元调用相应 pack adapter。MoonBit 使用 `moon package`（`--dry-run` 调用 `moon package --dry-run`）；JS 使用选定且固定版本的 npm/pnpm profile（`--frozen` 附带 `--offline`）；Cargo 使用 `cargo package --allow-dirty`（`--dry-run` 使用 `cargo package --list --allow-dirty`，避免调用不存在的 `cargo package --dry-run`）。捕获来源 commit、UnitId、版本、平台、归档路径和校验值，并在非 dry-run 时记录到 `.moonset/pack-results.json`。生命周期脚本由明确的打包阶段执行，查询命令不执行它们。
+对需要发布的单元调用相应 pack adapter。MoonBit 使用 `moon package`（`--dry-run` 调用 `moon package --dry-run`）；JS 使用选定且固定版本的 npm/pnpm profile（`--frozen` 附带 `--offline`）；Cargo 使用 `cargo package --allow-dirty`（`--dry-run` 使用 `cargo package --list --allow-dirty`，避免调用不存在的 `cargo package --dry-run`）。捕获来源 commit、UnitId、版本、平台、归档路径和校验值，并在非 dry-run 时记录到 `.moonset/pack-results.json`（指定 `--target` 或 `--manifest-out` 时输出到对应平台结果文件，例如 `.moonset/pack-results-<target>.json`）。传入 `--verify` 时聚合 `--artifacts-dir`（默认 `.moonset`）下的打包清单并与 `.moonset/release-state.json` 中的 `artifacts` 矩阵校验完整性和摘要；生命周期脚本由明确的打包阶段执行，查询命令不执行它们。
 
 ## `publish`
 
 ```text
 moonset publish [--dry-run] [--registry name] [--only unit[,unit...]]
-  [--tag dist-tag] [--retry count] [--allow-uncommitted] [--no-tag] [--yes] [--json]
+  [--tag dist-tag] [--artifacts-dir dir] [--retry count]
+  [--allow-uncommitted] [--no-tag] [--yes] [--json]
 ```
 
 发布前重新读取 workspace 和版本，校验 `release-state.json` 与当前清单版本一致、若存在 `.moonset/pack-results.json` 则校验其版本/commit/文件有效性，并校验存在 release commit 或显式 `--allow-uncommitted`。支持按 `publisher.kind`（`moon` / `command`）或 `units.<id>.publisher` 路由，并按 `publisher.dryRunFirst` 决定是否在真实发布前先执行全量 preflight `--dry-run`。混合模式按 UnitId/target 选择 publisher，不把 JS/Cargo 单元传给 `moon`。真实发布不自动运行 `version`。
@@ -154,6 +159,18 @@ moonset tag [--dry-run] [--push] [--force] [--format template]
 产品级汇总标签要求全部必需 publish target 成功；不能用一次 `tag` 把部分发布伪装成整体成功。
 
 `--push` 只推送本次新建的标签；默认不推送。
+
+## `release-notes`
+
+```text
+moonset release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json] [--pretty]
+```
+
+只读从 `CHANGELOG.md` 提取指定版本的发布说明正文（精确匹配 `## [v]<ver>` 标题，避免将 `0.1.0` 误匹配到 `0.1.0-alpha.1`）：
+
+- 指定 `--version <ver>` 时：从 `--file`（或对应 `--package` 单元目录下的 `config.changelog.file`，默认 `CHANGELOG.md`）提取对应版本章节；文本模式直接输出正文（未找到时输出空串且退出码仍为 `0`），`--json` 输出 `{"schemaVersion":1,"version":"...","changelogPath":"...","found":bool,"prerelease":bool,"body":"..."}`。
+- 指定 `--from-state` 时：读取 `.moonset/release-state.json` 中的 `tags` 与对应发布单元的 `CHANGELOG.md`，输出 `{"schemaVersion":1,"notes":[{"tag":"...","unitId":"...","version":"...","changelogPath":"...","found":bool,"prerelease":bool,"body":"..."}]}`（文本模式按顺序输出匹配到的正文）。
+- 两个模式均不写盘、不请求网络；若 `--from-state` 时不存在 `.moonset/release-state.json` 或同时冲突传入参数则返回退出码 `2`。
 
 ## 全局选项与错误
 

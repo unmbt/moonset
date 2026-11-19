@@ -4,6 +4,7 @@ package "unmbt/moonset/executor"
 import {
   "moonbitlang/core/json",
   "unmbt/moonset/adapters",
+  "unmbt/moonset/engine",
   "unmbt/moonset/model",
   "unmbt/moonset/workspace",
 }
@@ -33,6 +34,10 @@ pub fn native_host() -> NativeHost
 
 pub async fn pack_artifacts(@workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
 
+pub async fn pack_artifacts_for_target(@workspace.LoadedWorkspace, PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
+
+pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(H, @workspace.LoadedWorkspace, PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
+
 pub async fn[H : ExecutionHost] pack_artifacts_with(H, @workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
 
 pub fn[H : ExecutionHost] package_manager_program(H, String) -> String
@@ -42,6 +47,10 @@ pub fn parent_dir(String) -> String
 pub async fn publish_release(@workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
 
 pub async fn[H : ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
+
+pub async fn publish_release_with_artifacts(@workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
+
+pub async fn[H : ExecutionHost] publish_release_with_artifacts_with(H, @workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
 
 pub async fn recover_version(String) -> Array[String]
 
@@ -56,6 +65,10 @@ pub async fn stage_lockfiles(String, @workspace.LoadedWorkspace, @model.VersionP
 pub async fn[H : ExecutionHost] stage_lockfiles_with(H, String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
 
 pub fn utc_date(UInt64) -> String
+
+pub async fn verify_artifacts(@workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
+
+pub async fn[H : ExecutionHost] verify_artifacts_with(H, @workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
 
 pub fn workspace_root_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
 

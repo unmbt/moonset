@@ -10,10 +10,10 @@
 
 | 层次 | 内容 | 依赖 | 典型命令 |
 |---|---|---|---|
-| 纯单元 | SemVer、front matter、配置合并、依赖传播、pre 序号、tag 模板 | 无 I/O | `moon test internal/...` |
+| 纯单元 | SemVer、front matter、配置合并、依赖传播、pre 序号、tag 模板 | 无 I/O | `moon test --target wasm-gc` |
 | Golden | `ReleasePlan` 和 changelog Markdown 的稳定 JSON/文本 | 固定 Clock | `moon test --update` 仅在规格变更时使用 |
 | 适配器 | lossless manifest 编辑、原子写入、Git 参数、publisher dry-run | 临时目录/测试 double | `moon test --target native` |
-| CLI 黑盒 | 退出码、人类输出、`--json` schema、交互禁用 | 构建出的 `moonset` | `moon test cmd/moonset` |
+| CLI 黑盒 | 退出码、人类输出、`--json` schema、交互禁用 | 构建出的 `moonset` | `moon run scripts/cli-integration.mbtx` |
 | 集成 | init → add → status → version → pack → publish dry-run → tag | 临时 Git 仓库和 fake registry | CI native matrix |
 | 自动化 | workflow 权限、`pull_request_target` 隔离、评论渲染快照与幂等 | `engine/pr_comment_test.mbt` + 静态 linter | `scripts/lint-workflows.mbtx`、`actionlint` |
 

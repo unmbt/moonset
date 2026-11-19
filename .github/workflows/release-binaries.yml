@@ -100,32 +100,14 @@ jobs:
             exit 1
           fi
           (cd dist && sha256sum moonset-* > SHA256SUMS && sha256sum -c SHA256SUMS)
-          notes_file="$(mktemp)"
-          trap 'rm -f "$notes_file"' EXIT
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          notes_file="$tmp_dir/notes.md"
+          : > "$notes_file"
           version="${tag#v}"
-          if changelog="$(gh api -H "Accept: application/vnd.github.raw+json" "repos/${GH_REPO}/contents/CHANGELOG.md?ref=${tag}" 2>/dev/null)"; then
-            printf '%s\n' "$changelog" | awk -v ver="$version" '
-              /^## / {
-                if (found) exit
-                header = substr($0, 4)
-                sub(/^\[/, "", header)
-                sub(/^v/, "", header)
-                split(header, parts, /[][[:space:]()]/)
-                if (parts[1] == ver) {
-                  found = 1
-                  next
-                }
-              }
-              found {
-                if (!started && $0 ~ /^[[:space:]]*$/) next
-                started = 1
-                lines[++n] = $0
-              }
-              END {
-                while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
-                for (i = 1; i <= n; i++) print lines[i]
-              }
-            ' > "$notes_file"
+          if gh api -H "Accept: application/vnd.github.raw+json" "repos/${GH_REPO}/contents/CHANGELOG.md?ref=${tag}" > "$tmp_dir/CHANGELOG.md" 2>/dev/null; then
+            chmod +x dist/moonset-linux-x64
+            ./dist/moonset-linux-x64 release-notes --version "$version" --file "$tmp_dir/CHANGELOG.md" > "$notes_file" || : > "$notes_file"
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/moonset-* dist/SHA256SUMS --clobber
@@ -133,4 +115,16 @@ jobs:
             gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --notes-file "$notes_file"
           else
             gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --generate-notes
+          fi
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            target_sha="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.sha')"
+            ref_obj_type="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.type')"
+            if [ "$ref_obj_type" = "tag" ]; then
+              target_sha="$(gh api "repos/${GH_REPO}/git/tags/${target_sha}" --jq '.object.sha')"
+            fi
+            if gh api "repos/${GH_REPO}/git/ref/tags/v1" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/v1" -f "sha=${target_sha}" -F "force=true" >/dev/null
+            else
+              gh api -X POST "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/v1" -f "sha=${target_sha}" >/dev/null
+            fi
           fi

@@ -14,7 +14,79 @@ async fn stderr(message : String) -> Unit {
 }
 
 ///|
+async fn load_commit_metadata(
+  cwd : String,
+  path_opt : String?,
+) -> Map[String, (String?, String?)] {
+  let out : Map[String, (String?, String?)] = Map([])
+  guard path_opt is Some(raw_path) else { return out }
+  let resolved = resolve_cli_path(cwd, raw_path)
+  if !@fs.exists(resolved) {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "usage",
+        "Commit metadata file does not exist: " + resolved,
+        path=resolved,
+      ),
+    )
+  }
+  let parsed = @json.parse(@fs.read_text(resolved)) catch {
+    _ =>
+      raise @model.Invalid(
+        @model.diagnostic(
+          "invalid-json",
+          "Commit metadata file is not valid JSON",
+          path=resolved,
+        ),
+      )
+  }
+  guard parsed is Object(entries) else {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "invalid-json",
+        "Commit metadata JSON must be an object keyed by commit SHA",
+        path=resolved,
+      ),
+    )
+  }
+  for sha, item in entries {
+    if item is Object(_) {
+      let pr = match item {
+        { "pr": String(s), .. } =>
+          if s.trim() == "" {
+            None
+          } else {
+            Some(s.trim().to_owned())
+          }
+        { "pr": Number(n, ..), .. } => Some(n.to_int().to_string())
+        _ => None
+      }
+      let author = match item {
+        { "author": String(s), .. } => {
+          let clean = if s.trim().has_prefix("@") {
+            s.trim()[1:].trim().to_owned()
+          } else {
+            s.trim().to_owned()
+          }
+          if clean == "" {
+            None
+          } else {
+            Some(clean)
+          }
+        }
+        _ => None
+      }
+      out[sha] = (pr, author)
+    }
+  }
+  out
+}
+
+///|
 async fn version_command(options : Options) -> Int32 {
+  if options.markdown && !options.dry_run {
+    usage_error("version --output markdown requires --dry-run")
+  }
   if options.recover {
     let recovered = @executor.recover_version(options.cwd)
     if options.json {
@@ -28,6 +100,10 @@ async fn version_command(options : Options) -> Int32 {
     }
     return 0
   }
+  let commit_metadata = load_commit_metadata(
+    options.cwd,
+    options.commit_metadata_path,
+  )
   let loaded = @workspace.discover(
     options.cwd,
     config_path?=options.config,
@@ -69,12 +145,13 @@ async fn version_command(options : Options) -> Int32 {
         None => ()
       }
     }
-    let contexts = @engine.changelog_contexts(
+    let contexts = @engine.changelog_contexts_with_metadata(
       loaded.snapshot,
       analysis,
       version_options,
       generated_at=today,
       changeset_commits=loaded.changeset_commits,
+      commit_metadata~,
     )
     for context in contexts {
       let response = @adapters.run_jsonl(
@@ -106,13 +183,14 @@ async fn version_command(options : Options) -> Int32 {
       texts.get(context.unit_id + "\u0000" + context.version).unwrap_or("")
     })
   }
-  let raw_plan = @engine.build_version_plan(
+  let raw_plan = @engine.build_version_plan_with_metadata(
     loaded.snapshot,
     analysis,
     version_options,
     generated_at=today,
     generators~,
     changeset_commits=loaded.changeset_commits,
+    commit_metadata~,
   )
   let changelogs = raw_plan.changelogs.map(entry => {
     let key = entry.unit_id + "\u0000" + entry.version
@@ -155,7 +233,14 @@ async fn version_command(options : Options) -> Int32 {
     println(rendered)
   }
   if options.dry_run {
-    if !options.json && !options.quiet {
+    if options.markdown {
+      let body = @engine.render_release_pr_body(
+        loaded.snapshot,
+        plan,
+        pre?=loaded.pre,
+      )
+      @stdio.stdout.write(@utf8.encode(body))
+    } else if !options.json && !options.quiet {
       println(
         "Dry run: \{plan.analysis.releases.length()} releases, \{plan.edits.length()} planned edits",
       )
@@ -249,14 +334,51 @@ async fn tag_command(options : Options) -> Int32 {
 /// Execute the native pack adapter and return a machine-readable result.
 async fn pack_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  let results = @executor.pack_artifacts(loaded, {
-    dry_run: options.dry_run,
-    frozen: options.frozen,
-    packages: options.packages,
-  })
+  if options.verify_artifacts {
+    let report = @executor.verify_artifacts(
+      loaded,
+      artifacts_dir?=options.artifacts_dir,
+    )
+    let json = report.to_json()
+    if options.json {
+      println(
+        if options.pretty {
+          json.stringify(indent=2)
+        } else {
+          @model.canonical_json(json)
+        },
+      )
+    } else if !options.quiet {
+      if report.ok {
+        println("Verified " + report.checked.to_string() + " artifact intents")
+      } else {
+        println(
+          "Artifact verification failed with " +
+          report.issues.length().to_string() +
+          " issue(s)",
+        )
+        for issue in report.issues {
+          println("  [" + issue.code + "] " + issue.message)
+        }
+      }
+    }
+    return if report.ok { 0 } else { 1 }
+  }
+  let target = options.pack_target.unwrap_or("source")
+  let results = @executor.pack_artifacts_for_target(
+    loaded,
+    {
+      dry_run: options.dry_run,
+      frozen: options.frozen,
+      packages: options.packages,
+    },
+    target~,
+    manifest_out?=options.manifest_out,
+  )
   let output : Json = {
     "schemaVersion": 1,
     "dryRun": options.dry_run,
+    "target": target,
     "results": results.map(x => x.to_json()),
   }
   if options.json {
@@ -277,16 +399,20 @@ async fn pack_command(options : Options) -> Int32 {
 /// Publish versioned units with durable per-target status.
 async fn publish_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
-  let result = @executor.publish_release(loaded, {
-    dry_run: options.dry_run,
-    only: options.only,
-    registry: options.registry,
-    tag: options.dist_tag,
-    yes: options.yes,
-    allow_uncommitted: options.allow_uncommitted,
-    retry: options.retry,
-    no_tag: options.no_tag,
-  })
+  let result = @executor.publish_release_with_artifacts(
+    loaded,
+    {
+      dry_run: options.dry_run,
+      only: options.only,
+      registry: options.registry,
+      tag: options.dist_tag,
+      yes: options.yes,
+      allow_uncommitted: options.allow_uncommitted,
+      retry: options.retry,
+      no_tag: options.no_tag,
+    },
+    artifacts_dir?=options.artifacts_dir,
+  )
   let json = result.to_json()
   if options.json {
     println(
@@ -315,6 +441,213 @@ async fn publish_command(options : Options) -> Int32 {
   } else {
     0
   }
+}
+
+///|
+fn normalize_release_tag_version(ver : String) -> String {
+  let trimmed = ver.trim().to_owned()
+  if trimmed.has_prefix("v") && trimmed.length() > 1 {
+    trimmed[1:].to_owned()
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn is_prerelease_tag_version(ver : String) -> Bool {
+  normalize_release_tag_version(ver).contains("-")
+}
+
+///|
+fn resolve_cli_path(cwd : String, rel_or_abs : String) -> String {
+  if @path.Path(rel_or_abs).is_absolute() {
+    rel_or_abs
+  } else {
+    @executor.absolute_path(cwd, rel_or_abs)
+  }
+}
+
+///|
+async fn release_notes_command(options : Options) -> Int32 {
+  if options.from_state && options.release_version is Some(_) {
+    usage_error("--from-state cannot be combined with --version")
+  }
+  if !options.from_state && options.release_version is None {
+    usage_error("release-notes requires either --version <ver> or --from-state")
+  }
+  if options.from_state &&
+    (options.file_path is Some(_) || !options.packages.is_empty()) {
+    usage_error("--from-state cannot be combined with --file or --package")
+  }
+  if options.packages.length() > 1 {
+    usage_error("release-notes accepts at most one --package")
+  }
+  if options.from_state {
+    let state_path = resolve_cli_path(
+      options.cwd,
+      ".moonset/release-state.json",
+    )
+    if !@fs.exists(state_path) {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "usage",
+          "No release state exists; run version first",
+          path=state_path,
+        ),
+      )
+    }
+    let state = @json.parse(@fs.read_text(state_path)) catch {
+      _ =>
+        raise @model.Invalid(
+          @model.diagnostic(
+            "usage",
+            "Release state is not valid JSON",
+            path=state_path,
+          ),
+        )
+    }
+    guard state is { "tags": Array(tag_items), .. } else {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "usage",
+          "Release state has an invalid shape",
+          path=state_path,
+        ),
+      )
+    }
+    let loaded = @workspace.discover(
+      options.cwd,
+      config_path?=options.config,
+      include_commits=false,
+    )
+    let unit_roots : Map[String, String] = Map([])
+    for unit in loaded.snapshot.units {
+      unit_roots[unit.id] = unit.root
+    }
+    let changelog_file = loaded.snapshot.config.changelog_file
+    let notes_json : Array[Json] = []
+    let found_bodies : Array[String] = []
+    for item in tag_items {
+      if item
+        is {
+          "name": String(tag_name),
+          "unitId": String(unit_id),
+          "version": String(ver),
+          ..
+        } {
+        let unit_root = unit_roots.get(unit_id).unwrap_or("")
+        let rel_path = if unit_root == "" || unit_root == "." {
+          changelog_file
+        } else {
+          unit_root + "/" + changelog_file
+        }
+        let abs_path = resolve_cli_path(loaded.snapshot.root, rel_path)
+        let body = if @fs.exists(abs_path) {
+          @changelog.extract_release_notes(@fs.read_text(abs_path), ver).unwrap_or(
+            "",
+          )
+        } else {
+          ""
+        }
+        let found = body != ""
+        if found {
+          found_bodies.push(body)
+        }
+        let row : Json = {
+          "tag": tag_name,
+          "unitId": unit_id,
+          "version": normalize_release_tag_version(ver),
+          "changelogPath": rel_path,
+          "found": found,
+          "prerelease": is_prerelease_tag_version(ver),
+          "body": body,
+        }
+        notes_json.push(row)
+      }
+    }
+    let payload : Json = { "schemaVersion": 1, "notes": notes_json }
+    if options.json {
+      println(
+        if options.pretty {
+          payload.stringify(indent=2)
+        } else {
+          @model.canonical_json(payload)
+        },
+      )
+    } else if !options.quiet && !found_bodies.is_empty() {
+      println(found_bodies.join("\n\n"))
+    }
+    return 0
+  }
+  let target_ver = options.release_version.unwrap_or("")
+  let norm_ver = normalize_release_tag_version(target_ver)
+  if norm_ver == "" {
+    usage_error("--version requires a non-empty version")
+  }
+  let (rel_path, abs_path) = if options.file_path is Some(custom_file) &&
+    options.packages.is_empty() {
+    (custom_file, resolve_cli_path(options.cwd, custom_file))
+  } else {
+    let loaded = @workspace.discover(
+      options.cwd,
+      config_path?=options.config,
+      include_commits=false,
+    )
+    let default_file = options.file_path.unwrap_or(
+      loaded.snapshot.config.changelog_file,
+    )
+    if !options.packages.is_empty() {
+      let pkg = options.packages[0]
+      let cid = @engine.canonical_id(pkg)
+      let found_unit = loaded.snapshot.units
+        .iter()
+        .find_first(u => u.id == cid || u.native_name == pkg)
+      guard found_unit is Some(unit) else {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "unknown-unit",
+            "Unknown package requested for release-notes: " + pkg,
+          ),
+        )
+      }
+      let rel = if unit.root == "" || unit.root == "." {
+        default_file
+      } else {
+        unit.root + "/" + default_file
+      }
+      (rel, resolve_cli_path(loaded.snapshot.root, rel))
+    } else {
+      (default_file, resolve_cli_path(loaded.snapshot.root, default_file))
+    }
+  }
+  let body = if @fs.exists(abs_path) {
+    @changelog.extract_release_notes(@fs.read_text(abs_path), norm_ver).unwrap_or(
+      "",
+    )
+  } else {
+    ""
+  }
+  let found = body != ""
+  if options.json {
+    let payload : Json = {
+      "schemaVersion": 1,
+      "version": norm_ver,
+      "changelogPath": rel_path,
+      "found": found,
+      "prerelease": is_prerelease_tag_version(norm_ver),
+      "body": body,
+    }
+    println(
+      if options.pretty {
+        payload.stringify(indent=2)
+      } else {
+        @model.canonical_json(payload)
+      },
+    )
+  } else if !options.quiet && found {
+    println(body)
+  }
+  0
 }
 
 ///|
@@ -894,7 +1227,7 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "help" {
     println(
-      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--snapshot tag] [--recover]\n  pack [--package unit] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color -h/--help -V/--version",
+      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--output human|json|markdown] [--commit-metadata path] [--snapshot tag] [--recover]\n  pack [--package unit] [--target name] [--manifest-out path] [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--artifacts-dir dir] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color -h/--help -V/--version",
     )
     return 0
   }
@@ -926,6 +1259,9 @@ async fn execute(options : Options) -> Int32 {
   if options.command == "doctor" {
     return doctor_command(options)
   }
+  if options.command == "release-notes" {
+    return release_notes_command(options)
+  }
   let loaded = @workspace.discover(
     options.cwd,
     config_path?=options.config,
@@ -942,7 +1278,29 @@ async fn execute(options : Options) -> Int32 {
     plan,
     changeset_directory=loaded.changeset_directory,
   )
-  let result = if options.command == "status" { status } else { plan.to_json() }
+  let result : Json = if options.command == "status" {
+    status
+  } else {
+    let base = plan.to_json()
+    if @engine.has_artifact_specs(loaded.snapshot.config) ||
+      !loaded.snapshot.config.bridges.is_empty() {
+      let dag = @engine.build_execution_dag(loaded.snapshot, plan)
+      match base {
+        Object(fields) => {
+          fields["artifacts"] = Json::array(dag.artifacts.map(x => x.to_json()))
+          fields["executionGraph"] = {
+            "buildNodes": dag.build_nodes.map(x => x.to_json()),
+            "publishNodes": dag.publish_nodes.map(x => x.to_json()),
+            "publishOrder": dag.publish_order.map(Json::string),
+          }
+          Json::object(fields)
+        }
+        _ => base
+      }
+    } else {
+      base
+    }
+  }
   for warning in plan.warnings {
     stderr(warning.code + ": " + warning.message)
   }

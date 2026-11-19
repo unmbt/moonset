@@ -71,18 +71,18 @@
 
 已交付：模块化 PR Bot Action（`pr-check` + `pr-comment`）、PR 评论幂等去重与标签同步、HTML/Markdown/提及注入转义、`FR-023` 共存只读协调导出、`NFR-005` 100 包 / 1000 changeset 性能基准（`status --since` 实测 `1495 ms`）、以及 `v0.1.0` 自举发布流水线。
 
-后续退出条件（`0.2.0+`）：
+后续退出条件（`0.1.1+`）：
 
-- 完成外部贡献者 Fork PR 的 `pull_request_target` 真实线上联调，并发布/维护供外部仓库引用的 `v1` 浮动 Action 主标签。
-- **大规模性能与增量缓存**：将基准扩展至 1000 包 / 10000 changeset，按实测评估增量快照缓存。
-- **审计事件收敛**：统一 Action 审计日志字段（`schemaVersion`、`planFingerprint`、`duration`、脱敏摘要）。
+- 已落地：**审计事件收敛**（`pr-check`、`pr-comment`、`action.yml` 输出 `audit-event` 与 Step Summary）与 **`v1` 浮动标签自动维护**（`release-binaries.yml` 正式发布时自动更新 `v1`）。
+- 待线上触发：完成外部贡献者 Fork PR 的 `pull_request_target` 真实线上联调。
+- **大规模性能与增量缓存**（`0.2.0+`）：将基准扩展至 1000 包 / 10000 changeset，按实测评估增量快照缓存。
 
-## 后续迭代规划（`v0.2.0+`）
+## 后续迭代规划（`v0.1.1` / `v0.2.0+`）
 
-在 `0.1.0` 稳定基线之上，后续优先推进以下能力：
+在 `0.1.0` 稳定基线之上，已按零破坏原则在 `0.1.1` 迭代中完成第 1、5 项，其余按需推进：
 
-1. **`FR-022` 多平台原生产物矩阵与 build/publish 分离 DAG**
-   - 完善 `napi-mbt` / `napi-rs` 等同目录双清单项目的平台衍生包（OS/arch/ABI）产物校验与 `optionalDependencies` 发布编排，隔离多平台构建 Job 与发布凭据。
+1. **`FR-022` 多平台原生产物矩阵与 build/publish 分离 DAG（已随 `0.1.1` 落地）**
+   - 已实现 `artifacts` 声明、build/publish 分离 DAG、`pack --target / --manifest-out / --verify`、`publish --artifacts-dir` 以及必需/可选平台包校验与阻断。
 2. **更多平台与生态扩展（原 `Deferred` 项按需推进）**
    - 预编译二进制按需扩展 Windows ARM64 / macOS x64 构建目标；
    - 评估并接入非 `crates.io` 私有 Cargo registry；
@@ -91,9 +91,8 @@
    - 进一步将实验性 `adapters` trait 与 `executor::ExecutionHost` 统一下沉，提供更完整的 conformance suite。
 4. **文档与示例演进**
    - 扩充混合 workspace（MoonBit + pnpm / Cargo）实战模板与第三方 JSONL 插件示例仓库。
-5. **发布 Action 自动创建 GitHub Release（基于 `CHANGELOG.md`）**
-   - 参考 `changesets/action` 的 `createGithubReleases` 机制，在根发布 Action（`action.yml` 的 `mode: publish`）中新增 `create-github-releases` 开关（默认开启），在推送 tag 后自动读取对应发布单元的 `CHANGELOG.md` 版本章节创建 GitHub Release（单包取根目录 `CHANGELOG.md`，Monorepo 按发布单元取各自 `CHANGELOG.md`，未匹配到章节时回退至 GitHub 自动生成 notes）；
-   - 二进制分发工作流（如 `release-binaries.yml`）检测到对应 Release 已存在时仅执行资产上传（`gh release upload --clobber`），让下游使用 `moonset` 的项目开箱即得基于 `CHANGELOG.md` 的 Release Notes。
+5. **发布 Action 自动创建 GitHub Release（基于 `CHANGELOG.md`，已随 `0.1.1` 落地）**
+   - 已实现纯核 `extract_release_notes`、只读 CLI `moonset release-notes`、根 `action.yml` 的 `create-github-releases`（默认开启）以及 `release-binaries.yml` 资产补充上传衔接。
 
 ## 明确暂缓项目
 

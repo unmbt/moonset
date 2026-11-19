@@ -125,3 +125,41 @@ test "TUI state reducers and deterministic views support package, bump, and summ
   assert_true(confirm.contains("minor: moonbit:acme/a"))
   assert_true(confirm.contains("Add feature"))
 }
+
+///|
+test "arguments parse release-notes flags without conflicting with global --version" {
+  let rn = arguments([
+    "release-notes", "--version", "0.1.0", "--file", "CHANGELOG.md", "--json",
+  ])
+  assert_eq(rn.command, "release-notes")
+  assert_eq(rn.release_version, Some("0.1.0"))
+  assert_eq(rn.file_path, Some("CHANGELOG.md"))
+  assert_true(rn.json)
+  assert_true(!rn.from_state)
+
+  let rn_state = arguments(["release-notes", "--from-state", "--json"])
+  assert_eq(rn_state.command, "release-notes")
+  assert_true(rn_state.from_state)
+  assert_true(rn_state.json)
+  assert_true(
+    wants_json_output(["release-notes", "--version", "0.1.0", "--json"]),
+  )
+
+  let pack_target = arguments([
+    "pack", "--target", "linux-x64", "--manifest-out", "dist/pack.json", "--verify",
+    "--artifacts-dir", "dist", "--json",
+  ])
+  assert_eq(pack_target.command, "pack")
+  assert_eq(pack_target.pack_target, Some("linux-x64"))
+  assert_eq(pack_target.manifest_out, Some("dist/pack.json"))
+  assert_true(pack_target.verify_artifacts)
+  assert_eq(pack_target.artifacts_dir, Some("dist"))
+
+  let ver_md = arguments([
+    "version", "--dry-run", "--output", "markdown", "--commit-metadata", "meta.json",
+  ])
+  assert_eq(ver_md.command, "version")
+  assert_true(ver_md.dry_run)
+  assert_true(ver_md.markdown)
+  assert_eq(ver_md.commit_metadata_path, Some("meta.json"))
+}

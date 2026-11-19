@@ -1,6 +1,6 @@
 # 需求规格
 
-> 状态：Phase 1～5 核心能力、混合 workspace、FR-023 共存导出、NFR-005 性能基准与 PR Bot GitHub Action 已实现并完成本地验证；在线 GitHub Runner 环境演练待推送触发，多平台原生二进制产物矩阵（FR-022）与非 crates.io Cargo registry / Tauri 保持 `Partial`/`Deferred`。
+> 状态：Phase 1～5 核心能力、混合 workspace、`FR-022` 多平台产物矩阵与 build/publish 分离 DAG、`FR-023` 共存导出、`FR-025` 自动创建 GitHub Release、`NFR-005` 性能基准、PR Bot GitHub Action 与 `OPS-002` 审计事件/`v1` 浮动标签自动化均已实现并完成本地验证；在线 GitHub Runner 环境演练待推送触发，非 crates.io Cargo registry / Tauri 保持 `Partial`/`Deferred`。
 
 ### 开发验证约束
 
@@ -59,7 +59,7 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 | FR-011 | 打包与计划 | `pack` 调用 MoonBit/npm/Cargo 打包流程并输出带来源与摘要的 artifact JSON；`publish-plan` 输出不改盘的发布 JSON。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
 | FR-012 | 配置 | `.changeset/config.json` 支持版本策略、fixed/linked、ignore、私有包、changelog、tag、publisher、GitHub 和格式化器；未知顶层字段默认报错。 | Implemented | `engine/parsing_test.mbt`、`scripts/embed-schema.mbtx --check` |
 | FR-013 | 自定义 changelog | 内置生成器覆盖纯文本、Git、GitHub 三类；MoonBit API 和受限 JSONL 进程协议都能提供自定义 release line；支持同目录聚合输出。 | Implemented | `changelog/changelog_test.mbt`、`engine/version_test.mbt`、`scripts/cli-integration.mbtx` |
-| FR-014 | GitHub Action 自动化 | 提供 `setup`、`pr-check`、`pr-comment` 与根 Action（`version-pr`/`publish`）及参考工作流；按 Job 最小权限隔离，支持 OIDC 或显式令牌，基于远端 tag 幂等防重发。 | Implemented (本地实现与静态审查已通过；在线 runner 演练待触发) | `action.yml`、`setup/`、`pr-check/`、`pr-comment/`、`docs/examples/workflows/`、`scripts/lint-workflows.mbtx` |
+| FR-014 | GitHub Action 自动化 | 提供 `setup`、`pr-check`、`pr-comment` 与根 Action（`version-pr`/`publish`）及参考工作流；按 Job 最小权限隔离，支持 OIDC 或显式令牌，基于远端 tag 幂等防重发；`version-pr` 通过纯核 `render_release_pr_body` 输出含说明引导、`pre` 警告、版本汇总表与 `# Releases` 逐包 Changelog 详情的 Release PR 正文并自动解析 PR/作者元信息。 | Implemented (本地实现与静态审查已通过；在线 runner 演练待触发) | `action.yml`、`setup/`、`pr-check/`、`pr-comment/`、`engine/release_pr.mbt`、`docs/examples/workflows/`、`scripts/lint-workflows.mbtx` |
 | FR-015 | PR Bot（Action） | 使用双 Job 隔离权限（Job 1 只读计算、Job 2 写评论）；按 marker `<!-- moonset-bot:changeset-check -->` 与可信 bot 作者幂等更新同一条评论；覆盖 release/missing/empty/none/error 五种状态；不直接改版本或发布。 | Implemented (本地实现与测试已通过；真实 Fork PR 在线演练待触发) | `engine/pr_comment.mbt`、`engine/pr_comment_test.mbt`、`cli/cli_wbtest.mbt`、`scripts/cli-integration.mbtx`、`pr-check/`、`pr-comment/` |
 | FR-016 | 编程 API | 核心模型、解析器、规划器、执行器和适配器接口有稳定的 MoonBit 公共包；I/O 通过注入接口可测试。 | Implemented (`api`, `executor`, `native` + `wasm-gc` pure core) | `fixtures/external-moonbit-api/`、`moon test --target wasm-gc` |
 | FR-017 | 环境诊断 | `doctor` 只读检查 MoonBit、Git、workspace、配置、publisher 和必要权限，输出可修复建议；支持 `--fix` 可逆补缺。 | Implemented | `executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
@@ -67,9 +67,10 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 | FR-019 | 跨生态身份 | 使用生态前缀 UnitId；同名跨生态单元可区分；混合 changeset、选择器、pre 状态和计划使用相同 ID；旧记录迁移提供可审阅映射。 | Implemented | `engine/parsing_test.mbt`、`workspace/integration_test.mbt` |
 | FR-020 | 跨生态依赖与版本组 | 包依赖、build bridge 和 fixed/linked 分开；bridge 提升 consumer 的最低 bump 并进入闭包；环与不完整 `--only` 选择在写入前失败。 | Implemented | `engine/planner_test.mbt`、`executor/executor_test.mbt` |
 | FR-021 | 原生清单和锁文件 | adapter 在隔离 staging 使用精确 packageManager 版本校验/更新锁文件；`verify-only` 差异失败，不改写 `workspace:` 协议。 | Implemented | `executor/staging.mbt`、`engine/planner_test.mbt` |
-| FR-022 | 构建产物与多目标发布 | pack/publish 输出 artifact 与逐 target 状态；真实发布先完成全部 preflight，失败续跑跳过已确认目标，不自动撤销成功版本。 | Partial (single-target `source` pack/publish + artifact verification; multi-platform binary target matrix pending) | `executor/executor_test.mbt`、`fixtures/partial-publish/` |
+| FR-022 | 构建产物与多目标发布 | 支持在 `experimental.mixedWorkspaces.units.<id>.artifacts` 声明多平台构建目标与关联平台衍生包；`publish-plan` 与 `release-state.json` 持久化 build/publish 分离 DAG；`pack` 支持 `--target`/`--manifest-out`/`--verify`/`--artifacts-dir`；`publish` 先完整校验必需平台产物与 commit/hash 一致性再逐 `(unitId, version, target)` 拓扑发布，必需平台缺失或失败时阻断主包并保留已发布凭据支持续跑，可选平台不阻塞主包。 | Implemented | `engine/artifact_dag_test.mbt`、`executor/executor_test.mbt`、`fixtures/partial-publish/`、`scripts/cli-integration.mbtx` |
 | FR-023 | 与已有工具共存 | Changesets 等工具和 moonset 分区管理，changeset/版本字段/锁文件只有一个写入者；不互相消费记录或静默迁移配置；只读导出跨分区协调摘要。 | Implemented | `engine/coexistence.mbt`、`engine/coexistence_test.mbt`、`workspace/integration_test.mbt` |
 | FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo crates.io 已接入，其他 Cargo registry/Tauri 保持 Deferred。 | Partial (`executor::ExecutionHost` + `PublisherRegistry` + capability gating; v1 `adapters` traits preserved) | `adapters/protocol_test.mbt`、`executor/executor_test.mbt` |
+| FR-025 | 自动创建 GitHub Release 与 Release Notes 提取 | 提供纯核 `extract_release_notes` 与只读 CLI `moonset release-notes`（支持单包与 `--from-state` 多包）；根 Action `mode: publish` 支持 `create-github-releases`（默认 `'true'`），按 `CHANGELOG.md` 版本章节幂等创建 GitHub Release（无匹配章节回退 `--generate-notes`，已存在则跳过），`release-binaries.yml` 复用该 CLI 替代重复脚本解析。 | Implemented | `changelog/changelog_test.mbt`、`cli/cli_wbtest.mbt`、`scripts/cli-integration.mbtx` |
 
 ## 5. 非功能需求
 
@@ -96,7 +97,8 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 
 | ID | 需求 | 验收条件 | 状态 | 验证证据 |
 |---|---|---|---|---|
-| OPS-001 | 预编译二进制分发 | `release-binaries.yml` 按 tag 构建 Linux(x64/arm64)、macOS(arm64)、Windows(x64) 原生二进制与 `SHA256SUMS` 并随 Release 发布；`setup` Action 下载后必须完成 SHA-256 校验。 | Implemented (workflow 与安装脚本已就绪；tag 发布待触发) | `.github/workflows/release-binaries.yml`、`setup/install.sh`、`setup/action.yml` |
+| OPS-001 | 预编译二进制分发 | `release-binaries.yml` 按 tag 构建 Linux(x64/arm64)、macOS(arm64)、Windows(x64) 原生二进制与 `SHA256SUMS` 并随 Release 发布；`setup` Action 下载后必须完成 SHA-256 校验。 | Implemented (已完成 `v0.1.0` 流水线验证并支持 `@v1` 主版本解析) | `.github/workflows/release-binaries.yml`、`setup/install.sh`、`setup/action.yml` |
+| OPS-002 | Action 审计事件与 `v1` 浮动标签 | `pr-check`、`pr-comment` 与根 `action.yml` 均输出脱敏紧凑 JSON `audit-event`（`schemaVersion`/`repository`/`runId`/`runAttempt`/`command`/`planFingerprint`/`result`/`durationMs`/`errorCode`）并写入 Step Summary；正式 SemVer tag 发布成功后自动更新 `v1` 浮动标签。 | Implemented | `scripts/lint-workflows.mbtx`、`action.yml`、`pr-check/action.yml`、`pr-comment/action.yml`、`.github/workflows/release-binaries.yml` |
 
 ## 8. 退出码契约
 

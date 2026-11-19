@@ -38,6 +38,9 @@ outputs:
   action:
     description: Operation performed (created, updated, or skipped)
     value: ${{ steps.comment.outputs.action }}
+  audit-event:
+    description: Sanitized compact JSON audit event
+    value: ${{ steps.comment.outputs.audit-event }}
 runs:
   using: composite
   steps:
@@ -51,11 +54,27 @@ runs:
         EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         GH_TOKEN: ${{ inputs.github-token }}
         REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
         BOT_LOGIN: ${{ inputs.bot-login }}
         LABEL_NAME: ${{ inputs.label }}
         FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
       run: |
         set -euo pipefail
+        now_ms() {
+          local raw
+          raw="$(date +%s%3N 2>/dev/null || true)"
+          case "$raw" in
+            *[0-9]*)
+              if [ "${#raw}" -ge 13 ]; then
+                printf '%s' "$raw"
+                return
+              fi
+              ;;
+          esac
+          printf '%s000' "$(date +%s)"
+        }
+        start_ms="$(now_ms)"
         pr_num="${INPUT_PR_NUMBER:-$EVENT_PR_NUMBER}"
         if [ -z "$pr_num" ]; then
           echo "pr-number is required outside pull_request events" >&2
@@ -90,9 +109,36 @@ runs:
           fi
         fi
 
+        end_ms="$(now_ms)"
+        duration=$((end_ms - start_ms))
+        if [ "$duration" -lt 0 ]; then duration=0; fi
+        err_code=""
+        if [ "$FAIL_ON_MISSING" = "true" ] && { [ "$STATE" = "missing" ] || [ "$STATE" = "error" ]; }; then
+          err_code="$STATE"
+        fi
+        audit_json="$(jq -nc \
+          --arg repo "$REPO" \
+          --arg runId "$RUN_ID" \
+          --arg runAttempt "$RUN_ATTEMPT" \
+          --arg cmd "pr-comment" \
+          --arg res "$op" \
+          --argjson duration "$duration" \
+          --arg err "$err_code" \
+          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:null,result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}')"
+
         echo "comment-id=$comment_id" >> "$GITHUB_OUTPUT"
         echo "action=$op" >> "$GITHUB_OUTPUT"
+        echo "audit-event=$audit_json" >> "$GITHUB_OUTPUT"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### moonset pr-comment"
+            echo ""
+            echo "| Operation | State | Duration (ms) |"
+            echo "|---|---|---|"
+            echo "| \`$op\` | \`$STATE\` | \`$duration\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
 
-        if [ "$FAIL_ON_MISSING" = "true" ] && { [ "$STATE" = "missing" ] || [ "$STATE" = "error" ]; }; then
+        if [ -n "$err_code" ]; then
           exit 1
         fi

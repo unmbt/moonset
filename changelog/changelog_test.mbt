@@ -7,7 +7,7 @@ test "Git and GitHub changelog generators render stable links from supplied meta
     lines: [
       {
         changeset_id: "feature-1",
-        summary: "Add streaming API",
+        summary: "Add streaming API for #12 (see `#99`)",
         unit_id: "moonbit:acme/core",
         bump: @model.Minor,
         old_version: "1.1.0",
@@ -29,7 +29,9 @@ test "Git and GitHub changelog generators render stable links from supplied meta
   assert_false(git.contains("/pull/42"))
   let github = @changelog.render(@changelog.GitHub, context)
   assert_true(github.contains("https://github.com/acme/core/pull/42"))
-  assert_true(github.contains("Thanks [@wyate]!"))
+  assert_true(github.contains("[#12](https://github.com/acme/core/issues/12)"))
+  assert_true(github.contains("`#99`"))
+  assert_true(github.contains("Thanks [@wyate](https://github.com/wyate)!"))
   assert_eq(github, @changelog.render(@changelog.GitHub, context))
 }
 
@@ -77,4 +79,24 @@ test "compile-time generator registry supports custom renderers and rejects unkn
     _ => false
   }
   assert_true(rejected)
+}
+
+///|
+test "extract_release_notes matches exact version sections across formats" {
+  let changelog = "# Changelog\r\n\r\n## [v0.2.0](https://example.com) - 2026-11-19\r\n\r\n### Features\r\n\r\n- Add release notes\r\n\r\n## 0.1.0 - 2026-11-18\r\n\r\n### Fixes\r\n\r\n- Initial release\r\n\r\n## 0.1.0-alpha.1 - 2026-11-17\r\n\r\n- Alpha build\r\n"
+  assert_eq(
+    @changelog.extract_release_notes(changelog, "0.2.0"),
+    Some("### Features\n\n- Add release notes"),
+  )
+  assert_eq(
+    @changelog.extract_release_notes(changelog, "v0.1.0"),
+    Some("### Fixes\n\n- Initial release"),
+  )
+  assert_eq(
+    @changelog.extract_release_notes(changelog, "0.1.0-alpha.1"),
+    Some("- Alpha build"),
+  )
+  assert_eq(@changelog.extract_release_notes(changelog, "0.1.1"), None)
+  let empty_section = "# Changelog\n\n## 0.3.0 - 2026-11-20\n\n\n## 0.2.0 - 2026-11-19\n\n- Old\n"
+  assert_eq(@changelog.extract_release_notes(empty_section, "0.3.0"), None)
 }

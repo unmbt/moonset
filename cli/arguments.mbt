@@ -40,6 +40,14 @@ priv struct Options {
   frozen : Bool
   check_registry : Bool
   fix : Bool
+  release_version : String?
+  file_path : String?
+  from_state : Bool
+  pack_target : String?
+  manifest_out : String?
+  artifacts_dir : String?
+  verify_artifacts : Bool
+  commit_metadata_path : String?
 }
 
 ///|
@@ -70,7 +78,7 @@ fn usage_error(message : String) -> Unit raise @model.MoonsetError {
 fn is_known_subcommand(token : String) -> Bool {
   [
     "init", "add", "pre", "status", "publish-plan", "version", "tag", "git-tag",
-    "pack", "publish", "doctor",
+    "pack", "publish", "doctor", "release-notes",
   ].contains(token)
 }
 
@@ -92,7 +100,12 @@ fn is_always_value_flag(arg : String) -> Bool {
     | "--only"
     | "--tag-format"
     | "--tag"
-    | "--retry" => true
+    | "--retry"
+    | "--file"
+    | "--target"
+    | "--manifest-out"
+    | "--artifacts-dir"
+    | "--commit-metadata" => true
     _ => false
   }
 }
@@ -125,17 +138,17 @@ fn detect_subcommand(args : Array[String]) -> String {
 }
 
 ///|
-fn is_value_flag(arg : String, has_doctor : Bool) -> Bool {
+fn is_value_flag(arg : String, subcommand : String) -> Bool {
   if is_always_value_flag(arg) {
     return true
   }
-  arg == "--registry" && !has_doctor
+  (arg == "--registry" && subcommand != "doctor") ||
+  (arg == "--version" && subcommand == "release-notes")
 }
 
 ///|
 fn wants_json_output(args : Array[String]) -> Bool {
   let subcommand = detect_subcommand(args)
-  let has_doctor = subcommand == "doctor"
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -151,7 +164,7 @@ fn wants_json_output(args : Array[String]) -> Bool {
       i += 1
       continue
     }
-    if is_value_flag(arg, has_doctor) && i < args.length() {
+    if is_value_flag(arg, subcommand) && i < args.length() {
       i += 1
     }
   }
@@ -175,7 +188,7 @@ fn wants_markdown_output(args : Array[String]) -> Bool {
       i += 1
       continue
     }
-    if is_value_flag(arg, false) && i < args.length() {
+    if is_value_flag(arg, subcommand) && i < args.length() {
       i += 1
     }
   }
@@ -226,13 +239,31 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   let mut frozen = false
   let mut check_registry = false
   let mut fix = false
+  let mut release_version : String? = None
+  let mut file_path : String? = None
+  let mut from_state = false
+  let mut pack_target : String? = None
+  let mut manifest_out : String? = None
+  let mut artifacts_dir : String? = None
+  let mut verify_artifacts = false
+  let mut commit_metadata_path : String? = None
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
     i += 1
     match arg {
       "--help" | "-h" => command = "help"
-      "--version" | "-V" => command = "version-info"
+      "--version" =>
+        if detected_subcommand == "release-notes" {
+          if i >= args.length() {
+            usage_error("Missing value for " + arg)
+          }
+          release_version = Some(args[i])
+          i += 1
+        } else {
+          command = "version-info"
+        }
+      "-V" => command = "version-info"
       "--json" => json = true
       "--pretty" => pretty = true
       "--quiet" | "-q" => quiet = true
@@ -277,6 +308,8 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       "--empty" => empty = true
       "--no-format" => no_format = true
       "--initial-version" => initial_version = true
+      "--from-state" => from_state = true
+      "--verify" => verify_artifacts = true
       "--no-color" => ()
       "--cwd"
       | "--config"
@@ -292,7 +325,12 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
       | "--snapshot"
       | "--tag-format"
       | "--tag"
-      | "--retry" => {
+      | "--retry"
+      | "--file"
+      | "--target"
+      | "--manifest-out"
+      | "--artifacts-dir"
+      | "--commit-metadata" => {
         if i >= args.length() {
           usage_error("Missing value for " + arg)
         }
@@ -318,6 +356,11 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
           "--snapshot" => snapshot = Some(value)
           "--tag-format" => tag_format = value
           "--tag" => dist_tag = Some(value)
+          "--file" => file_path = Some(value)
+          "--target" => pack_target = Some(value)
+          "--manifest-out" => manifest_out = Some(value)
+          "--artifacts-dir" => artifacts_dir = Some(value)
+          "--commit-metadata" => commit_metadata_path = Some(value)
           "--retry" =>
             match parse_non_negative_int(value) {
               Some(n) => retry = n
@@ -356,6 +399,18 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     } else if output == "markdown" {
       markdown = true
     }
+  } else if command == "version" {
+    if output != "" &&
+      output != "human" &&
+      output != "json" &&
+      output != "markdown" {
+      usage_error("version --output expects human, json, or markdown")
+    }
+    if output == "json" {
+      json = true
+    } else if output == "markdown" {
+      markdown = true
+    }
   } else if command == "doctor" {
     if output != "" && output != "human" && output != "json" {
       usage_error("doctor --output expects human or json")
@@ -368,7 +423,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
   } else if command != "" &&
     ![
       "help", "version-info", "init", "add", "pre", "version", "tag", "git-tag",
-      "pack", "publish",
+      "pack", "publish", "release-notes",
     ].contains(command) {
     usage_error("Unknown command: " + command)
   }
@@ -379,7 +434,7 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     tag_format = format
     format = "human"
   }
-  if format == "markdown" && command == "status" {
+  if format == "markdown" && (command == "status" || command == "version") {
     markdown = true
   } else if format != "human" && format != "json" {
     usage_error("--format expects human or json")
@@ -434,5 +489,13 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
     frozen,
     check_registry,
     fix,
+    release_version,
+    file_path,
+    from_state,
+    pack_target,
+    manifest_out,
+    artifacts_dir,
+    verify_artifacts,
+    commit_metadata_path,
   }
 }

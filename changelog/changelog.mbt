@@ -190,13 +190,110 @@ fn section(bump : @model.Bump) -> String {
 }
 
 ///|
+fn is_ascii_digit(ch : Char) -> Bool {
+  ch >= '0' && ch <= '9'
+}
+
+///|
+fn is_ident_char(ch : Char) -> Bool {
+  (ch >= 'a' && ch <= 'z') ||
+  (ch >= 'A' && ch <= 'Z') ||
+  is_ascii_digit(ch) ||
+  ch == '_' ||
+  ch == '-'
+}
+
+///|
+fn linkify_issue_refs(text : String, repository : String?) -> String {
+  guard repository is Some(repo) else { return text }
+  if repo == "" || !text.contains("#") {
+    return text
+  }
+  let chars = text.to_array()
+  let len = chars.length()
+  let out = StringBuilder()
+  let mut i = 0
+  let mut in_code = false
+  let mut in_link_text = false
+  let mut in_link_url = false
+  while i < len {
+    let ch = chars[i]
+    if ch == '`' {
+      in_code = !in_code
+      out.write_char(ch)
+      i += 1
+      continue
+    }
+    if !in_code {
+      if ch == '[' {
+        in_link_text = true
+        out.write_char(ch)
+        i += 1
+        continue
+      }
+      if ch == ']' && in_link_text {
+        in_link_text = false
+        out.write_char(ch)
+        i += 1
+        if i < len && chars[i] == '(' {
+          in_link_url = true
+          out.write_char('(')
+          i += 1
+        }
+        continue
+      }
+      if ch == ')' && in_link_url {
+        in_link_url = false
+        out.write_char(ch)
+        i += 1
+        continue
+      }
+      if !in_link_text &&
+        !in_link_url &&
+        ch == '#' &&
+        (i == 0 || !is_ident_char(chars[i - 1])) &&
+        i + 1 < len &&
+        chars[i + 1] >= '1' &&
+        chars[i + 1] <= '9' {
+        let mut j = i + 1
+        let num = StringBuilder()
+        while j < len && is_ascii_digit(chars[j]) {
+          num.write_char(chars[j])
+          j += 1
+        }
+        let issue = num.to_string()
+        out.write_string(
+          "[#" +
+          issue +
+          "](https://github.com/" +
+          repo +
+          "/issues/" +
+          issue +
+          ")",
+        )
+        i = j
+        continue
+      }
+    }
+    out.write_char(ch)
+    i += 1
+  }
+  out.to_string()
+}
+
+///|
 fn line_text(
   line : ReleaseLineContext,
   kind : String,
   repository : String?,
   thanks : Bool,
 ) -> String {
-  let mut text = "- " + line.summary.replace_all(old="\n", new="\n  ")
+  let summary_text = if kind == "github" {
+    linkify_issue_refs(line.summary, repository)
+  } else {
+    line.summary
+  }
+  let mut text = "- " + summary_text.replace_all(old="\n", new="\n  ")
   if kind != "builtin" {
     match line.commit {
       Some(commit) if commit != "" => {
@@ -235,7 +332,12 @@ fn line_text(
     if thanks {
       match line.author {
         Some(author) if author != "" =>
-          text = text + " Thanks [@" + author + "]!"
+          text = text +
+            " Thanks [@" +
+            author +
+            "](https://github.com/" +
+            author +
+            ")!"
         _ => ()
       }
     }
@@ -306,4 +408,87 @@ fn render_git(context : ChangelogContext) -> String {
 ///|
 fn render_github(context : ChangelogContext) -> String {
   render_document(context, "github")
+}
+
+///|
+fn normalize_release_version(version : String) -> String {
+  let trimmed = version.trim().to_owned()
+  if trimmed.has_prefix("v") && trimmed.length() > 1 {
+    trimmed[1:].to_owned()
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn parse_heading_version(line : String) -> String? {
+  if !line.has_prefix("## ") {
+    return None
+  }
+  let mut rest = line[3:].trim_start().to_owned()
+  if rest.has_prefix("[") {
+    rest = rest[1:].to_owned()
+  }
+  if rest.has_prefix("v") && rest.length() > 1 {
+    rest = rest[1:].to_owned()
+  }
+  let buf = StringBuilder()
+  for ch in rest.to_array() {
+    if ch == ' ' || ch == '\t' || ch == ']' || ch == '(' {
+      break
+    }
+    buf.write_char(ch)
+  }
+  let token = buf.to_string()
+  if token == "" {
+    None
+  } else {
+    Some(token)
+  }
+}
+
+///|
+/// Extract the Markdown body for a single version heading from CHANGELOG.md.
+pub fn extract_release_notes(markdown : String, version : String) -> String? {
+  let target = normalize_release_version(version)
+  if target == "" {
+    return None
+  }
+  let lines = markdown
+    .replace_all(old="\r\n", new="\n")
+    .split("\n")
+    .map(x => x.to_owned())
+    .collect()
+  let mut found = false
+  let collected : Array[String] = []
+  for line in lines {
+    if line.has_prefix("## ") {
+      if found {
+        break
+      }
+      if parse_heading_version(line) == Some(target) {
+        found = true
+      }
+      continue
+    }
+    if found {
+      collected.push(line)
+    }
+  }
+  if !found {
+    return None
+  }
+  let mut start = 0
+  while start < collected.length() && collected[start].trim() == "" {
+    start += 1
+  }
+  let mut end = collected.length()
+  while end > start && collected[end - 1].trim() == "" {
+    end -= 1
+  }
+  if start >= end {
+    None
+  } else {
+    Some(collected[start:end].to_owned().join("\n"))
+  }
 }

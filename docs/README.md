@@ -51,7 +51,7 @@
 - 工具链：`moon 0.1.20261104`、`moonc v0.10.20`（2026-11-10 本地验证）。
 - 目标：`native`，因为 moonset 是跨平台的宿主 CLI；库层保持无平台状态。
 - 异步：优先使用 `moonbitlang/core/async` 及其 `fs`、`process`、`shell` 子包。已用 `moon ide doc` 验证导出 API。
-- 清单：优先复用 `unmbt/moon-manifest` 的无损读取和编辑能力，待该包发布可消费版本后再锁定依赖。
+- 清单：已在 [moon.mod](../moon.mod) 锁定消费 `unmbt/moon-manifest@0.2.0-alpha.2` 的无损读取和编辑能力。
 - 发布：默认面向 Mooncakes 的 `moon publish`；发布器是可替换适配器，不能把 Mooncakes 假设写进核心规划器。
 - 混合生态：已实现 MoonBit、npm/pnpm 与 Cargo（crates.io）workspace 发现、联合版本规划、锁文件 staging、打包与按目标发布，见 [混合 workspace 设计](mixed-workspaces.md)；其他 Cargo registry 与 Tauri 同步保持 Deferred。
 

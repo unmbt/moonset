@@ -1,5 +1,5 @@
 name: moonset Release Action
-description: Create/update release PRs (mode=version-pr) or idempotently publish and tag releases (mode=publish).
+description: Create/update release PRs (mode=version-pr) or idempotently publish, tag, and create GitHub Releases (mode=publish).
 inputs:
   mode:
     description: Action mode ('version-pr' or 'publish')
@@ -37,6 +37,10 @@ inputs:
     description: Optional JSON contents for ~/.moon/credentials.json when publishing MoonBit packages
     required: false
     default: ''
+  create-github-releases:
+    description: Whether to create GitHub Releases from CHANGELOG.md after pushing tags in publish mode
+    required: false
+    default: 'true'
 outputs:
   has-changesets:
     description: Whether pending changesets were found (version-pr mode)
@@ -50,6 +54,12 @@ outputs:
   tags:
     description: Space-separated list of created/planned tags
     value: ${{ steps.run.outputs.tags }}
+  releases:
+    description: Space-separated list of GitHub Release tags created in publish mode
+    value: ${{ steps.run.outputs.releases }}
+  audit-event:
+    description: Sanitized compact JSON audit event
+    value: ${{ steps.run.outputs.audit-event }}
 runs:
   using: composite
   steps:
@@ -75,10 +85,56 @@ runs:
         PR_TITLE: ${{ inputs.title }}
         COMMIT_MSG: ${{ inputs.commit-message }}
         GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
         MOONCAKES_CREDENTIALS: ${{ inputs.mooncakes-credentials }}
+        CREATE_GITHUB_RELEASES: ${{ inputs.create-github-releases }}
         REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
+        now_ms() {
+          local raw
+          raw="$(date +%s%3N 2>/dev/null || true)"
+          case "$raw" in
+            *[0-9]*)
+              if [ "${#raw}" -ge 13 ]; then
+                printf '%s' "$raw"
+                return
+              fi
+              ;;
+          esac
+          printf '%s000' "$(date +%s)"
+        }
+        emit_audit() {
+          local cmd="$1" fp="$2" res="$3" err="$4"
+          local end_ms duration audit_json
+          end_ms="$(now_ms)"
+          duration=$((end_ms - start_ms))
+          if [ "$duration" -lt 0 ]; then duration=0; fi
+          audit_json="$(jq -nc \
+            --arg repo "$REPO" \
+            --arg runId "$RUN_ID" \
+            --arg runAttempt "$RUN_ATTEMPT" \
+            --arg cmd "$cmd" \
+            --arg fp "$fp" \
+            --arg res "$res" \
+            --argjson duration "$duration" \
+            --arg err "$err" \
+            '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:(if $fp == "" then null else $fp end),result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}')"
+          echo "audit-event=$audit_json" >> "$GITHUB_OUTPUT"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### moonset ($cmd)"
+              echo ""
+              echo "| Result | Plan Fingerprint | Duration (ms) |"
+              echo "|---|---|---|"
+              echo "| \`$res\` | \`${fp:-none}\` | \`$duration\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        }
+
+        start_ms="$(now_ms)"
         tmp_dir="$(mktemp -d)"
         trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -90,11 +146,50 @@ runs:
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "tags=" >> "$GITHUB_OUTPUT"
+            echo "releases=" >> "$GITHUB_OUTPUT"
+            emit_audit "release-version-pr" "" "no-changesets" ""
             exit 0
           fi
 
-          "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --json > "$tmp_dir/plan.json"
-          "$MOONSET_BIN" --cwd "$WORK_DIR" version --no-commit --json > "$tmp_dir/applied.json"
+          echo '{}' > "$tmp_dir/commit-meta.json"
+          if [ -d "$WORK_DIR/.changeset" ] && command -v git >/dev/null 2>&1; then
+            mapfile -t cs_shas < <(git -C "$WORK_DIR" log -n 30 --format=%H -- .changeset 2>/dev/null || true)
+            for sha in "${cs_shas[@]}"; do
+              [ -n "$sha" ] || continue
+              pr_num=""
+              author_login=""
+              if pr_info="$(gh api "repos/${REPO}/commits/${sha}/pulls" --jq '.[0] // empty' 2>/dev/null || true)" && [ -n "$pr_info" ]; then
+                pr_num="$(printf '%s' "$pr_info" | jq -r '.number // empty')"
+                author_login="$(printf '%s' "$pr_info" | jq -r '.user.login // empty')"
+              fi
+              if [ -z "$author_login" ]; then
+                author_login="$(gh api "repos/${REPO}/commits/${sha}" --jq '.author.login // empty' 2>/dev/null || true)"
+              fi
+              if [ -n "$pr_num" ] || [ -n "$author_login" ]; then
+                jq --arg sha "$sha" --arg pr "$pr_num" --arg author "$author_login" \
+                  '.[$sha] = {pr: (if $pr == "" then null else $pr end), author: (if $author == "" then null else $author end)}' \
+                  "$tmp_dir/commit-meta.json" > "$tmp_dir/commit-meta.next.json"
+                mv "$tmp_dir/commit-meta.next.json" "$tmp_dir/commit-meta.json"
+              fi
+            done
+          fi
+
+          effective_title="$PR_TITLE"
+          if [ -f "$WORK_DIR/.changeset/pre.json" ]; then
+            pre_mode="$(jq -r '.mode // empty' "$WORK_DIR/.changeset/pre.json" 2>/dev/null || true)"
+            pre_tag="$(jq -r '.tag // empty' "$WORK_DIR/.changeset/pre.json" 2>/dev/null || true)"
+            if [ "$pre_mode" = "active" ] && [ -n "$pre_tag" ]; then
+              case "$effective_title" in
+                *" ($pre_tag)") ;;
+                *) effective_title="${effective_title} (${pre_tag})" ;;
+              esac
+            fi
+          fi
+
+          "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --commit-metadata "$tmp_dir/commit-meta.json" --json > "$tmp_dir/plan.json"
+          plan_fp="$(jq -r '.fingerprint // empty' "$tmp_dir/plan.json")"
+          "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --commit-metadata "$tmp_dir/commit-meta.json" --output markdown > "$tmp_dir/pr-body.md"
+          "$MOONSET_BIN" --cwd "$WORK_DIR" version --no-commit --commit-metadata "$tmp_dir/commit-meta.json" --json > "$tmp_dir/applied.json"
 
           if [ -f "$WORK_DIR/moon.mod" ] && command -v moon >/dev/null 2>&1; then
             moon -C "$WORK_DIR" check || true
@@ -110,22 +205,12 @@ runs:
           fi
           git push -f origin "HEAD:${branch}"
 
-          {
-            echo "## Release Preview"
-            echo ""
-            echo "| Package | Version | Bump |"
-            echo "|---|---|---|"
-            jq -r '.analysis.releases[] | "| `\(.unitId)` | `\(.oldVersion)` → `\(.newVersion)` | `\(.level)` |"' "$tmp_dir/plan.json"
-            echo ""
-            echo "_Generated by moonset._"
-          } > "$tmp_dir/pr-body.md"
-
           existing_pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$existing_pr" ]; then
-            gh pr edit "$existing_pr" -R "$REPO" --title "$PR_TITLE" --body-file "$tmp_dir/pr-body.md"
+            gh pr edit "$existing_pr" -R "$REPO" --title "$effective_title" --body-file "$tmp_dir/pr-body.md"
             pr_number="$existing_pr"
           else
-            pr_url="$(gh pr create -R "$REPO" --base "$BASE_REF" --head "$branch" --title "$PR_TITLE" --body-file "$tmp_dir/pr-body.md")"
+            pr_url="$(gh pr create -R "$REPO" --base "$BASE_REF" --head "$branch" --title "$effective_title" --body-file "$tmp_dir/pr-body.md")"
             pr_number="$(printf '%s' "$pr_url" | awk -F/ '{print $NF}')"
           fi
 
@@ -133,6 +218,8 @@ runs:
           echo "pull-request-number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "published=false" >> "$GITHUB_OUTPUT"
           echo "tags=" >> "$GITHUB_OUTPUT"
+          echo "releases=" >> "$GITHUB_OUTPUT"
+          emit_audit "release-version-pr" "$plan_fp" "pr-ready" ""
         elif [ "$MODE" = "publish" ]; then
           state_file="$WORK_DIR/.moonset/release-state.json"
           if [ ! -f "$state_file" ]; then
@@ -141,9 +228,12 @@ runs:
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "tags=" >> "$GITHUB_OUTPUT"
+            echo "releases=" >> "$GITHUB_OUTPUT"
+            emit_audit "release-publish" "" "no-release-state" ""
             exit 0
           fi
 
+          plan_fp="$(jq -r '.planFingerprint // empty' "$state_file")"
           "$MOONSET_BIN" --cwd "$WORK_DIR" tag --dry-run --json > "$tmp_dir/tags.json"
           planned_tags="$(jq -r '.tags[]?' "$tmp_dir/tags.json")"
           remote_tags="$(git ls-remote --tags origin)"
@@ -168,6 +258,8 @@ runs:
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "tags=$tags_summary" >> "$GITHUB_OUTPUT"
+            echo "releases=" >> "$GITHUB_OUTPUT"
+            emit_audit "release-publish" "$plan_fp" "already-tagged" ""
             exit 0
           fi
 
@@ -181,11 +273,44 @@ runs:
           "$MOONSET_BIN" --cwd "$WORK_DIR" tag --push --yes --json > "$tmp_dir/pushed-tags.json"
           pushed_list="$(jq -r '(.created // []) | join(" ")' "$tmp_dir/pushed-tags.json")"
 
+          created_releases=""
+          if [ "$CREATE_GITHUB_RELEASES" = "true" ]; then
+            "$MOONSET_BIN" --cwd "$WORK_DIR" release-notes --from-state --json > "$tmp_dir/release-notes.json"
+            note_count="$(jq -r '.notes | length' "$tmp_dir/release-notes.json")"
+            idx=0
+            while [ "$idx" -lt "$note_count" ]; do
+              t="$(jq -r ".notes[$idx].tag" "$tmp_dir/release-notes.json")"
+              found="$(jq -r ".notes[$idx].found" "$tmp_dir/release-notes.json")"
+              prerelease="$(jq -r ".notes[$idx].prerelease" "$tmp_dir/release-notes.json")"
+              if ! gh release view "$t" >/dev/null 2>&1; then
+                extra_flags=()
+                if [ "$prerelease" = "true" ]; then
+                  extra_flags+=(--prerelease)
+                fi
+                if [ "$found" = "true" ]; then
+                  jq -r ".notes[$idx].body" "$tmp_dir/release-notes.json" > "$tmp_dir/note-${idx}.md"
+                  gh release create "$t" --title "$t" --notes-file "$tmp_dir/note-${idx}.md" "${extra_flags[@]}"
+                else
+                  gh release create "$t" --title "$t" --generate-notes "${extra_flags[@]}"
+                fi
+                if [ -z "$created_releases" ]; then
+                  created_releases="$t"
+                else
+                  created_releases="$created_releases $t"
+                fi
+              fi
+              idx=$((idx + 1))
+            done
+          fi
+
           echo "has-changesets=false" >> "$GITHUB_OUTPUT"
           echo "pull-request-number=" >> "$GITHUB_OUTPUT"
           echo "published=true" >> "$GITHUB_OUTPUT"
           echo "tags=$pushed_list" >> "$GITHUB_OUTPUT"
+          echo "releases=$created_releases" >> "$GITHUB_OUTPUT"
+          emit_audit "release-publish" "$plan_fp" "published" ""
         else
           echo "Unsupported moonset action mode: $MODE (expected version-pr or publish)" >&2
+          emit_audit "release-unknown" "" "error" "unsupported-mode"
           exit 1
         fi

@@ -45,6 +45,9 @@ outputs:
   should-comment:
     description: Whether pr-comment should create a new comment if none exists yet
     value: ${{ steps.inspect.outputs.should-comment }}
+  audit-event:
+    description: Sanitized compact JSON audit event
+    value: ${{ steps.inspect.outputs.audit-event }}
 runs:
   using: composite
   steps:
@@ -68,8 +71,25 @@ runs:
         HEAD_REF: ${{ inputs.head-ref }}
         WORK_DIR: ${{ inputs.working-directory }}
         COMMENT_ON_NO_CHANGES: ${{ inputs.comment-on-no-changes }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
+        now_ms() {
+          local raw
+          raw="$(date +%s%3N 2>/dev/null || true)"
+          case "$raw" in
+            *[0-9]*)
+              if [ "${#raw}" -ge 13 ]; then
+                printf '%s' "$raw"
+                return
+              fi
+              ;;
+          esac
+          printf '%s000' "$(date +%s)"
+        }
+        start_ms="$(now_ms)"
         tmp_dir="$(mktemp -d)"
         trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -88,6 +108,13 @@ runs:
         json_code=$?
         set -e
 
+        err_code=""
+        plan_fp=""
+        if [ -s "$tmp_dir/status.json" ]; then
+          plan_fp="$(jq -r '.planFingerprint // .fingerprint // empty' "$tmp_dir/status.json" 2>/dev/null || true)"
+          err_code="$(jq -r '.errors[0].code // empty' "$tmp_dir/status.json" 2>/dev/null || true)"
+        fi
+
         if [ "$exit_code" -eq 0 ]; then
           if [ "$json_code" -eq 0 ]; then
             has_release="$(jq -r '.hasRelease // false' "$tmp_dir/status.json")"
@@ -104,8 +131,10 @@ runs:
           fi
         elif [ "$exit_code" -eq 1 ]; then
           state="missing"
+          if [ -z "$err_code" ]; then err_code="missing-changeset"; fi
         else
           state="error"
+          if [ -z "$err_code" ]; then err_code="status-failed"; fi
         fi
 
         if [ "$state" = "none" ] && [ "$COMMENT_ON_NO_CHANGES" != "true" ]; then
@@ -114,13 +143,37 @@ runs:
           should_comment="true"
         fi
 
+        end_ms="$(now_ms)"
+        duration=$((end_ms - start_ms))
+        if [ "$duration" -lt 0 ]; then duration=0; fi
+        audit_json="$(jq -nc \
+          --arg repo "$REPO" \
+          --arg runId "$RUN_ID" \
+          --arg runAttempt "$RUN_ATTEMPT" \
+          --arg cmd "pr-check" \
+          --arg fp "$plan_fp" \
+          --arg res "$state" \
+          --argjson duration "$duration" \
+          --arg err "$err_code" \
+          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:(if $fp == "" then null else $fp end),result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}')"
+
         delimiter="MOONSET_EOF_$(date +%s)_$$"
         {
           echo "state=$state"
           echo "exit-code=$exit_code"
           echo "should-comment=$should_comment"
+          echo "audit-event=$audit_json"
           echo "comment<<$delimiter"
           cat "$tmp_dir/comment.md"
           echo ""
           echo "$delimiter"
         } >> "$GITHUB_OUTPUT"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### moonset pr-check"
+            echo ""
+            echo "| State | Exit Code | Duration (ms) |"
+            echo "|---|---|---|"
+            echo "| \`$state\` | \`$exit_code\` | \`$duration\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi

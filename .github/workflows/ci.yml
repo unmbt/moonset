@@ -1,4 +1,4 @@
-name: Phase 2 checks
+name: CI
 on:
   push:
   pull_request:
@@ -23,6 +23,8 @@ jobs:
       - run: moon update
       - run: moon check --target native --deny-warn
       - run: moon test --target native
+      - run: moon check --target wasm-gc
+      - run: moon test --target wasm-gc
       - run: moon build --target native --release
       - run: moon run scripts/embed-schema.mbtx --check
       - run: moon run scripts/lint-workflows.mbtx

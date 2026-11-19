@@ -5,6 +5,7 @@ import {
   "moonbitlang/core/json",
   "unmbt/moonset/adapters",
   "unmbt/moonset/changelog",
+  "unmbt/moonset/engine",
   "unmbt/moonset/executor",
   "unmbt/moonset/model",
   "unmbt/moonset/workspace",
@@ -17,9 +18,15 @@ pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResul
 
 pub async fn[H : @executor.ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
 
+pub fn build_execution_dag(@model.WorkspaceSnapshot, @model.ReleasePlan, release_versions_override? : Map[String, String]) -> @engine.ExecutionDag raise @model.MoonsetError
+
 pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
 pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String]) -> @model.VersionPlan raise @model.MoonsetError
+
+pub fn build_version_plan_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)]) -> @model.VersionPlan raise @model.MoonsetError
+
+pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)]) -> Array[@changelog.ChangelogContext]
 
 pub async fn commit_changes(String, Array[String], String) -> Bool
 
@@ -31,13 +38,21 @@ pub async fn[H : @executor.ExecutionHost] create_tags_with(H, @workspace.LoadedW
 
 pub async fn discover(String, config_path? : String, since? : String, include_commits? : Bool) -> @workspace.LoadedWorkspace
 
+pub fn extract_release_notes(String, String) -> String?
+
 pub fn generator_result(@adapters.JsonlResponse) -> (String, @json.Json) raise @model.MoonsetError
 
 pub fn native_host() -> @executor.NativeHost
 
 pub async fn pack_artifacts(@workspace.LoadedWorkspace, @executor.PackOptions) -> Array[@model.PackResult]
 
+pub async fn pack_artifacts_for_target(@workspace.LoadedWorkspace, @executor.PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
+
+pub async fn[H : @executor.ExecutionHost] pack_artifacts_for_target_with(H, @workspace.LoadedWorkspace, @executor.PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
+
 pub async fn[H : @executor.ExecutionHost] pack_artifacts_with(H, @workspace.LoadedWorkspace, @executor.PackOptions) -> Array[@model.PackResult]
+
+pub fn parse_artifact_specs(@model.Config) -> Map[String, Array[@engine.ArtifactTargetSpec]]
 
 pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
 
@@ -49,9 +64,17 @@ pub async fn publish_release(@workspace.LoadedWorkspace, @executor.PublishOption
 
 pub async fn[H : @executor.ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, @executor.PublishOptions) -> @model.PublishResult
 
+pub async fn publish_release_with_artifacts(@workspace.LoadedWorkspace, @executor.PublishOptions, artifacts_dir? : String) -> @model.PublishResult
+
+pub async fn[H : @executor.ExecutionHost] publish_release_with_artifacts_with(H, @workspace.LoadedWorkspace, @executor.PublishOptions, artifacts_dir? : String) -> @model.PublishResult
+
 pub async fn recover_version(String) -> Array[String]
 
 pub async fn[H : @executor.ExecutionHost] recover_version_with(H, String) -> Array[String]
+
+pub fn release_pr_title(String, pre? : @model.PreState) -> String
+
+pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre? : @model.PreState, max_chars? : Int32) -> String
 
 pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
 
@@ -65,6 +88,12 @@ pub async fn[H : @executor.ExecutionHost] stage_lockfiles_with(H, String, @works
 
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
+pub fn verify_artifact_matrix(Array[@model.ArtifactIntent], Array[@model.PackResult], expected_head? : String, owners_by_package? : Map[String, Array[String]]) -> @engine.ArtifactVerificationReport
+
+pub async fn verify_artifacts(@workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
+
+pub async fn[H : @executor.ExecutionHost] verify_artifacts_with(H, @workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
+
 // Errors
 
 // Types and methods
@@ -75,6 +104,12 @@ pub using @adapters {type AdapterRegistry}
 pub using @model {type ApplyResult}
 
 pub using @model {type ArtifactIntent}
+
+pub using @engine {type ArtifactIssue}
+
+pub using @engine {type ArtifactTargetSpec}
+
+pub using @engine {type ArtifactVerificationReport}
 
 pub using @adapters {type Capability}
 
@@ -95,6 +130,10 @@ pub using @model {type Diagnostic}
 pub using @executor {type DoctorCheck}
 
 pub using @executor {type DoctorReport}
+
+pub using @engine {type ExecutionDag}
+
+pub using @engine {type ExecutionNode}
 
 pub using @model {type FileEdit}
 

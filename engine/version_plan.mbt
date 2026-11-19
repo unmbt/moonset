@@ -404,6 +404,7 @@ fn build_changelog_context(
   repository : String?,
   thanks : Bool,
   changeset_commits : Map[String, String],
+  commit_metadata~ : Map[String, (String?, String?)] = Map([]),
 ) -> @changelog.ChangelogContext {
   let lines : Array[@changelog.ReleaseLineContext] = []
   for changeset in changesets {
@@ -421,6 +422,18 @@ fn build_changelog_context(
           Some(c) => Some(c)
           None => changeset_commits.get(changeset.id)
         }
+        let (meta_pr, meta_author) = match commit {
+          Some(sha) => commit_metadata.get(sha).unwrap_or((None, None))
+          None => (None, None)
+        }
+        let pull_request = match pr_hint {
+          Some(_) => pr_hint
+          None => meta_pr
+        }
+        let author = match author_hint {
+          Some(_) => author_hint
+          None => meta_author
+        }
         lines.push({
           changeset_id: changeset.id,
           summary: clean_summary,
@@ -429,8 +442,8 @@ fn build_changelog_context(
           old_version,
           new_version: release_version,
           commit,
-          pull_request: pr_hint,
-          author: author_hint,
+          pull_request,
+          author,
         })
       }
     }
@@ -487,13 +500,14 @@ pub fn render_builtin_changelog(
 }
 
 ///|
-/// Build the exact data-only contexts supplied to configured generators.
-pub fn changelog_contexts(
+/// Build the exact data-only contexts supplied to configured generators, with optional commit metadata.
+pub fn changelog_contexts_with_metadata(
   snapshot : @model.WorkspaceSnapshot,
   analysis : @model.ReleasePlan,
   options : @model.VersionOptions,
   generated_at~ : String = "",
   changeset_commits~ : Map[String, String] = Map([]),
+  commit_metadata~ : Map[String, (String?, String?)] = Map([]),
 ) -> Array[@changelog.ChangelogContext] {
   let contexts : Array[@changelog.ChangelogContext] = []
   for release in analysis.releases {
@@ -527,10 +541,29 @@ pub fn changelog_contexts(
         snapshot.config.github,
         snapshot.config.changelog == "github" && snapshot.config.github_thanks,
         changeset_commits,
+        commit_metadata~,
       ),
     )
   }
   contexts
+}
+
+///|
+/// Build the exact data-only contexts supplied to configured generators.
+pub fn changelog_contexts(
+  snapshot : @model.WorkspaceSnapshot,
+  analysis : @model.ReleasePlan,
+  options : @model.VersionOptions,
+  generated_at~ : String = "",
+  changeset_commits~ : Map[String, String] = Map([]),
+) -> Array[@changelog.ChangelogContext] {
+  changelog_contexts_with_metadata(
+    snapshot,
+    analysis,
+    options,
+    generated_at~,
+    changeset_commits~,
+  )
 }
 
 ///|
@@ -606,6 +639,27 @@ pub fn build_version_plan(
   generated_at~ : String = "",
   generators? : @changelog.GeneratorRegistry,
   changeset_commits~ : Map[String, String] = Map([]),
+) -> @model.VersionPlan raise @model.MoonsetError {
+  build_version_plan_with_metadata(
+    snapshot,
+    analysis,
+    options,
+    generated_at~,
+    generators?,
+    changeset_commits~,
+  )
+}
+
+///|
+/// Build all deterministic file edits needed by `version` with optional commit PR/author metadata.
+pub fn build_version_plan_with_metadata(
+  snapshot : @model.WorkspaceSnapshot,
+  analysis : @model.ReleasePlan,
+  options : @model.VersionOptions,
+  generated_at~ : String = "",
+  generators? : @changelog.GeneratorRegistry,
+  changeset_commits~ : Map[String, String] = Map([]),
+  commit_metadata~ : Map[String, (String?, String?)] = Map([]),
 ) -> @model.VersionPlan raise @model.MoonsetError {
   let registry = generators.unwrap_or(@changelog.GeneratorRegistry::new())
   let date = version_date(generated_at)
@@ -733,6 +787,7 @@ pub fn build_version_plan(
         snapshot.config.github,
         snapshot.config.changelog == "github" && snapshot.config.github_thanks,
         changeset_commits,
+        commit_metadata~,
       )
       let unit_doc = registry.render(snapshot.config.changelog, context)
       if !changelog_groups.contains(path) {
@@ -785,6 +840,7 @@ pub fn build_version_plan(
             snapshot.config.changelog == "github" &&
             snapshot.config.github_thanks,
             changeset_commits,
+            commit_metadata~,
           )
           let rendered_single = registry.render(
             snapshot.config.changelog,
@@ -937,6 +993,21 @@ pub fn build_version_plan(
       }
     }
   }
+  let release_versions_override : Map[String, String] = Map([])
+  for release in analysis.releases {
+    release_versions_override[release.unit_id] = planned_version(
+      release.new_version,
+      options,
+      generated_at,
+    )
+  }
+  let include_dag = has_artifact_specs(snapshot.config) ||
+    !snapshot.config.bridges.is_empty()
+  let dag_opt = if include_dag {
+    Some(build_execution_dag(snapshot, analysis, release_versions_override~))
+  } else {
+    None
+  }
   let state : @model.ReleaseState = {
     plan_fingerprint: analysis.fingerprint,
     source_head: snapshot.git_head,
@@ -954,13 +1025,33 @@ pub fn build_version_plan(
   }
   if !analysis.releases.is_empty() && !is_snapshot {
     let state_path = ".moonset/release-state.json"
+    let state_json : Json = match dag_opt {
+      Some(dag) => {
+        let base = state.to_json()
+        match base {
+          Object(fields) => {
+            fields["artifacts"] = Json::array(
+              dag.artifacts.map(x => x.to_json()),
+            )
+            fields["executionGraph"] = {
+              "buildNodes": dag.build_nodes.map(x => x.to_json()),
+              "publishNodes": dag.publish_nodes.map(x => x.to_json()),
+              "publishOrder": dag.publish_order.map(Json::string),
+            }
+            Json::object(fields)
+          }
+          _ => base
+        }
+      }
+      None => state.to_json()
+    }
     add_edit(
       edits,
       state_path,
       "state",
       "moonset",
       snapshot.sources.get(state_path).unwrap_or(""),
-      @model.canonical_json(state.to_json()) + "\n",
+      @model.canonical_json(state_json) + "\n",
     )
   }
   let plan_fingerprint = @model.fingerprint({

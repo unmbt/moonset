@@ -225,5 +225,53 @@ async fn main {
   assert_eq(git(fix_root, ["log", "-n", "1", "--format=%s"]), "chore: add cs")
   ignore(invoke(binary, fix_root, ["version", "--json"], 0))
   assert_eq(git(fix_root, ["log", "-n", "1", "--format=%s"]), "chore: rel")
-  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, lifecycle, exits, JSON and no-write checks passed")
+
+  // release-notes extraction (single --version & --from-state) and artifact DAG publish-plan / pack --verify
+  let rn_single = invoke(binary, workflow_root, ["release-notes", "--version", "0.2.0", "--json"], 0)
+  assert_true(rn_single is { "found": True, "version": "0.2.0", "prerelease": False, "body": String(rn_body), .. } && rn_body.contains("Flow feature"))
+  let rn_missing = invoke(binary, workflow_root, ["release-notes", "--version", "9.9.9", "--json"], 0)
+  assert_true(rn_missing is { "found": False, "body": "", .. })
+  let rn_state = invoke(binary, workflow_root, ["release-notes", "--from-state", "--json"], 0)
+  assert_true(rn_state is { "notes": [{ "tag": "v0.2.0", "found": True, .. }], .. })
+
+  let dag_root = @fs.tmpdir(prefix="moonset-dag-")
+  defer { @fs.rmdir(dag_root, recursive=true) catch { _ => () } }
+  ignore(git(dag_root, ["init", "-b", "main"]))
+  ignore(git(dag_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(dag_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(dag_root, "moon.mod", "name = \"acme/cli\"\nversion = \"0.1.0\"\n")
+  write(dag_root, "dist/cli-linux-x64", "binary-bytes")
+  write(dag_root, ".changeset/config.json", "{\"schemaVersion\":1,\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"m\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true}],\"units\":{\"moonbit:acme/cli\":{\"artifacts\":[{\"target\":\"linux-x64\",\"required\":true,\"path\":\"dist/cli-linux-x64\"}]}}}}}")
+  write(dag_root, ".changeset/c1.md", "---\n\"moonbit:acme/cli\": patch\n---\nAdd linux binary\n")
+  let dag_plan = invoke(binary, dag_root, ["publish-plan"], 0)
+  assert_true(dag_plan is { "artifacts": [{ "target": "linux-x64", "required": True, .. }], "executionGraph": { "buildNodes": [_, ..], "publishNodes": [_, ..], .. }, .. })
+  ignore(invoke(binary, dag_root, ["version", "--json"], 0))
+  let packed_linux = invoke(binary, dag_root, ["pack", "--target", "linux-x64", "--json"], 0)
+  assert_true(packed_linux is { "target": "linux-x64", "results": [{ "target": "linux-x64", "verified": True, .. }], .. })
+  let verified_ok = invoke(binary, dag_root, ["pack", "--verify", "--json"], 0)
+  assert_true(verified_ok is { "ok": True, "checked": 1, .. })
+
+  let meta_root = @fs.tmpdir(prefix="moonset-prbody-")
+  defer { @fs.rmdir(meta_root, recursive=true) catch { _ => () } }
+  ignore(git(meta_root, ["init", "-b", "main"]))
+  ignore(git(meta_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(meta_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(meta_root, "moon.mod", "name = \"acme/prbody\"\nversion = \"0.1.0\"\n")
+  write(meta_root, ".changeset/config.json", "{\"schemaVersion\":1,\"baseBranch\":\"main\",\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"acme/prbody\"}}}")
+  write(meta_root, ".changeset/f1.md", "---\n\"acme/prbody\": minor\n---\nAdd rich PR body (#9)\n")
+  ignore(git(meta_root, ["add", "."]))
+  ignore(git(meta_root, ["commit", "-m", "feat: add pr body"]))
+  let head_sha = git(meta_root, ["rev-parse", "HEAD"])
+  write(meta_root, "meta.json", "{\"" + head_sha + "\":{\"pr\":\"42\",\"author\":\"alice\"}}")
+  let pr_md_out = @shell.Cmd(binary, [
+    "--cwd", meta_root, "version", "--dry-run", "--output", "markdown", "--commit-metadata", "meta.json",
+  ]).output()
+  assert_eq(pr_md_out.exit_code(), 0)
+  let pr_md = pr_md_out.stdout()
+  assert_true(pr_md.contains("# Releases"))
+  assert_true(pr_md.contains("## acme/prbody@0.2.0"))
+  assert_true(pr_md.contains("https://github.com/acme/prbody/pull/42"))
+  assert_true(pr_md.contains("Thanks [@alice](https://github.com/alice)!"))
+
+  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, lifecycle, exits, JSON and no-write checks passed")
 }

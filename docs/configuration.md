@@ -98,7 +98,7 @@ Phase 1 接受 MoonBit-only 的显式 coexist 分区；同目录 JS/Cargo 文件
 |---|---|
 | `mode` | `coexist` 分区共存，或 `unified` 统一管理；不自动接管已有 Changesets 的目录。 |
 | `workspaces` | 显式 `{id, ecosystem, root, manager, includeRoot}`；路径相对 domain。npm/pnpm 共用 `npm` 生态。 |
-| `units` | 已发现 UnitId 的 `publish`、`publisher`、`tagFormat` 覆盖；不得用未知 ID 隐式创建源码单元。 |
+| `units` | 已发现 UnitId 的 `publish`、`publisher`、`tagFormat` 与可选 `artifacts`（`{target, package?, required?, path?}`）覆盖；不得用未知 ID 隐式创建源码单元。 |
 | `bridges` | `{consumer, producer, kind: "build", bump, waitFor}`；构建依赖，默认不改原生依赖声明。 |
 | `lockfiles` | `refresh`（缺省）在 staging 刷新并审阅；`verify-only` 在预期锁文件需变化时失败。 |
 

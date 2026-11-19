@@ -59,6 +59,9 @@ fn check_composite_action(path : String, text : String) -> Unit raise {
   if run_count > 0 && shell_count < run_count {
     fail_lint(path, "every composite `run:` step must specify `shell:`")
   }
+  if path != "setup/action.yml" && !text.contains("audit-event:") {
+    fail_lint(path, "composite action must declare `audit-event` output")
+  }
   check_run_blocks(path, lines)
 }
 

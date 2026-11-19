@@ -9,6 +9,8 @@ import {
 // Values
 pub fn builtin_context(String, String, String, String, repository? : String, thanks? : Bool) -> ChangelogContext
 
+pub fn extract_release_notes(String, String) -> String?
+
 pub fn generator_kind(String) -> GeneratorKind
 
 pub fn render(GeneratorKind, ChangelogContext) -> String
