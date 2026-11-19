@@ -65,6 +65,16 @@ irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 |
 
 > **注意**：预编译二进制安装脚本会将文件安装到 `~/.unmbt`（与同组织工具 [moon-bump](https://github.com/unmbt/moon-bump) 共享目录），并自动将其加入 `PATH`。安装完成后可能需要重启终端；CI 环境请直接使用 `unmbt/moonset/setup@v1` Action。
 
+#### AI Agent Skill（指导外部 Agent 使用 `moonset`）
+
+本仓库内置了符合开放 Agent Skills 规范的 [`skills/moonset`](skills/moonset/SKILL.md)，可一键安装到支持 Agent Skills 的编码工具（Antigravity、Claude Code、Cursor、Codex 等）：
+
+```bash
+npx skills add unmbt/moonset
+```
+
+也可直接将 `skills/moonset/` 目录复制到目标项目的 `.agents/skills/moonset/`。
+
 #### 工具选型：与 `moon-bump` 的分工
 
 - **[moon-bump](https://github.com/unmbt/moon-bump)**：适合单包或紧凑型 workspace 的**本地交互式一键发版**（修改 `moon.mod`、提交、打 tag、推送）。
@@ -353,6 +363,16 @@ irm https://raw.githubusercontent.com/unmbt/moonset/master/scripts/install.ps1 |
 ```
 
 > **Note**: The user install scripts place `moonset` into `~/.unmbt` (alongside [moon-bump](https://github.com/unmbt/moon-bump)) and add it to your `PATH`. Restart your terminal if needed. For CI workflows, use the dedicated `unmbt/moonset/setup@v1` GitHub Action instead.
+
+#### AI Agent Skill
+
+This repository ships an Agent Skill at [`skills/moonset`](skills/moonset/SKILL.md) so AI coding agents (Antigravity, Claude Code, Cursor, Codex, etc.) can use `moonset` non-interactively and safely:
+
+```bash
+npx skills add unmbt/moonset
+```
+
+Alternatively, copy `skills/moonset/` into `.agents/skills/moonset/` in your target workspace.
 
 #### Choosing between `moonset` and `moon-bump`
 
