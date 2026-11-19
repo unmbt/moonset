@@ -91,6 +91,9 @@
    - 进一步将实验性 `adapters` trait 与 `executor::ExecutionHost` 统一下沉，提供更完整的 conformance suite。
 4. **文档与示例演进**
    - 扩充混合 workspace（MoonBit + pnpm / Cargo）实战模板与第三方 JSONL 插件示例仓库。
+5. **发布 Action 自动创建 GitHub Release（基于 `CHANGELOG.md`）**
+   - 参考 `changesets/action` 的 `createGithubReleases` 机制，在根发布 Action（`action.yml` 的 `mode: publish`）中新增 `create-github-releases` 开关（默认开启），在推送 tag 后自动读取对应发布单元的 `CHANGELOG.md` 版本章节创建 GitHub Release（单包取根目录 `CHANGELOG.md`，Monorepo 按发布单元取各自 `CHANGELOG.md`，未匹配到章节时回退至 GitHub 自动生成 notes）；
+   - 二进制分发工作流（如 `release-binaries.yml`）检测到对应 Release 已存在时仅执行资产上传（`gh release upload --clobber`），让下游使用 `moonset` 的项目开箱即得基于 `CHANGELOG.md` 的 Release Notes。
 
 ## 明确暂缓项目
 
