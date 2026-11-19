@@ -183,8 +183,9 @@ pub fn builtin_context(
 ///|
 fn section(bump : @model.Bump) -> String {
   match bump {
-    @model.Major | @model.Minor => "Features"
-    @model.Patch => "Fixes"
+    @model.Major => "Major Changes"
+    @model.Minor => "Minor Changes"
+    @model.Patch => "Patch Changes"
     @model.None => ""
   }
 }
@@ -282,6 +283,16 @@ fn linkify_issue_refs(text : String, repository : String?) -> String {
 }
 
 ///|
+fn short_commit_link(commit : String, repository : String?) -> String {
+  let short = if commit.length() > 7 { commit[:7].to_owned() } else { commit }
+  match repository {
+    Some(repo) if repo != "" =>
+      "[`" + short + "`](https://github.com/" + repo + "/commit/" + commit + ")"
+    _ => "`" + short + "`"
+  }
+}
+
+///|
 fn line_text(
   line : ReleaseLineContext,
   kind : String,
@@ -293,81 +304,87 @@ fn line_text(
   } else {
     line.summary
   }
-  let mut text = "- " + summary_text.replace_all(old="\n", new="\n  ")
-  if kind != "builtin" {
-    match line.commit {
-      Some(commit) if commit != "" => {
-        let short = if commit.length() > 8 {
-          commit[:8].to_owned()
-        } else {
-          commit
-        }
-        let link = match repository {
-          Some(repo) =>
-            "[" +
-            short +
-            "](https://github.com/" +
-            repo +
-            "/commit/" +
-            commit +
-            ")"
-          None => short
-        }
-        text = text + " (" + link + ")"
+  let body = summary_text.replace_all(old="\n", new="\n  ")
+  if kind == "builtin" {
+    return "- " + body
+  }
+  if kind == "git" {
+    return match line.commit {
+      Some(commit) if commit != "" =>
+        "- " + short_commit_link(commit, repository) + ": " + body
+      _ => "- " + body
+    }
+  }
+  // GitHub format aligned with @changesets/changelog-github:
+  // - [#PR](...) [`short7`](...) Thanks [@author](...)! - Summary
+  let prefix_parts : Array[String] = []
+  match line.pull_request {
+    Some(pr) if pr != "" => {
+      let pr_link = match repository {
+        Some(repo) if repo != "" => "https://github.com/" + repo + "/pull/" + pr
+        _ => "#" + pr
       }
+      prefix_parts.push("[#" + pr + "](" + pr_link + ")")
+    }
+    _ => ()
+  }
+  match line.commit {
+    Some(commit) if commit != "" =>
+      prefix_parts.push(short_commit_link(commit, repository))
+    _ => ()
+  }
+  if thanks {
+    match line.author {
+      Some(author) if author != "" =>
+        prefix_parts.push(
+          "Thanks [@" + author + "](https://github.com/" + author + ")!",
+        )
       _ => ()
     }
   }
-  if kind == "github" {
-    match line.pull_request {
-      Some(pr) if pr != "" => {
-        let pr_link = match repository {
-          Some(repo) => "https://github.com/" + repo + "/pull/" + pr
-          None => "#" + pr
-        }
-        text = text + " ([#" + pr + "](" + pr_link + "))"
-      }
-      _ => ()
-    }
-    if thanks {
-      match line.author {
-        Some(author) if author != "" =>
-          text = text +
-            " Thanks [@" +
-            author +
-            "](https://github.com/" +
-            author +
-            ")!"
-        _ => ()
-      }
-    }
+  if prefix_parts.is_empty() {
+    "- " + body
+  } else {
+    "- " + prefix_parts.join(" ") + " - " + body
   }
-  text
 }
 
 ///|
 fn render_document(context : ChangelogContext, kind : String) -> String {
-  let features : Array[String] = []
-  let fixes : Array[String] = []
+  let major_changes : Array[String] = []
+  let minor_changes : Array[String] = []
+  let patch_changes : Array[String] = []
   for line in context.lines {
     let section_name = section(line.bump)
-    if section_name == "Features" {
-      features.push(line_text(line, kind, context.repository, context.thanks))
-    } else if section_name == "Fixes" {
-      fixes.push(line_text(line, kind, context.repository, context.thanks))
+    let formatted = line_text(line, kind, context.repository, context.thanks)
+    if section_name == "Major Changes" {
+      major_changes.push(formatted)
+    } else if section_name == "Minor Changes" {
+      minor_changes.push(formatted)
+    } else if section_name == "Patch Changes" {
+      patch_changes.push(formatted)
+    }
+  }
+  if !context.dependency_lines.is_empty() {
+    if context.dependency_lines.length() == 1 &&
+      context.dependency_lines[0].has_prefix("Updated dependencies") {
+      patch_changes.push("- " + context.dependency_lines[0])
+    } else {
+      patch_changes.push(
+        "- Updated dependencies:\n  - " +
+        context.dependency_lines.join("\n  - "),
+      )
     }
   }
   let sections : Array[String] = []
-  if !features.is_empty() {
-    sections.push("### Features\n\n" + features.join("\n") + "\n")
+  if !major_changes.is_empty() {
+    sections.push("### Major Changes\n\n" + major_changes.join("\n") + "\n")
   }
-  if !fixes.is_empty() {
-    sections.push("### Fixes\n\n" + fixes.join("\n") + "\n")
+  if !minor_changes.is_empty() {
+    sections.push("### Minor Changes\n\n" + minor_changes.join("\n") + "\n")
   }
-  if !context.dependency_lines.is_empty() {
-    sections.push(
-      "### Dependencies\n\n- " + context.dependency_lines.join("\n- ") + "\n",
-    )
+  if !patch_changes.is_empty() {
+    sections.push("### Patch Changes\n\n" + patch_changes.join("\n") + "\n")
   }
   let entry = "## " +
     context.version +

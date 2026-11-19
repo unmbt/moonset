@@ -459,18 +459,64 @@ fn build_changelog_context(
       }
     }
   }
-  let dependencies : Array[String] = []
+  let dep_items : Array[String] = []
+  let dep_producers : Array[String] = []
   for update in dependency_updates {
     if update.consumer == unit_id {
-      let line = "`" +
-        update.producer +
-        "` updated to `" +
-        update.new_requirement +
-        "`."
-      if !dependencies.contains(line) {
-        dependencies.push(line)
+      let display_name = match update.producer.find(":") {
+        Some(idx) => update.producer[idx + 1:].to_owned()
+        None => update.producer
+      }
+      let ver_display = if update.new_requirement.has_prefix("^") ||
+        update.new_requirement.has_prefix("~") ||
+        update.new_requirement.has_prefix("=") {
+        update.new_requirement[1:].to_owned()
+      } else {
+        update.new_requirement
+      }
+      let item = display_name + "@" + ver_display
+      if !dep_items.contains(item) {
+        dep_items.push(item)
+      }
+      if !dep_producers.contains(update.producer) {
+        dep_producers.push(update.producer)
       }
     }
+  }
+  let dependencies : Array[String] = []
+  if !dep_items.is_empty() {
+    let dep_commit_links : Array[String] = []
+    let seen_commits : Array[String] = []
+    for cs in changesets {
+      if cs.releases.any(c => {
+          c.bump != @model.None && dep_producers.contains(c.unit_id)
+        }) {
+        if changeset_commits.get(cs.id) is Some(sha) &&
+          sha != "" &&
+          !seen_commits.contains(sha) {
+          seen_commits.push(sha)
+          let short = if sha.length() > 7 { sha[:7].to_owned() } else { sha }
+          let link = match repository {
+            Some(repo) if repo != "" =>
+              "[`" +
+              short +
+              "`](https://github.com/" +
+              repo +
+              "/commit/" +
+              sha +
+              ")"
+            _ => "`" + short + "`"
+          }
+          dep_commit_links.push(link)
+        }
+      }
+    }
+    let header = if dep_commit_links.is_empty() {
+      "Updated dependencies:"
+    } else {
+      "Updated dependencies [" + dep_commit_links.join(", ") + "]:"
+    }
+    dependencies.push(header + "\n  - " + dep_items.join("\n  - "))
   }
   {
     unit_id,

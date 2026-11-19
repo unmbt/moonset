@@ -23,15 +23,20 @@ test "Git and GitHub changelog generators render stable links from supplied meta
     thanks: true,
   }
   let git = @changelog.render(@changelog.Git, context)
+  assert_true(git.contains("### Minor Changes"))
   assert_true(
-    git.contains("https://github.com/acme/core/commit/1234567890abcdef"),
+    git.contains(
+      "- [`1234567`](https://github.com/acme/core/commit/1234567890abcdef): Add streaming API",
+    ),
   )
   assert_false(git.contains("/pull/42"))
   let github = @changelog.render(@changelog.GitHub, context)
-  assert_true(github.contains("https://github.com/acme/core/pull/42"))
-  assert_true(github.contains("[#12](https://github.com/acme/core/issues/12)"))
-  assert_true(github.contains("`#99`"))
-  assert_true(github.contains("Thanks [@wyate](https://github.com/wyate)!"))
+  assert_true(github.contains("### Minor Changes"))
+  assert_true(
+    github.contains(
+      "- [#42](https://github.com/acme/core/pull/42) [`1234567`](https://github.com/acme/core/commit/1234567890abcdef) Thanks [@wyate](https://github.com/wyate)! - Add streaming API for [#12](https://github.com/acme/core/issues/12) (see `#99`)",
+    ),
+  )
   assert_eq(github, @changelog.render(@changelog.GitHub, context))
 }
 
@@ -54,13 +59,15 @@ test "GitHub changelog gracefully retains summaries without repository metadata"
         author: None,
       },
     ],
-    dependency_lines: [],
+    dependency_lines: ["acme/core@1.0.0"],
     existing: "",
     repository: None,
     thanks: false,
   }
   let text = @changelog.render(@changelog.GitHub, context)
-  assert_true(text.contains("Fix rendering ([#9](#9))"))
+  assert_true(text.contains("### Patch Changes"))
+  assert_true(text.contains("- [#9](#9) - Fix rendering"))
+  assert_true(text.contains("- Updated dependencies:\n  - acme/core@1.0.0"))
 }
 
 ///|

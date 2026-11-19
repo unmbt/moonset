@@ -14,7 +14,7 @@ test "builtin changelog groups release summaries and dependency updates" {
     "# Changelog\n\n## 0.1.0 - 2026-11-01\n\n### Fixes\n\n- Old fix\n",
   )
   assert_true(text.contains("## 0.2.0 - 2026-11-12"))
-  assert_true(text.contains("### Features"))
+  assert_true(text.contains("### Minor Changes"))
   assert_true(text.contains("Add streaming support"))
   assert_true(text.contains("## 0.1.0 - 2026-11-01"))
 }
@@ -213,7 +213,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
   assert_true(!cl.contains("Old feature already released"))
   assert_true(cl.contains("https://github.com/unmbt/moonset/pull/77"))
   assert_true(cl.contains("Thanks [@wyate](https://github.com/wyate)!"))
-  assert_true(cl.contains("abcdef12"))
+  assert_true(cl.contains("`abcdef1`"))
 
   // Pre exit with zero prereleases still cleans up pre.json
   let exit_state = @engine.parse_pre_state(
@@ -289,4 +289,69 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
   assert_true(cl_edits[0].after_text.contains("## npm:@acme/same - 1.1.0"))
   assert_true(vp_same.tags.any(t => t.name == "moonbit/acme/same-v0.1.1"))
   assert_true(vp_same.tags.any(t => t.name == "npm/@acme/same-v1.1.0"))
+}
+
+///|
+test "Changesets-aligned Major/Minor/Patch Changes and Updated dependencies with commit links" {
+  let mod_b = "name = \"acme/b\"\nversion = \"0.1.0\"\nimport {\n  \"acme/a@0.1.0\",\n}\n"
+  let dep_pos = mod_b.find("\"acme/a@0.1.0\"").unwrap()
+  let ws : @model.WorkspaceSnapshot = {
+    ..snapshot(
+      [
+        unit("acme/a", version="0.1.0"),
+        {
+          ..unit("acme/b", version="0.1.0"),
+          dependencies: [
+            {
+              producer: "moonbit:acme/a",
+              requirement: "0.1.0",
+              kind: @model.Runtime,
+              path: "acme/b/moon.mod",
+              start: dep_pos,
+              end: dep_pos + 14,
+              target_condition: None,
+            },
+          ],
+        },
+      ],
+      config="{\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"unmbt/demo\"}},\"updateInternalDependents\":\"always\"}",
+    ),
+    sources: Map([
+      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
+      ("acme/b/moon.mod", mod_b),
+    ]),
+  }
+  let cs = @engine.parse_changeset(
+    "---\nacme/a: major\n---\nPR: #2015\nAuthor: @alice\nRemoved legacy error",
+    id="c1",
+    path=".changeset/c1.md",
+  )
+  let plan = @engine.build_plan(ws, [cs])
+  let vp = @engine.build_version_plan(
+    ws,
+    plan,
+    { dry_run: true, no_changelog: false, snapshot_tag: None, },
+    generated_at="2026-11-19",
+    changeset_commits=Map([("c1", "6a05002deadbeef")]),
+  )
+  let cl_a = vp.changelogs
+    .iter()
+    .find_first(c => c.unit_id == "moonbit:acme/a")
+    .unwrap().text
+  assert_true(cl_a.contains("### Major Changes"))
+  assert_true(
+    cl_a.contains(
+      "- [#2015](https://github.com/unmbt/demo/pull/2015) [`6a05002`](https://github.com/unmbt/demo/commit/6a05002deadbeef) Thanks [@alice](https://github.com/alice)! - Removed legacy error",
+    ),
+  )
+  let cl_b = vp.changelogs
+    .iter()
+    .find_first(c => c.unit_id == "moonbit:acme/b")
+    .unwrap().text
+  assert_true(cl_b.contains("### Patch Changes"))
+  assert_true(
+    cl_b.contains(
+      "- Updated dependencies [[`6a05002`](https://github.com/unmbt/demo/commit/6a05002deadbeef)]:\n  - acme/a@1.0.0",
+    ),
+  )
 }

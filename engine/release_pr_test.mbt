@@ -50,7 +50,7 @@ test "render_release_pr_body renders intro, pre banner, summary table, and per-p
   )
   assert_true(body.contains("# Releases"))
   assert_true(body.contains("## unmbt/moonset@0.2.0-next.1"))
-  assert_true(body.contains("### Features"))
+  assert_true(body.contains("### Minor Changes"))
   assert_true(body.contains("https://github.com/unmbt/moonset/pull/15"))
   assert_true(body.contains("https://github.com/unmbt/moonset/issues/12"))
   assert_true(body.contains("Thanks [@wyatex](https://github.com/wyatex)!"))
