@@ -32,9 +32,23 @@ pub fn format_changeset(@model.ChangesetDraft) -> String raise @model.MoonsetErr
 
 pub fn format_tag_name(String, String, String, String) -> String
 
+pub fn formatter_command(String, Array[String]) -> (String, Array[String])?
+
+pub fn formatter_supports_path(String, String) -> Bool
+
 pub fn has_artifact_specs(@model.Config) -> Bool
 
+pub fn has_glob_meta(String) -> Bool
+
+pub fn is_unit_ignored(@model.Config, String) -> Bool
+
+pub fn matches_changed_patterns(String, Array[String]) -> Bool
+
+pub fn matches_ecosystem_range(String, String, String) -> Bool raise @model.MoonsetError
+
 pub fn matches_pattern(String, String) -> Bool
+
+pub fn matches_unit_pattern(String, String) -> Bool
 
 pub fn parse_artifact_specs(@model.Config) -> Map[String, Array[ArtifactTargetSpec]]
 
@@ -46,6 +60,10 @@ pub fn parse_json(String, String) -> @json.Json raise @model.MoonsetError
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
+pub fn parse_snapshot_config(@model.Config) -> SnapshotConfig
+
+pub fn parse_target_mapping(String?) -> PublishTargetOverride raise @model.MoonsetError
+
 pub fn release_pr_title(String, pre? : @model.PreState) -> String
 
 pub fn relevant_changes(@model.WorkspaceSnapshot, changeset_directory? : String) -> Array[String]
@@ -54,13 +72,31 @@ pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset],
 
 pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre? : @model.PreState, max_chars? : Int32) -> String
 
+pub fn render_snapshot_version(String, String, SnapshotConfig, generated_at? : String, git_head? : String) -> String raise @model.MoonsetError
+
+pub fn resolve_formatter(@model.Config, no_format? : Bool) -> String
+
+pub fn resolve_ignored_units(@model.Config, Array[@model.ReleaseUnit]) -> Array[String] raise @model.MoonsetError
+
+pub fn resolve_target_override(PublishTargetOverride, String, String) -> String?
+
+pub fn resolve_unit_groups(Array[Array[String]], Array[@model.ReleaseUnit]) -> Array[Array[String]] raise @model.MoonsetError
+
+pub fn rewrite_ecosystem_range(String, String, String) -> String raise @model.MoonsetError
+
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
 pub fn status_markdown(@model.WorkspaceSnapshot, @model.ReleasePlan, options? : CommentOptions) -> String
 
 pub fn validate_changeset_draft(@model.ChangesetDraft) -> Unit raise @model.MoonsetError
 
+pub fn validate_ecosystem_range(String, String) -> Unit raise @model.MoonsetError
+
 pub fn validate_git_tag_name(String) -> Unit raise @model.MoonsetError
+
+pub fn validate_glob_pattern(String, allow_negation? : Bool, path? : String) -> Unit raise @model.MoonsetError
+
+pub fn validate_snapshot_template(String, path? : String) -> Unit raise @model.MoonsetError
 
 pub fn verify_artifact_matrix(Array[@model.ArtifactIntent], Array[@model.PackResult], expected_head? : String, owners_by_package? : Map[String, Array[String]]) -> ArtifactVerificationReport
 
@@ -121,6 +157,18 @@ pub(all) struct ExecutionNode {
   depends_on : Array[String]
 }
 pub fn ExecutionNode::to_json(Self) -> @json.Json
+
+pub(all) struct PublishTargetOverride {
+  global : String?
+  by_ecosystem : Map[String, String]
+  by_unit : Map[String, String]
+}
+
+pub(all) struct SnapshotConfig {
+  enabled : Bool
+  use_calculated_version : Bool
+  prerelease_template : String
+}
 
 // Type aliases
 

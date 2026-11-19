@@ -121,9 +121,24 @@ async fn version_command(options : Options) -> Int32 {
     no_changelog: options.no_changelog,
     snapshot_tag: options.snapshot,
   }
+  if options.snapshot is Some(tag) {
+    let snap_cfg = @engine.parse_snapshot_config(loaded.snapshot.config)
+    if !snap_cfg.enabled {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "snapshot-disabled", "Snapshot releases are disabled by configuration; set snapshot.enabled to true",
+        ),
+      )
+    }
+    if tag.trim() == "" {
+      raise @model.Invalid(
+        @model.diagnostic("invalid-input", "Snapshot tag cannot be empty"),
+      )
+    }
+  }
   let texts : Map[String, String] = Map([])
   let metadata : Map[String, Json] = Map([])
-  let today = @executor.utc_date(@env.now())
+  let today = @executor.utc_datetime(@env.now())
   if loaded.snapshot.config.changelog_enabled &&
     !options.no_changelog &&
     !["builtin", "git", "github", "none"].contains(generator_name) {
@@ -244,14 +259,21 @@ async fn version_command(options : Options) -> Int32 {
       println(
         "Dry run: \{plan.analysis.releases.length()} releases, \{plan.edits.length()} planned edits",
       )
+      let planned_by_unit : Map[String, String] = Map([])
+      for tag in plan.tags {
+        planned_by_unit[tag.unit_id] = tag.version
+      }
       for release in plan.analysis.releases {
+        let target_ver = planned_by_unit
+          .get(release.unit_id)
+          .unwrap_or(release.new_version)
         println(
           "  " +
           release.unit_id +
           ": " +
           release.old_version +
           " -> " +
-          release.new_version,
+          target_ver,
         )
       }
       for edit in plan.edits {
@@ -271,6 +293,17 @@ async fn version_command(options : Options) -> Int32 {
     return 0
   }
   ignore(@executor.apply_version_plan(loaded.snapshot.root, plan))
+  let written_paths = plan.edits
+    .filter(e => e.after_text != "")
+    .map(e => e.path)
+  ignore(
+    @executor.format_files(
+      loaded.snapshot.root,
+      loaded.snapshot.config,
+      written_paths,
+      no_format=options.no_format,
+    ),
+  )
   let mut committed = false
   if !options.no_commit &&
     options.snapshot is None &&
@@ -896,6 +929,14 @@ async fn add_command(options : Options) -> Int32 {
     .relative(base=@path.Path(loaded.snapshot.root))
     .to_string()
     .replace_all(old="\\", new="/")
+  ignore(
+    @executor.format_files(
+      loaded.snapshot.root,
+      loaded.snapshot.config,
+      [rel_written],
+      no_format=options.no_format,
+    ),
+  )
   if !options.no_commit &&
     (
       loaded.snapshot.config.commit_mode == "add" ||
@@ -1030,6 +1071,14 @@ async fn interactive_add(
     .relative(base=@path.Path(loaded.snapshot.root))
     .to_string()
     .replace_all(old="\\", new="/")
+  ignore(
+    @executor.format_files(
+      loaded.snapshot.root,
+      loaded.snapshot.config,
+      [rel_written],
+      no_format=options.no_format,
+    ),
+  )
   if !options.no_commit &&
     (
       loaded.snapshot.config.commit_mode == "add" ||
@@ -1189,8 +1238,22 @@ async fn write_plan(
     .relative(base=@path.Path(snapshot.root))
     .to_string()
     .replace_all(old="\\", new="/")
+  let pre_dir = snapshot.config.pre_directory
+    .replace_all(old="\\", new="/")
+    .trim()
+    .to_owned()
+  let clean_pre_dir = if pre_dir.has_suffix("/") {
+    pre_dir[:pre_dir.length() - 1].to_owned()
+  } else {
+    pre_dir
+  }
   if relative.split("/").any(x => x == ".git") ||
-    relative.has_prefix(changeset_directory + "/") {
+    relative.has_prefix(changeset_directory + "/") ||
+    (
+      clean_pre_dir != "" &&
+      clean_pre_dir != "." &&
+      relative.has_prefix(clean_pre_dir + "/")
+    ) {
     usage_error("Plan output cannot overwrite release or Git inputs")
   }
   if @fs.exists(absolute) {
@@ -1218,7 +1281,6 @@ async fn write_plan(
 
 ///|
 async fn execute(options : Options) -> Int32 {
-  let _ = options.no_format
   if options.command == "" {
     if !options.json && @io.is_tty() && @env.get_env_var("CI") is None {
       return add_command(options)
@@ -1227,7 +1289,7 @@ async fn execute(options : Options) -> Int32 {
   }
   if options.command == "help" {
     println(
-      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--output human|json|markdown] [--commit-metadata path] [--snapshot tag] [--recover]\n  pack [--package unit] [--target name] [--manifest-out path] [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name] [--tag dist-tag] [--artifacts-dir dir] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color -h/--help -V/--version",
+      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add --package unit[,unit] --type major|minor|patch|none --summary text [--no-format]\n  pre enter <tag> [--initial-version] | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--no-changelog] [--no-commit] [--no-format] [--output human|json|markdown] [--commit-metadata path] [--snapshot tag] [--recover]\n  pack [--package unit] [--target name] [--manifest-out path] [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name|scope=name] [--tag dist-tag|scope=tag] [--artifacts-dir dir] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force] [--tag-format template]\n  release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --quiet --no-color -h/--help -V/--version",
     )
     return 0
   }

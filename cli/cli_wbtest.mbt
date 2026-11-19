@@ -157,9 +157,21 @@ test "arguments parse release-notes flags without conflicting with global --vers
 
   let ver_md = arguments([
     "version", "--dry-run", "--output", "markdown", "--commit-metadata", "meta.json",
+    "--no-format",
   ])
   assert_eq(ver_md.command, "version")
   assert_true(ver_md.dry_run)
   assert_true(ver_md.markdown)
+  assert_true(ver_md.no_format)
   assert_eq(ver_md.commit_metadata_path, Some("meta.json"))
+
+  let scoped_pub = arguments([
+    "publish", "--registry", "npm=https://npm.pkg.github.com", "--registry", "cargo=private",
+    "--tag", "npm=next", "--tag", "npm:@acme/ui=canary",
+  ])
+  assert_eq(
+    scoped_pub.registry,
+    Some("npm=https://npm.pkg.github.com,cargo=private"),
+  )
+  assert_eq(scoped_pub.dist_tag, Some("npm=next,npm:@acme/ui=canary"))
 }

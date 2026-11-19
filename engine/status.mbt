@@ -1,48 +1,4 @@
 ///|
-fn match_glob(
-  path : String,
-  pattern : String,
-  i : Int32,
-  j : Int32,
-  memo : Map[String, Bool],
-) -> Bool {
-  let key = "\{i}:\{j}"
-  if memo.get(key) is Some(found) {
-    return found
-  }
-  let matched = if j == pattern.length() {
-    i == path.length()
-  } else if pattern[j] == '*' {
-    let double = j + 1 < pattern.length() && pattern[j + 1] == '*'
-    let next = j + (if double { 2 } else { 1 })
-    (
-      double &&
-      next < pattern.length() &&
-      pattern[next] == '/' &&
-      match_glob(path, pattern, i, next + 1, memo)
-    ) ||
-    match_glob(path, pattern, i, next, memo) ||
-    (
-      i < path.length() &&
-      (double || path[i] != '/') &&
-      match_glob(path, pattern, i + 1, j, memo)
-    )
-  } else if i < path.length() &&
-    (pattern[j] == path[i] || (pattern[j] == '?' && path[i] != '/')) {
-    match_glob(path, pattern, i + 1, j + 1, memo)
-  } else {
-    false
-  }
-  memo[key] = matched
-  matched
-}
-
-///|
-pub fn matches_pattern(path : String, pattern : String) -> Bool {
-  match_glob(path, pattern, 0, 0, Map([]))
-}
-
-///|
 fn is_excluded_path(path : String) -> Bool {
   path
   .split("/")
@@ -67,8 +23,22 @@ pub fn relevant_changes(
   snapshot : @model.WorkspaceSnapshot,
   changeset_directory~ : String = ".changeset",
 ) -> Array[String] {
+  let pre_dir = snapshot.config.pre_directory
+    .replace_all(old="\\", new="/")
+    .trim()
+    .to_owned()
+  let clean_pre_dir = if pre_dir.has_suffix("/") {
+    pre_dir[:pre_dir.length() - 1].to_owned()
+  } else {
+    pre_dir
+  }
   snapshot.changed_files.filter(path => {
     if path.has_prefix(changeset_directory + "/") {
+      return false
+    }
+    if clean_pre_dir != "" &&
+      clean_pre_dir != "." &&
+      path.has_prefix(clean_pre_dir + "/") {
       return false
     }
     if is_excluded_path(path) {
@@ -78,7 +48,7 @@ pub fn relevant_changes(
       return true
     }
     snapshot.units.any(unit => {
-      if snapshot.config.ignore.contains(unit.id) {
+      if is_unit_ignored(snapshot.config, unit.id) {
         return false
       }
       if !unit_owns_path(path, unit) {
@@ -89,9 +59,7 @@ pub fn relevant_changes(
       } else {
         path[unit.root.length() + 1:].to_owned()
       }
-      snapshot.config.changed_patterns.any(pattern => {
-        matches_pattern(unit_path, pattern)
-      })
+      matches_changed_patterns(unit_path, snapshot.config.changed_patterns)
     })
   })
 }

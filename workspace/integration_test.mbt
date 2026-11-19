@@ -293,3 +293,65 @@ async test "SDD minimal fixtures discover and validate expected plans" {
   }
   assert_true(invalid_rejected)
 }
+
+///|
+async test "FR-029 workspace discovery loads pre.directory changesets across active and exit pre modes" {
+  let root = @fs.tmpdir(prefix="moonset-pre-dir-")
+  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  write(
+    root, "moon.mod", "name = \"acme/preiso\"\nversion = \"0.2.0-alpha.0\"\n",
+  )
+  write(
+    root, ".changeset/config.json", "{\"schemaVersion\":1,\"pre\":{\"file\":\".changeset/pre.json\",\"directory\":\".changeset/pre\"}}",
+  )
+  write(
+    root, ".changeset/pre.json", "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/preiso\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/preiso\":1},\"consumed\":[\"c1\"]}\n",
+  )
+  write(
+    root, ".changeset/pre/c1.md", "---\nacme/preiso: minor\n---\nAlready prereleased\n",
+  )
+  write(
+    root, ".changeset/c2.md", "---\nacme/preiso: patch\n---\nSecond prerelease fix\n",
+  )
+  let loaded_active = @workspace.discover(root, include_commits=false)
+  assert_eq(loaded_active.changesets.length(), 2)
+  assert_true(
+    loaded_active.changesets.any(c => c.path == ".changeset/pre/c1.md"),
+  )
+  assert_true(loaded_active.changesets.any(c => c.path == ".changeset/c2.md"))
+  let plan_active = @engine.build_plan(
+    loaded_active.snapshot,
+    loaded_active.changesets,
+    pre?=loaded_active.pre,
+  )
+  assert_eq(plan_active.releases.length(), 1)
+  assert_eq(plan_active.releases[0].new_version, "0.2.0-alpha.1")
+  assert_eq(plan_active.releases[0].changesets, ["c2"])
+
+  // Switch to exit mode: both isolated c1 and c2 are discovered and deleted upon graduation
+  write(
+    root, ".changeset/pre.json", "{\"mode\":\"exit\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/preiso\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/preiso\":1},\"consumed\":[\"c1\"]}\n",
+  )
+  let loaded_exit = @workspace.discover(root, include_commits=false)
+  assert_eq(loaded_exit.changesets.length(), 2)
+  let plan_exit = @engine.build_plan(
+    loaded_exit.snapshot,
+    loaded_exit.changesets,
+    pre?=loaded_exit.pre,
+  )
+  let vp_exit = @engine.build_version_plan(
+    loaded_exit.snapshot,
+    plan_exit,
+    { dry_run: true, no_changelog: false, snapshot_tag: None, },
+    generated_at="2026-11-19",
+  )
+  assert_eq(vp_exit.tags[0].version, "0.2.0")
+  assert_true(
+    vp_exit.edits.any(e => {
+      e.path == ".changeset/pre/c1.md" && e.after_text == ""
+    }),
+  )
+  assert_true(
+    vp_exit.edits.any(e => e.path == ".changeset/c2.md" && e.after_text == ""),
+  )
+}

@@ -189,13 +189,14 @@ async fn main {
   ignore(invoke(binary, workflow_root, ["pre", "enter", "beta", "--json"], 2))
   let v_pre = invoke(binary, workflow_root, ["version", "--json"], 0)
   assert_true(v_pre is { "analysis": { "releases": [{ "newVersion": "0.2.0-alpha.0", .. }], .. }, .. })
-  assert_true(@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/flow-feat.md")).to_string()))
+  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/flow-feat.md")).to_string()))
+  assert_true(@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre/flow-feat.md")).to_string()))
   let pre_exit = invoke(binary, workflow_root, ["pre", "exit", "--json"], 0)
   assert_true(pre_exit is { "mode": "exit", .. })
   let v_grad = invoke(binary, workflow_root, ["version", "--json"], 0)
   assert_true(v_grad is { "analysis": { "releases": [{ "newVersion": "0.2.0", .. }], .. }, .. })
   assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre.json")).to_string()))
-  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/flow-feat.md")).to_string()))
+  assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre/flow-feat.md")).to_string()))
   ignore(git(workflow_root, ["add", "."]))
   ignore(git(workflow_root, ["commit", "-m", "chore: release 0.2.0"]))
   let tagged = invoke(binary, workflow_root, ["tag", "--json"], 0)
@@ -273,5 +274,34 @@ async fn main {
   assert_true(pr_md.contains("https://github.com/acme/prbody/pull/42"))
   assert_true(pr_md.contains("Thanks [@alice](https://github.com/alice)!"))
 
-  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, lifecycle, exits, JSON and no-write checks passed")
+  // FR-026/028/029 CLI end-to-end: snapshot gate + template, pre.directory isolation, and --no-format
+  let v020_root = @fs.tmpdir(prefix="moonset-v020-")
+  defer { @fs.rmdir(v020_root, recursive=true) catch { _ => () } }
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":false}}")
+  // --no-format allows add even when prettier is not invoked
+  ignore(invoke(binary, v020_root, ["add", "--package", "acme/v020", "--type", "minor", "--summary", "V020 feature", "--id", "v020-c1", "--no-format", "--json"], 0))
+  // snapshot.enabled=false must reject version --snapshot
+  let snap_err = invoke(binary, v020_root, ["version", "--snapshot", "canary", "--dry-run", "--json"], 2)
+  assert_true(snap_err is { "ok": False, "errors": [{ "code": "snapshot-disabled", .. }], .. })
+  // Enable snapshot with useCalculatedVersion=true and verify dry-run + apply keep changeset intact
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":true,\"useCalculatedVersion\":true,\"prereleaseTemplate\":\"{tag}-{datetime}\"}}")
+  let snap_plan = invoke(binary, v020_root, ["version", "--snapshot", "canary", "--no-format", "--json"], 0)
+  assert_true(snap_plan is { "consumedChangesets": [], "tags": [{ "version": String(sv), .. }], .. } && sv.has_prefix("0.2.0-canary-"))
+  assert_true(@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/v020-c1.md")).to_string()))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  // Reset version and test pre.directory isolation end-to-end
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"pre\":{\"file\":\".changeset/pre.json\",\"directory\":\".changeset/pre\"}}")
+  ignore(invoke(binary, v020_root, ["pre", "enter", "alpha", "--json"], 0))
+  ignore(invoke(binary, v020_root, ["version", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/v020-c1.md")).to_string()))
+  assert_true(@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre/v020-c1.md")).to_string()))
+  ignore(invoke(binary, v020_root, ["pre", "exit", "--json"], 0))
+  ignore(invoke(binary, v020_root, ["version", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre/v020-c1.md")).to_string()))
+  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre.json")).to_string()))
+  assert_true(@fs.read_text(@path.Path(v020_root).join(@path.Path("moon.mod")).to_string()).contains("0.2.0"))
+
+  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.2.0 snapshot/pre.directory/no-format, lifecycle, exits, JSON and no-write checks passed")
 }

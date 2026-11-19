@@ -201,6 +201,38 @@ pub fn utc_date(milliseconds : UInt64) -> String {
 }
 
 ///|
+/// Convert the host UTC millisecond clock to ISO-8601 `YYYY-MM-DDTHH:MM:SSZ`
+/// so snapshot templates receive second-precision `{datetime}` while changelogs
+/// keep `YYYY-MM-DD`.
+pub fn utc_datetime(milliseconds : UInt64) -> String {
+  let total_seconds = milliseconds.reinterpret_as_int64() / 1000L
+  let day_seconds = total_seconds % 86400L
+  let norm_sec = if day_seconds < 0L {
+    day_seconds + 86400L
+  } else {
+    day_seconds
+  }
+  let hour = norm_sec / 3600L
+  let minute = norm_sec % 3600L / 60L
+  let second = norm_sec % 60L
+  let pad = fn(value : Int64) -> String {
+    if value < 10L {
+      "0" + value.to_string()
+    } else {
+      value.to_string()
+    }
+  }
+  utc_date(milliseconds) +
+  "T" +
+  pad(hour) +
+  ":" +
+  pad(minute) +
+  ":" +
+  pad(second) +
+  "Z"
+}
+
+///|
 pub fn[H : ExecutionHost] package_manager_program(
   host : H,
   name : String,

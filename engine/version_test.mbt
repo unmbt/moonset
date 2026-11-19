@@ -113,8 +113,21 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
   )
   assert_true(vp.changelogs.is_empty())
   assert_true(!vp.edits.any(e => e.kind == "changelog"))
-  // Pre mode must NOT delete changeset, and must write pre.json update!
-  assert_true(!vp.edits.any(e => e.kind == "changeset"))
+  // Pre mode must isolate consumed changeset into pre.directory (not lose it) and write pre.json update!
+  assert_true(
+    vp.edits.any(e => {
+      e.kind == "changeset" &&
+      e.path == ".changeset/pre/c1.md" &&
+      e.after_text.contains("npm:@acme/ui")
+    }),
+  )
+  assert_true(
+    vp.edits.any(e => {
+      e.kind == "changeset" &&
+      e.path == ".changeset/c1.md" &&
+      e.after_text == ""
+    }),
+  )
   assert_true(
     vp.edits.any(e => {
       e.path == ".changeset/pre.json" && e.after_text.contains("\"c1\"")

@@ -67,48 +67,6 @@ fn is_npm_protocol(requirement : String) -> Bool {
 }
 
 ///|
-fn npm_range_matches(
-  requirement : String,
-  target : String,
-) -> Bool raise @model.MoonsetError {
-  let trimmed = requirement.trim().to_owned()
-  if is_npm_protocol(trimmed) {
-    return true
-  }
-  if trimmed.contains("|") ||
-    trimmed.contains(" ") ||
-    trimmed.contains(">") ||
-    trimmed.contains("<") {
-    invalid(
-      "Unsupported npm version requirement: " + requirement,
-      code="unsupported-capability",
-    )
-  }
-  let actual = parse_version(target)
-  if trimmed.has_prefix("^") {
-    let expected = parse_version(trimmed[1:].trim().to_owned())
-    if actual.compare(expected) < 0 {
-      return false
-    }
-    if expected.major > 0 {
-      actual.major == expected.major
-    } else if expected.minor > 0 {
-      actual.major == 0 && actual.minor == expected.minor
-    } else {
-      actual.major == 0 && actual.minor == 0 && actual.patch == expected.patch
-    }
-  } else if trimmed.has_prefix("~") {
-    let expected = parse_version(trimmed[1:].trim().to_owned())
-    actual.compare(expected) >= 0 &&
-    actual.major == expected.major &&
-    actual.minor == expected.minor
-  } else {
-    let expected = parse_version(trimmed)
-    actual.compare(expected) == 0
-  }
-}
-
-///|
 fn add_reason(
   reasons : Map[String, Array[String]],
   id : String,
@@ -119,76 +77,6 @@ fn add_reason(
     list.push(reason)
   }
   reasons[id] = list
-}
-
-///|
-fn ecosystem_range_matches(
-  ecosystem : String,
-  requirement : String,
-  target : String,
-) -> Bool raise @model.MoonsetError {
-  if ecosystem == "moonbit" {
-    return version_matches(requirement, target)
-  }
-  if ecosystem == "npm" {
-    return npm_range_matches(requirement, target)
-  }
-  if requirement == "*" {
-    return true
-  }
-  if requirement.contains(",") ||
-    requirement.contains("|") ||
-    requirement.contains(">") ||
-    requirement.contains("<") {
-    invalid(
-      "Unsupported Cargo version requirement: " + requirement,
-      code="unsupported-capability",
-    )
-  }
-  let base = requirement
-    .replace_all(old="^", new="")
-    .replace_all(old="~", new="")
-    .replace_all(old="=", new="")
-    .trim()
-    .to_owned()
-  if requirement.has_prefix("=") {
-    parse_version(base).compare(parse_version(target)) == 0
-  } else if requirement.has_prefix("~") {
-    let expected = parse_version(base)
-    let actual = parse_version(target)
-    actual.compare(expected) >= 0 &&
-    actual.major == expected.major &&
-    actual.minor == expected.minor
-  } else {
-    version_matches(base, target)
-  }
-}
-
-///|
-fn ecosystem_range_rewrite(
-  ecosystem : String,
-  requirement : String,
-  target : String,
-) -> String {
-  if ecosystem == "cargo" || ecosystem == "npm" {
-    let trimmed = requirement.trim().to_owned()
-    if trimmed == "*" ||
-      trimmed.has_prefix("workspace:") ||
-      trimmed.has_prefix("file:") ||
-      trimmed.has_prefix("link:") {
-      trimmed
-    } else if trimmed.has_prefix("^") {
-      "^" + target
-    } else if trimmed.has_prefix("~") {
-      "~" + target
-    } else if trimmed.has_prefix("=") {
-      "=" + target
-    } else {
-      target
-    }
-  } else {
-    target
-  }
 }
 
 ///|
@@ -244,17 +132,8 @@ pub fn build_plan(
           @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
           error => raise error
         }
-      } else if unit.ecosystem == "cargo" && dep.requirement != "*" {
-        ignore(
-          ecosystem_range_matches(
-            "cargo",
-            dep.requirement,
-            dep.requirement
-            .replace_all(old="^", new="")
-            .replace_all(old="~", new="")
-            .replace_all(old="=", new=""),
-          ),
-        ) catch {
+      } else {
+        validate_ecosystem_range(unit.ecosystem, dep.requirement) catch {
           @model.Invalid(d) => raise @model.Invalid({ ..d, path: dep.path, })
           error => raise error
         }
@@ -274,12 +153,19 @@ pub fn build_plan(
   for id in ids {
     visit_execution(id, units, config.bridges, marks, [])
   }
-  for id in config.fixed.flatten() + config.linked.flatten() + config.ignore {
-    if !units.contains(id) {
-      invalid("Unknown configured unit: " + id)
+  let resolved_fixed = resolve_unit_groups(config.fixed, snapshot.units)
+  let resolved_linked = resolve_unit_groups(config.linked, snapshot.units)
+  let resolved_ignore = resolve_ignored_units(config, snapshot.units)
+  let occupied_groups : Map[String, Bool] = Map([])
+  for group in resolved_fixed + resolved_linked {
+    for id in group {
+      if occupied_groups.contains(id) {
+        invalid("Overlapping or repeated version group member: " + id)
+      }
+      occupied_groups[id] = true
     }
   }
-  let effective_fixed = config.fixed.copy()
+  let effective_fixed = resolved_fixed.copy()
   let cargo_version_paths : Map[String, Array[String]] = Map([])
   for id in ids {
     let unit = units[id]
@@ -291,7 +177,7 @@ pub fn build_plan(
   }
   for _, group in cargo_version_paths {
     if group.length() > 1 {
-      let occupied = effective_fixed.flatten() + config.linked.flatten()
+      let occupied = effective_fixed.flatten() + resolved_linked.flatten()
       if group.any(id => occupied.contains(id)) {
         if !effective_fixed.any(existing => existing == group) {
           invalid(
@@ -345,7 +231,7 @@ pub fn build_plan(
       invalid("Duplicate changeset ID: " + cs.id, path=cs.path)
     }
     seen_changesets[cs.id] = true
-    let ignored = cs.releases.filter(c => config.ignore.contains(c.unit_id))
+    let ignored = cs.releases.filter(c => resolved_ignore.contains(c.unit_id))
     if !ignored.is_empty() && ignored.length() != cs.releases.length() {
       invalid("A changeset mixes ignored and managed units", path=cs.path)
     }
@@ -354,7 +240,7 @@ pub fn build_plan(
       if !units.contains(id) {
         invalid("Unknown changeset unit: " + id, path=cs.path)
       }
-      if config.ignore.contains(id) {
+      if resolved_ignore.contains(id) {
         continue
       }
       if units[id].visibility == "private" && !config.private_version {
@@ -381,7 +267,7 @@ pub fn build_plan(
   }
   if pre is Some(state) && state.mode == "exit" {
     for id in ids {
-      if config.ignore.contains(id) {
+      if resolved_ignore.contains(id) {
         continue
       }
       if units[id].version is Some(version) &&
@@ -393,7 +279,7 @@ pub fn build_plan(
       }
     }
   }
-  propagate_bridges(config.bridges, config.ignore, levels, reasons)
+  propagate_bridges(config.bridges, resolved_ignore, levels, reasons)
   for ;; {
     let before = @model.canonical_json({
       "levels": levels.map((k, v) => (k, v.text())),
@@ -408,9 +294,13 @@ pub fn build_plan(
         }
       }
     }
-    propagate_bridges(config.bridges, config.ignore, levels, reasons)
+    propagate_bridges(config.bridges, resolved_ignore, levels, reasons)
     for kind in ["fixed", "linked"] {
-      let groups = if kind == "fixed" { effective_fixed } else { config.linked }
+      let groups = if kind == "fixed" {
+        effective_fixed
+      } else {
+        resolved_linked
+      }
       for group in groups {
         let active = group.filter(id => levels.contains(id))
         if active.is_empty() {
@@ -435,7 +325,7 @@ pub fn build_plan(
           if kind == "linked" && !levels.contains(id) {
             continue
           }
-          if config.ignore.contains(id) {
+          if resolved_ignore.contains(id) {
             invalid("Version group requires ignored unit: " + id)
           }
           if level.rank() > levels.get(id).unwrap_or(@model.None).rank() {
@@ -459,13 +349,13 @@ pub fn build_plan(
             ) &&
             !is_npm_protocol(dep.requirement)
           let outside = comparable &&
-            !ecosystem_range_matches(
+            !matches_ecosystem_range(
               units[id].ecosystem,
               dep.requirement,
               target,
             )
           if (outside || config.update_dependents == "always") && comparable {
-            if config.ignore.contains(id) {
+            if resolved_ignore.contains(id) {
               invalid(
                 "Dependency propagation requires ignored unit: " + id,
                 path=dep.path,
@@ -520,14 +410,14 @@ pub fn build_plan(
             (unit.ecosystem == "npm" && dep.kind != @model.Development)
           ) &&
           !is_npm_protocol(dep.requirement) {
-          let next_requirement = ecosystem_range_rewrite(
+          let next_requirement = rewrite_ecosystem_range(
             unit.ecosystem,
             dep.requirement,
             target,
           )
           if next_requirement != dep.requirement &&
             (
-              !ecosystem_range_matches(unit.ecosystem, dep.requirement, target) ||
+              !matches_ecosystem_range(unit.ecosystem, dep.requirement, target) ||
               levels[dep.producer].rank() >= config.update_dependencies.rank()
             ) {
             dependency_updates.push({
@@ -564,7 +454,7 @@ pub fn build_plan(
       }
       for cs in ordered {
         if !consumed.contains(cs.id) &&
-          cs.releases.all(x => !config.ignore.contains(x.unit_id)) {
+          cs.releases.all(x => !resolved_ignore.contains(x.unit_id)) {
           consumed.push(cs.id)
         }
       }

@@ -46,16 +46,17 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 | `access` | `public/restricted` | 传给 publisher 的可见性请求；最终由 registry 权限决定。 |
 | `updateInternalDependencies` | `patch/minor` | 已参与发布的单元更新依赖声明时，上游变更的最低级别；越界时始终更新。默认 patch。 |
 | `updateInternalDependents` | `out-of-range/always` | 是否把尚未参与发布的依赖者带入 patch 发布；默认仅越界时带入。 |
-| `fixed` | string[][] | 每组包共享同一目标版本。支持精确名字，glob 在 v1.1 冻结。 |
-| `linked` | string[][] | 一组包共享版本线，但没有变更时不强制发布。 |
-| `ignore` | string[] | 暂时跳过的包；若与非 ignore 包存在必须联动的依赖，规划失败。 |
+| `fixed` | string[][] | 每组包共享同一目标版本。支持精确名称与 `*`/`?`/`[...]`/`{...}`/`(...)` glob 匹配；展开后若发生跨组重叠则报错。 |
+| `linked` | string[][] | 一组包共享版本线，但没有变更时不强制发布。支持精确名称与 glob 匹配。 |
+| `ignore` | string[] | 暂时跳过的包（支持精确名称与 glob 匹配）；若与非 ignore 包存在必须联动的依赖，规划失败。 |
 | `privatePackages` | object | 分别控制 version、tag、publish，默认全关；不能绕过 npm `private: true` 等原生发布禁令。MoonBit 的 restricted visibility 不等于 npm private。 |
-| `pre` | object | 预发布状态文件和 changeset 隔离目录。 |
-| `snapshot` | object | 快照版本是否启用、基准版本和预发布模板。 |
+| `pre` | object | 预发布状态文件（默认 `.changeset/pre.json`）和 changeset 隔离目录（默认 `.changeset/pre`）；active 预发布期间已消费 changeset 会原子迁入隔离目录并在 `pre exit` 毕业时统一清理。 |
+| `snapshot` | object | 快照版本开关（`enabled`，默认 `false`）、基准版本策略（`useCalculatedVersion`，`false` 使用 `0.0.0`，`true` 使用计算版本）与预发布模板（`prereleaseTemplate`，默认 `{tag}-{datetime}`，支持 `{tag}`、`{datetime}`、`{commit}`、`{version}`）。 |
 | `tag` | object | 标签创建时机、模板策略和推送开关。 |
-| `publisher` | object | `moon`、`command` 或 API publisher；自定义命令走参数化 JSONL 协议。 |
-| `changedFilePatterns` | string[] | `status --since` 认定包发生变化的 glob。 |
-| `format` | string/false | `auto` 或已支持 formatter；false 表示不自动格式化。 |
+| `publisher` | object | `moon`、`command` 或 `api` publisher；`command` 走参数化 JSONL 协议，`api` 通过 `ApiPublisherRegistry` + `publish_release_with_api` 编程接入；`registry` 支持全局值或分目标映射（如 `npm=https://...,cargo=private`）。 |
+| `changedFilePatterns` | string[] | `status --since` 认定包发生变化的 glob 列表，支持 `*`、`**`、`?`、`[...]`、`{...}`、`(...)`/extglob 与 `!` 否定过滤。 |
+| `formatter` | string | 格式化工具选择：`builtin`、`prettier`、`oxfmt`、`biome`、`dprint`；默认 `builtin`。 |
+| `format` | string/false | `auto`（跟随 `formatter`）、`false`（禁用自动格式化）或直接指定外部格式化工具名；可被 CLI `--no-format` 覆盖。 |
 | `github` | object | changelog 链接和感谢语开关；PR Bot 行为由 Action 输入控制，见 [自动化设计](automation.md) §5。 |
 | `experimental.mixedWorkspaces` | object | 混合 domain 的 workspace、UnitId 覆盖、bridge 和锁文件策略；Proposed，见下节。 |
 
@@ -84,7 +85,8 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 
 - 默认值必须在 `Config::default` 中集中定义，不能散落到命令实现。
 - CLI flag 覆盖配置，但不能把安全检查静默关闭；如 `--allow-uncommitted` 必须出现在 plan 和日志中。
-- Phase 1 的 `fixed`、`linked`、`ignore` 仅接受精确名称；glob 返回 unsupported-capability。`changedFilePatterns` 支持 `*`、`**`、`?`，相对模块目录匹配。
+- `fixed`、`linked`、`ignore` 与 `changedFilePatterns` 的 glob 语法在 `parse_config` 阶段完成合法性校验；`changedFilePatterns` 相对模块目录按顺序求值（支持 `!` 否定排除）。
+- 外部格式化器仅对工具本身支持的文件扩展名执行（排除 `.moonset/` 内部状态文件），且通过可执行文件与参数数组直接调用（禁止 shell 插值）。
 - `changelog` 和 `publisher` 的自定义名称只能引用注册的 MoonBit API 或显式允许的外部命令。
 - 配置错误在任何写操作前报告；错误消息包含 JSON path，例如 `$.tag.format`。
 

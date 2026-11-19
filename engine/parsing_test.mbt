@@ -56,7 +56,9 @@ test "config validates nested fields duplicate keys and capabilities" {
   for
     source in [
       "{\"unknown\":1}", "{\"tag\":{\"push\":\"true\"}}", "{\"ignore\":[],\"ignore\":[]}",
-      "{\"fixed\":[[\"a/*\"]]}", "{\"updateInternalDependencies\":\"out-of-range\"}",
+      "{\"fixed\":[[\"a/[unclosed\"]]}", "{\"updateInternalDependencies\":\"out-of-range\"}",
+      "{\"changedFilePatterns\":[\"[z-a]\"]}", "{\"formatter\":\"prettier\",\"format\":\"biome\"}",
+      "{\"snapshot\":{\"prereleaseTemplate\":\"{unknown}\"}}", "{\"pre\":{\"directory\":\"../outside\"}}",
     ] {
     let rejected = try {
       ignore(@engine.parse_config(source))

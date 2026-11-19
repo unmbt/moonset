@@ -881,3 +881,268 @@ async test "MIX-010 multi-platform artifact verification blocks missing required
   assert_true(ok_pub.complete)
   assert_eq(publish_order, ["/repo/js/linux", "/repo/js/main"])
 }
+
+///|
+async test "FR-026 format_files executes configured external formatter and respects --no-format" {
+  let host = fake_host()
+  host.files["/repo/CHANGELOG.md"] = @utf8.encode("# Changelog\n")
+  host.files["/repo/package.json"] = @utf8.encode("{\"name\":\"a\"}\n")
+  host.files["/repo/moon.mod"] = @utf8.encode("name = \"acme/a\"\n")
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode("{}\n")
+  let calls : Array[(String, Array[String])] = []
+  host.runner = (program, args, _cwd) => {
+    calls.push((program, args))
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let prettier_cfg = @engine.parse_config("{\"formatter\":\"prettier\"}")
+  let res = @executor.format_files_with(host, "/repo", prettier_cfg, [
+    "CHANGELOG.md", "package.json", "moon.mod", ".moonset/release-state.json", "missing.md",
+  ])
+  assert_true(!res.skipped)
+  assert_eq(res.formatter, "prettier")
+  assert_eq(res.formatted, ["CHANGELOG.md", "package.json"])
+  assert_eq(calls.length(), 1)
+  assert_eq(calls[0].0, "prettier")
+  assert_eq(calls[0].1, ["--write", "CHANGELOG.md", "package.json"])
+
+  // --no-format skips execution completely
+  let skipped = @executor.format_files_with(
+    host,
+    "/repo",
+    prettier_cfg,
+    ["CHANGELOG.md"],
+    no_format=true,
+  )
+  assert_true(skipped.skipped)
+  assert_eq(skipped.formatter, "none")
+  assert_eq(calls.length(), 1)
+
+  // biome only formats JSON files with `biome format --write`
+  let biome_cfg = @engine.parse_config("{\"format\":\"biome\"}")
+  let biome_res = @executor.format_files_with(host, "/repo", biome_cfg, [
+    "CHANGELOG.md", "package.json",
+  ])
+  assert_eq(biome_res.formatted, ["package.json"])
+  assert_eq(calls.length(), 2)
+  assert_eq(calls[1].0, "biome")
+  assert_eq(calls[1].1, ["format", "--write", "package.json"])
+
+  // Non-zero formatter exit raises Io error
+  host.runner = (_p, _a, _c) => {
+    exit_code: 1,
+    stdout: "",
+    stderr: "syntax error",
+  }
+  let failed = try {
+    ignore(
+      @executor.format_files_with(host, "/repo", prettier_cfg, ["CHANGELOG.md"]),
+    )
+    false
+  } catch {
+    @model.Io(msg) => msg.contains("syntax error")
+    _ => false
+  }
+  assert_true(failed)
+}
+
+///|
+async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/--tag routing" {
+  let host = fake_host()
+  let units : Array[@model.ReleaseUnit] = [
+    {
+      id: "moonbit:acme/a",
+      native_name: "acme/a",
+      ecosystem: "moonbit",
+      workspace_id: "mbt",
+      root: "a",
+      manifest: "a/moon.mod",
+      version_path: "a/moon.mod",
+      version_field: "version",
+      version: Some("0.2.0"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+    {
+      id: "npm:@acme/b",
+      native_name: "@acme/b",
+      ecosystem: "npm",
+      workspace_id: "js",
+      root: "b",
+      manifest: "b/package.json",
+      version_path: "b/package.json",
+      version_field: "version",
+      version: Some("1.1.0"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+    {
+      id: "cargo:acme-c",
+      native_name: "acme-c",
+      ecosystem: "cargo",
+      workspace_id: "rs",
+      root: "c",
+      manifest: "c/Cargo.toml",
+      version_path: "c/Cargo.toml",
+      version_field: "package",
+      version: Some("0.3.0"),
+      visibility: "public",
+      publish: true,
+      dependencies: [],
+    },
+  ]
+  let rel_state : Json = {
+    "planFingerprint": "plan-mixed-1",
+    "sourceHead": Json::null(),
+    "releases": [
+      {
+        "unitId": "moonbit:acme/a",
+        "oldVersion": "0.1.0",
+        "newVersion": "0.2.0",
+        "level": "minor",
+        "reasons": [],
+        "changesets": [],
+        "publish": true,
+      },
+      {
+        "unitId": "npm:@acme/b",
+        "oldVersion": "1.0.0",
+        "newVersion": "1.1.0",
+        "level": "minor",
+        "reasons": [],
+        "changesets": [],
+        "publish": true,
+      },
+      {
+        "unitId": "cargo:acme-c",
+        "oldVersion": "0.2.0",
+        "newVersion": "0.3.0",
+        "level": "minor",
+        "reasons": [],
+        "changesets": [],
+        "publish": true,
+      },
+    ],
+    "tags": [],
+    "consumedChangesets": [],
+  }
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    rel_state.stringify(),
+  )
+  let loaded_mixed : @workspace.LoadedWorkspace = {
+    ..sample_loaded(units~),
+    snapshot: {
+      ..sample_loaded(units~).snapshot,
+      workspaces: [
+        { id: "mbt", root: "a", ecosystem: "moonbit", manager: "moon", },
+        { id: "js", root: "b", ecosystem: "npm", manager: "npm", },
+        { id: "rs", root: "c", ecosystem: "cargo", manager: "cargo", },
+      ],
+    },
+  }
+  // Global --registry across mixed ecosystems is still rejected
+  let global_rejected = try {
+    ignore(
+      @executor.publish_release_with(host, loaded_mixed, {
+        dry_run: true,
+        only: [],
+        registry: Some("https://registry.npmjs.org"),
+        tag: None,
+        yes: true,
+        allow_uncommitted: true,
+        retry: 0,
+        no_tag: true,
+      }),
+    )
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "unsupported-capability"
+    _ => false
+  }
+  assert_true(global_rejected)
+
+  // Scoped --registry and --tag route cleanly to npm & cargo without touching moonbit
+  let invoked : Array[(String, Array[String])] = []
+  host.runner = (program, args, _cwd) => {
+    invoked.push((program, args))
+    if program == "git" && args == ["status", "--porcelain"] {
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if program == "npm" && args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "E404", }
+    }
+    if program == "cargo" && args.contains("info") {
+      return { exit_code: 1, stdout: "", stderr: "could not find", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let scoped_res = @executor.publish_release_with(host, loaded_mixed, {
+    dry_run: false,
+    only: [],
+    registry: Some("npm=https://npm.pkg.github.com,cargo=private-crates"),
+    tag: Some("npm:@acme/b=canary"),
+    yes: true,
+    allow_uncommitted: false,
+    retry: 0,
+    no_tag: true,
+  })
+  assert_true(scoped_res.complete)
+  assert_true(
+    invoked.any(c => {
+      c.0 == "npm" &&
+      c.1.contains("publish") &&
+      c.1.contains("https://npm.pkg.github.com") &&
+      c.1.contains("canary")
+    }),
+  )
+  assert_true(
+    invoked.any(c => {
+      c.0 == "cargo" &&
+      c.1.contains("publish") &&
+      c.1.contains("private-crates")
+    }),
+  )
+  assert_true(invoked.any(c => c.0 == "moon" && c.1 == ["publish"]))
+
+  // publisher.kind = "api" routes through ApiPublisherRegistry and records external_id
+  host.files.remove("/repo/.moonset/publish-state.json") |> ignore
+  let loaded_api = sample_loaded(
+    config_json="{\"publisher\":{\"kind\":\"api\",\"dryRunFirst\":true}}",
+    units~,
+  )
+  let api_calls : Array[String] = []
+  let registry = @executor.ApiPublisherRegistry::new()
+  registry.register("default", {
+    already_published: _t => false,
+    preflight: t => api_calls.push("pre:" + t.unit_id + ":" + t.target),
+    publish: t => {
+      api_calls.push("pub:" + t.unit_id + ":" + t.registry)
+      "ext-" + t.unit_id + "@" + t.version
+    },
+  })
+  let api_res = @executor.publish_release_with_api_with(
+    host,
+    loaded_api,
+    {
+      dry_run: false,
+      only: [],
+      registry: Some("npm=https://custom.npm"),
+      tag: Some("npm=next"),
+      yes: true,
+      allow_uncommitted: true,
+      retry: 0,
+      no_tag: true,
+    },
+    registry,
+  )
+  assert_true(api_res.complete)
+  assert_true(api_calls.contains("pre:npm:@acme/b:dist-tag:next"))
+  assert_true(api_calls.contains("pub:npm:@acme/b:https://custom.npm"))
+  assert_true(
+    api_res.statuses.any(s => {
+      s.unit_id == "npm:@acme/b" &&
+      s.external_id == Some("ext-npm:@acme/b@1.1.0")
+    }),
+  )
+}

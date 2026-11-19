@@ -286,7 +286,11 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
           if i >= args.length() {
             usage_error("Missing value for " + arg)
           }
-          registry = Some(args[i])
+          let val = args[i]
+          registry = match registry {
+            Some(prev) => Some(prev + "," + val)
+            None => Some(val)
+          }
           i += 1
         }
       "--only" => {
@@ -355,7 +359,11 @@ fn arguments(args : Array[String]) -> Options raise @model.MoonsetError {
           "--head-ref" => head_ref = Some(value)
           "--snapshot" => snapshot = Some(value)
           "--tag-format" => tag_format = value
-          "--tag" => dist_tag = Some(value)
+          "--tag" =>
+            dist_tag = match dist_tag {
+              Some(prev) => Some(prev + "," + value)
+              None => Some(value)
+            }
           "--file" => file_path = Some(value)
           "--target" => pack_target = Some(value)
           "--manifest-out" => manifest_out = Some(value)

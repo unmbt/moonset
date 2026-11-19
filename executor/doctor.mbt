@@ -197,6 +197,46 @@ pub async fn[H : ExecutionHost] run_doctor_with(
           Some("Commit or stash changes before running publish or tag")
         },
       })
+      let resolved_fmt = @engine.resolve_formatter(loaded.snapshot.config)
+      if resolved_fmt != "builtin" && resolved_fmt != "none" {
+        let fmt_ver = host.run(
+          resolved_fmt,
+          ["--version"],
+          Some(loaded.snapshot.root),
+        ) catch {
+          error =>
+            if host.getenv("ComSpec") is Some(_) {
+              host.run(
+                resolved_fmt + ".cmd",
+                ["--version"],
+                Some(loaded.snapshot.root),
+              ) catch {
+                err2 =>
+                  { exit_code: 1, stdout: "", stderr: error_message(err2), }
+              }
+            } else {
+              { exit_code: 1, stdout: "", stderr: error_message(error), }
+            }
+        }
+        checks.push({
+          name: "formatter",
+          ok: fmt_ver.exit_code == 0,
+          message: if fmt_ver.exit_code == 0 {
+            resolved_fmt + " " + fmt_ver.stdout.trim().to_owned()
+          } else {
+            "Configured formatter '" + resolved_fmt + "' is unavailable"
+          },
+          suggestion: if fmt_ver.exit_code == 0 {
+            None
+          } else {
+            Some(
+              "Install " +
+              resolved_fmt +
+              " on PATH, pass --no-format, or set formatter to builtin",
+            )
+          },
+        })
+      }
       if check_registry {
         let mut reg_ok = true
         let mut reg_msg = "Registry preflight checks passed"

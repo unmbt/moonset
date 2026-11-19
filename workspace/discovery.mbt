@@ -350,11 +350,16 @@ pub async fn discover(
       continue
     }
     if unit_override.publisher is Some(publisher) {
-      let allowed = match unit.ecosystem {
-        "moonbit" => publisher == "moon"
-        "npm" => publisher == "npm" || publisher == "pnpm"
-        "cargo" => publisher == "cargo"
-        _ => false
+      let allowed = if config.publisher_kind == "api" ||
+        config.publisher_kind == "command" {
+        publisher.trim() != ""
+      } else {
+        match unit.ecosystem {
+          "moonbit" => publisher == "moon"
+          "npm" => publisher == "npm" || publisher == "pnpm"
+          "cargo" => publisher == "cargo"
+          _ => false
+        }
       }
       if !allowed {
         fail_input(
@@ -418,30 +423,48 @@ pub async fn discover(
     ignore(reader.read(changelog))
   }
   ignore(reader.read(".moonset/release-state.json"))
+  let pre_file = match config.raw {
+    { "pre": { "file": String(path), .. }, .. } => path
+    _ => slash(join(changeset_directory, "pre.json"))
+  }
+  let pre = match reader.read(pre_file) {
+    Some(source) => Some(@engine.parse_pre_state(source, path=pre_file))
+    None => None
+  }
+  let changeset_dirs : Array[String] = [changeset_directory]
+  if pre is Some(_) {
+    let raw_pre_dir = slash(config.pre_directory).trim().to_owned()
+    let pre_dir = if raw_pre_dir.has_suffix("/") {
+      raw_pre_dir[:raw_pre_dir.length() - 1].to_owned()
+    } else {
+      raw_pre_dir
+    }
+    if pre_dir != "" && pre_dir != "." && !changeset_dirs.contains(pre_dir) {
+      changeset_dirs.push(pre_dir)
+    }
+  }
   let changesets = []
   let changeset_commits : Map[String, String] = Map([])
   let pending_commit_paths : Array[(String, String)] = []
-  let cs_files = reader.files(changeset_directory)
+  let cs_entries : Array[(String, String)] = []
   let cs_paths : Array[String] = []
-  for file in cs_files {
-    if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
-      continue
+  for dir in changeset_dirs {
+    let cs_files = reader.files(dir)
+    for file in cs_files {
+      if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
+        continue
+      }
+      let path = slash(join(dir, file))
+      if since is Some(_) && !changed_files.contains(path) {
+        continue
+      }
+      cs_entries.push((file, path))
+      cs_paths.push(path)
     }
-    let path = slash(join(changeset_directory, file))
-    if since is Some(_) && !changed_files.contains(path) {
-      continue
-    }
-    cs_paths.push(path)
   }
   reader.prefetch(cs_paths)
-  for file in cs_files {
-    let path = slash(join(changeset_directory, file))
-    if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
-      continue
-    }
-    if since is Some(_) && !changed_files.contains(path) {
-      continue
-    }
+  for entry in cs_entries {
+    let (file, path) = entry
     if reader.read(path) is Some(source) {
       let cs = @engine.parse_changeset(
         source,
@@ -461,14 +484,22 @@ pub async fn discover(
       None => if @fs.exists(join(root, ".git")) { Some(root) } else { None }
     }
     if git_dir is Some(repo) {
-      let cs_dir_rel = relative(repo, join(root, changeset_directory)) catch {
-        _ => changeset_directory
+      let cs_dir_rels : Array[String] = []
+      for dir in changeset_dirs {
+        let rel = relative(repo, join(root, dir)) catch { _ => dir }
+        if !cs_dir_rels.contains(rel) {
+          cs_dir_rels.push(rel)
+        }
       }
       let added_by_path : Map[String, String] = Map([])
-      let log_added = git(repo, [
-        "log", "--diff-filter=A", "--name-only", "--format=__MOONSET_COMMIT__%H",
-        "--", cs_dir_rel,
-      ]) catch {
+      let log_added = git(
+        repo,
+        [
+          "log", "--diff-filter=A", "--name-only", "--format=__MOONSET_COMMIT__%H",
+          "--",
+        ] +
+        cs_dir_rels,
+      ) catch {
         _ => ""
       }
       let mut current_sha = ""
@@ -494,9 +525,11 @@ pub async fn discover(
       }
       if need_fallback {
         let latest_by_path : Map[String, String] = Map([])
-        let log_all = git(repo, [
-          "log", "--name-only", "--format=__MOONSET_COMMIT__%H", "--", cs_dir_rel,
-        ]) catch {
+        let log_all = git(
+          repo,
+          ["log", "--name-only", "--format=__MOONSET_COMMIT__%H", "--"] +
+          cs_dir_rels,
+        ) catch {
           _ => ""
         }
         current_sha = ""
@@ -522,14 +555,6 @@ pub async fn discover(
         }
       }
     }
-  }
-  let pre_file = match config.raw {
-    { "pre": { "file": String(path), .. }, .. } => path
-    _ => slash(join(changeset_directory, "pre.json"))
-  }
-  let pre = match reader.read(pre_file) {
-    Some(source) => Some(@engine.parse_pre_state(source, path=pre_file))
-    None => None
   }
   {
     snapshot: {

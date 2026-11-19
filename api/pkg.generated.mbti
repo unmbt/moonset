@@ -40,7 +40,21 @@ pub async fn discover(String, config_path? : String, since? : String, include_co
 
 pub fn extract_release_notes(String, String) -> String?
 
+pub async fn format_files(String, @model.Config, Array[String], no_format? : Bool) -> @executor.FormatResult
+
+pub async fn[H : @executor.ExecutionHost] format_files_with(H, String, @model.Config, Array[String], no_format? : Bool) -> @executor.FormatResult
+
+pub fn formatter_command(String, Array[String]) -> (String, Array[String])?
+
+pub fn formatter_supports_path(String, String) -> Bool
+
 pub fn generator_result(@adapters.JsonlResponse) -> (String, @json.Json) raise @model.MoonsetError
+
+pub fn matches_changed_patterns(String, Array[String]) -> Bool
+
+pub fn matches_ecosystem_range(String, String, String) -> Bool raise @model.MoonsetError
+
+pub fn matches_unit_pattern(String, String) -> Bool
 
 pub fn native_host() -> @executor.NativeHost
 
@@ -60,9 +74,17 @@ pub fn parse_config(String, path? : String) -> @model.Config raise @model.Moonse
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
+pub fn parse_snapshot_config(@model.Config) -> @engine.SnapshotConfig
+
+pub fn parse_target_mapping(String?) -> @engine.PublishTargetOverride raise @model.MoonsetError
+
 pub async fn publish_release(@workspace.LoadedWorkspace, @executor.PublishOptions) -> @model.PublishResult
 
 pub async fn[H : @executor.ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, @executor.PublishOptions) -> @model.PublishResult
+
+pub async fn publish_release_with_api(@workspace.LoadedWorkspace, @executor.PublishOptions, @executor.ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
+
+pub async fn[H : @executor.ExecutionHost] publish_release_with_api_with(H, @workspace.LoadedWorkspace, @executor.PublishOptions, @executor.ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
 
 pub async fn publish_release_with_artifacts(@workspace.LoadedWorkspace, @executor.PublishOptions, artifacts_dir? : String) -> @model.PublishResult
 
@@ -76,6 +98,14 @@ pub fn release_pr_title(String, pre? : @model.PreState) -> String
 
 pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre? : @model.PreState, max_chars? : Int32) -> String
 
+pub fn render_snapshot_version(String, String, @engine.SnapshotConfig, generated_at? : String, git_head? : String) -> String raise @model.MoonsetError
+
+pub fn resolve_formatter(@model.Config, no_format? : Bool) -> String
+
+pub fn resolve_target_override(@engine.PublishTargetOverride, String, String) -> String?
+
+pub fn rewrite_ecosystem_range(String, String, String) -> String raise @model.MoonsetError
+
 pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
 
 pub async fn[H : @executor.ExecutionHost] run_doctor_with(H, String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
@@ -87,6 +117,10 @@ pub async fn stage_lockfiles(String, @workspace.LoadedWorkspace, @model.VersionP
 pub async fn[H : @executor.ExecutionHost] stage_lockfiles_with(H, String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
 
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+pub fn utc_date(UInt64) -> String
+
+pub fn utc_datetime(UInt64) -> String
 
 pub fn verify_artifact_matrix(Array[@model.ArtifactIntent], Array[@model.PackResult], expected_head? : String, owners_by_package? : Map[String, Array[String]]) -> @engine.ArtifactVerificationReport
 
@@ -100,6 +134,10 @@ pub async fn[H : @executor.ExecutionHost] verify_artifacts_with(H, @workspace.Lo
 
 // Type aliases
 pub using @adapters {type AdapterRegistry}
+
+pub using @executor {type ApiPublisher}
+
+pub using @executor {type ApiPublisherRegistry}
 
 pub using @model {type ApplyResult}
 
@@ -139,6 +177,8 @@ pub using @model {type FileEdit}
 
 pub using @adapters {type FileHost}
 
+pub using @executor {type FormatResult}
+
 pub using @model {type GeneratorPluginConfig}
 
 pub using @changelog {type GeneratorRegistry}
@@ -169,6 +209,8 @@ pub using @executor {type PublishOptions}
 
 pub using @model {type PublishTarget}
 
+pub using @engine {type PublishTargetOverride}
+
 pub using @adapters {type RegistryHost}
 
 pub using @model {type ReleasePlan}
@@ -176,6 +218,8 @@ pub using @model {type ReleasePlan}
 pub using @model {type ReleaseState}
 
 pub using @model {type ReleaseUnit}
+
+pub using @engine {type SnapshotConfig}
 
 pub using @model {type TagIntent}
 

@@ -189,13 +189,7 @@ pub fn parse_config(
     }
   }
   for id in occupied.keys().collect() + ignore {
-    if id.contains("*") || id.contains("?") || id.contains("[") {
-      invalid(
-        "Version group globs are not supported in Phase 1",
-        path~,
-        code="unsupported-capability",
-      )
-    }
+    validate_glob_pattern(id, allow_negation=false, path~)
   }
   let mixed = property(property(raw, "experimental"), "mixedWorkspaces")
   let mixed_workspaces : Array[@model.MixedWorkspaceSpec] = []
@@ -301,23 +295,31 @@ pub fn parse_config(
       code="unsupported-capability",
     )
   }
-  if formatter != "builtin" {
-    invalid(
-      "External formatters are not implemented in Phase 2",
-      path~,
-      code="unsupported-capability",
-    )
-  }
   let format_mode = match property(raw, "format") {
     False => "false"
     String(s) => s
     _ => defaults.format_mode
   }
-  if format_mode != "auto" && format_mode != "false" {
+  if !["false", "auto", "prettier", "oxfmt", "biome", "dprint"].contains(
+      format_mode,
+    ) {
     invalid(
-      "External formatters are not implemented",
+      "Unsupported format mode: " + format_mode,
       path~,
       code="unsupported-capability",
+    )
+  }
+  if formatter != "builtin" &&
+    format_mode != "auto" &&
+    format_mode != "false" &&
+    format_mode != formatter {
+    invalid(
+      "Conflicting formatter and format settings: " +
+      formatter +
+      " vs " +
+      format_mode,
+      path~,
+      code="invalid-config",
     )
   }
   let changelog_raw = property(raw, "changelog")
@@ -397,6 +399,26 @@ pub fn parse_config(
       path~,
     )
   }
+  if publisher_registry != "default" {
+    let _ = parse_target_mapping(Some(publisher_registry))
+  }
+  match property(property(raw, "snapshot"), "prereleaseTemplate") {
+    String(template) => validate_snapshot_template(template, path~)
+    _ => ()
+  }
+  let pre_directory = match property(property(raw, "pre"), "directory") {
+    String(s) => s
+    _ => defaults.pre_directory
+  }
+  let normalized_pre_dir = pre_directory.replace_all(old="\\", new="/")
+  if normalized_pre_dir.has_prefix("/") ||
+    normalized_pre_dir.split("/").any(seg => seg.to_owned() == "..") {
+    invalid(
+      "pre.directory must stay inside the release domain: " + pre_directory,
+      path~,
+      code="invalid-config",
+    )
+  }
   let private_packages = property(raw, "privatePackages")
   let private_version = property(private_packages, "version") ==
     Json::boolean(true)
@@ -422,16 +444,7 @@ pub fn parse_config(
     _ => defaults.lockfiles
   }
   for pattern in changed_patterns {
-    if pattern.contains("[") ||
-      pattern.contains("{") ||
-      pattern.contains("(") ||
-      pattern.has_prefix("!") {
-      invalid(
-        "changedFilePatterns supports *, ** and ? only",
-        path~,
-        code="unsupported-capability",
-      )
-    }
+    validate_glob_pattern(pattern, allow_negation=true, path~)
   }
   {
     fixed,
@@ -452,10 +465,7 @@ pub fn parse_config(
       String(s) => s
       _ => defaults.pre_file
     },
-    pre_directory: match property(property(raw, "pre"), "directory") {
-      String(s) => s
-      _ => defaults.pre_directory
-    },
+    pre_directory,
     mixed: mixed != Json::null(),
     formatter,
     format_mode,

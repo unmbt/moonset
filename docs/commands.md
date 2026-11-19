@@ -93,19 +93,19 @@ Phase 1 输出固定 `schemaVersion: 1`、`stage: "analysis"`、`executable: fal
 
 ```text
 moonset version [--snapshot tag] [--since ref] [--dry-run]
-  [--empty] [--no-changelog] [--no-commit] [--output human|json|markdown]
+  [--empty] [--no-changelog] [--no-commit] [--no-format] [--output human|json|markdown]
   [--commit-metadata path]
 ```
 
-流程：解析配置和 workspace → 读取并验证所有 changeset → 构建 plan → 展示差异 →（可选确认）写 manifest、依赖范围和 changelog → 移动/删除已消费 changeset → 写 release state。
+流程：解析配置和 workspace → 读取并验证所有 changeset → 构建 plan → 展示差异 →（可选确认）写 manifest、依赖范围和 changelog → 移动/删除已消费 changeset → 写 release state →（若启用外部 formatter 且未传 `--no-format`）格式化已写入的支持文件。
 
 混合模式在写盘前对所有清单和锁文件进行 staging 校验，按字段所有权合并 diff。同一次 version 可更新多个生态，但不会顺便运行另一个工具的 `changeset version`。持久化包含 UnitId 和发布图的 intent，避免消费 changeset 后丢失发布对象。
 
 - 任何解析、规划或确认失败都不写盘。
 - 默认不创建 Git commit；若配置开启 commit，只能通过 Git adapter 使用参数数组执行。
-- `--dry-run` 只输出 plan 和文件 diff 摘要；搭配 `--output markdown` 时只读渲染 Release PR 正文（含引导说明、`pre` 预发布警告横幅、版本汇总表与 `# Releases` 逐包 Changelog 正文，超长按 60000 字符安全截断）。
+- `--dry-run` 只输出 plan 和文件 diff 摘要，不调用外部格式化器；搭配 `--output markdown` 时只读渲染 Release PR 正文（含引导说明、`pre` 预发布警告横幅、版本汇总表与 `# Releases` 逐包 Changelog 正文，超长按 60000 字符安全截断）。
 - `--commit-metadata path` 传入只读 JSON 映射（`{ "<sha>": { "pr": "12", "author": "alice" } }`），供 `git`/`github` changelog 生成器补充关联 PR 与作者信息。
-- `--snapshot` 需要配置允许快照版本；快照不消费稳定 changeset，除非规格另行指定。
+- `--snapshot <tag>` 要求配置 `snapshot.enabled: true`（否则返回 `snapshot-disabled`）；按 `snapshot.useCalculatedVersion` 与 `snapshot.prereleaseTemplate`（支持 `{tag}`、`{datetime}`、`{commit}`、`{version}`）生成经 SemVer 校验的快照版本并同步更新内部依赖范围；快照不消费稳定 changeset、不写 `.moonset/release-state.json` 且不自动提交。
 
 ## `pre`
 
@@ -136,7 +136,7 @@ moonset publish [--dry-run] [--registry name] [--only unit[,unit...]]
 
 发布前重新读取 workspace 和版本，校验 `release-state.json` 与当前清单版本一致、若存在 `.moonset/pack-results.json` 则校验其版本/commit/文件有效性，并校验存在 release commit 或显式 `--allow-uncommitted`。支持按 `publisher.kind`（`moon` / `command`）或 `units.<id>.publisher` 路由，并按 `publisher.dryRunFirst` 决定是否在真实发布前先执行全量 preflight `--dry-run`。混合模式按 UnitId/target 选择 publisher，不把 JS/Cargo 单元传给 `moon`。真实发布不自动运行 `version`。
 
-混合模式 `--only` 使用完整 UnitId，缺少 fixed/bridge/runtime 闭包成员时失败（返回退出码 `1`）。`--registry`、`--tag` 只有在所有选中目标均支持且含义一致时才允许覆盖：MoonBit 不支持 `--registry` 与 `--tag`，Cargo 不支持 `--tag`；npm dist-tag 不映射为 Git tag。缺少 `--yes` 确认或工作树脏（未传 `--allow-uncommitted`）时返回退出码 `1`。
+混合模式 `--only` 使用完整 UnitId，缺少 fixed/bridge/runtime 闭包成员时失败（返回退出码 `1`）。`--registry`、`--tag` 支持全局值（仅单生态或自定义 publisher 时允许）或按目标分发映射语法（如 `--registry npm=https://npm.pkg.github.com,cargo=private` 或 `--registry npm:@acme/ui=https://custom.reg`、`--tag npm=next`、`--tag npm:@acme/ui=canary`，也支持重复传参）；优先级为 `UnitId > ecosystem > global`。MoonBit 不支持 `--registry` 与 `--tag`，Cargo 不支持 `--tag`；npm dist-tag 不映射为 Git tag。缺少 `--yes` 确认或工作树脏（未传 `--allow-uncommitted`）时返回退出码 `1`。
 
 默认在所有目标成功后（且工作树干净时）交给 `tag` adapter 创建标签；`--no-tag`、`config.tag.afterPublish=false` 或 `--allow-uncommitted` 下的脏工作树会跳过自动创建标签。部分成功返回 `3`，JSON 结果列出每个包的 published/skipped/failed/blocked/unknown 状态。
 

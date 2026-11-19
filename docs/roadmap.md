@@ -79,7 +79,7 @@
 
 ## 后续迭代规划（`v0.1.1` / `v0.2.0+`）
 
-在 `0.1.0` 稳定基线之上，已按零破坏原则在 `0.1.1` 迭代中完成第 1、5 项，其余按需推进：
+在 `0.1.0` 稳定基线之上，已按零破坏原则完成第 1、5、6 项，其余按需推进：
 
 1. **`FR-022` 多平台原生产物矩阵与 build/publish 分离 DAG（已随 `0.1.1` 落地）**
    - 已实现 `artifacts` 声明、build/publish 分离 DAG、`pack --target / --manifest-out / --verify`、`publish --artifacts-dir` 以及必需/可选平台包校验与阻断。
@@ -93,6 +93,13 @@
    - 扩充混合 workspace（MoonBit + pnpm / Cargo）实战模板与第三方 JSONL 插件示例仓库。
 5. **发布 Action 自动创建 GitHub Release（基于 `CHANGELOG.md`，已随 `0.1.1` 落地）**
    - 已实现纯核 `extract_release_notes`、只读 CLI `moonset release-notes`、根 `action.yml` 的 `create-github-releases`（默认开启）以及 `release-binaries.yml` 资产补充上传衔接。
+6. **Schema 已定义但尚未接入的配置与扩展能力补齐（`FR-026`～`FR-031`，已落地）**
+   - **外部格式化器执行（`FR-026`）**：已接入 `formatter`（`prettier` / `oxfmt` / `biome` / `dprint`）、`format` 模式与 `--no-format`，通过参数数组调用并按扩展名安全过滤，`doctor` 同步检测外部格式化器可用性；
+   - **版本组与变更路径 Glob 扩展（`FR-027`）**：已为 `fixed`、`linked`、`ignore` 开放 `*` / `?` / `[...]` / `{...}` / `(...)` glob 匹配（含展开冲突检查与 `--only` 闭包对齐），并为 `changedFilePatterns` 补齐 `[...]`、`{...}`、`(...)`/extglob 及 `!` 否定过滤；
+   - **`snapshot` 完整配置驱动（`FR-028`）**：已将 `snapshot.enabled` 门禁、`snapshot.useCalculatedVersion` 与 `snapshot.prereleaseTemplate`（`{tag}`、`{datetime}`、`{commit}`、`{version}`）接入 `version --snapshot` 规划、SemVer 校验与内部依赖更新；
+   - **`pre.directory` 隔离语义（`FR-029`）**：已落地 `.changeset/pre` 等隔离目录迁移与 `pre.json` `consumed` 协同，`discover` 在 `active`/`exit` 模式下合并读取并在毕业时统一原子清理；
+   - **复杂 SemVer 范围解析（`FR-030`）**：已补齐 npm `||` / 空格 / 连字符 / `>` / `<` / X-range 与 Cargo 逗号合取 / `||` / `>` / `<` / 通配符范围校验、匹配与保语义更新；
+   - **发布路由细化（`FR-031`）**：已提供 `ApiPublisher` / `ApiPublisherRegistry` 与 `publish_release_with_api(_with)` 扩展注册入口，并支持混合生态下按生态或 UnitId 分发的 `--registry` / `--tag`（dist-tag）与 `publisher.registry` 映射。
 
 ## 明确暂缓项目
 

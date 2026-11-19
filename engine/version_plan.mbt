@@ -11,27 +11,38 @@ fn version_date(value : String) -> String {
 
 ///|
 fn planned_version(
+  snapshot : @model.WorkspaceSnapshot,
   base : String,
   options : @model.VersionOptions,
   generated_at : String,
-) -> String {
+) -> String raise @model.MoonsetError {
   match options.snapshot_tag {
     None => base
     Some(tag) => {
-      let clean = tag.trim()
-      if clean == "" {
-        base
-      } else {
-        let stamp = generated_at
-          .replace_all(old="-", new="")
-          .replace_all(old=":", new="")
-        base +
-        "-" +
-        clean.to_owned() +
-        "." +
-        (if stamp == "" { "0" } else { stamp })
-      }
+      let snap_cfg = parse_snapshot_config(snapshot.config)
+      render_snapshot_version(
+        base,
+        tag,
+        snap_cfg,
+        generated_at~,
+        git_head?=snapshot.git_head,
+      )
     }
+  }
+}
+
+///|
+fn normalize_pre_directory(dir : String) -> String {
+  let clean = dir.replace_all(old="\\", new="/").trim().to_owned()
+  let stripped = if clean.has_suffix("/") {
+    clean[:clean.length() - 1].to_owned()
+  } else {
+    clean
+  }
+  if stripped == "." {
+    ""
+  } else {
+    stripped
   }
 }
 
@@ -512,10 +523,13 @@ pub fn changelog_contexts_with_metadata(
   let contexts : Array[@changelog.ChangelogContext] = []
   for release in analysis.releases {
     let release_version = planned_version(
+      snapshot,
       release.new_version,
       options,
       generated_at,
-    )
+    ) catch {
+      _ => release.new_version
+    }
     let mut selected : @model.ReleaseUnit? = None
     for candidate in snapshot.units {
       if candidate.id == release.unit_id {
@@ -674,19 +688,34 @@ pub fn build_version_plan_with_metadata(
   let mixed = snapshot.units.any(x => x.ecosystem != "moonbit")
   let generate_changelogs = !options.no_changelog &&
     snapshot.config.changelog_enabled
+  let is_snapshot = options.snapshot_tag is Some(_)
+  if options.snapshot_tag is Some(tag) {
+    let snap_cfg = parse_snapshot_config(snapshot.config)
+    if !snap_cfg.enabled {
+      invalid(
+        "Snapshot releases are disabled by configuration; set snapshot.enabled to true",
+        code="snapshot-disabled",
+      )
+    }
+    if tag.trim() == "" {
+      invalid("Snapshot tag cannot be empty", code="invalid-input")
+    }
+    validate_snapshot_template(snap_cfg.prerelease_template)
+  }
+  let release_versions_override : Map[String, String] = Map([])
+  let units_by_id : Map[String, @model.ReleaseUnit] = Map([])
+  for unit in snapshot.units {
+    units_by_id[unit.id] = unit
+  }
   for release in analysis.releases {
     let release_version = planned_version(
+      snapshot,
       release.new_version,
       options,
       generated_at,
     )
-    let mut unit : @model.ReleaseUnit? = None
-    for candidate in snapshot.units {
-      if candidate.id == release.unit_id {
-        unit = Some(candidate)
-      }
-    }
-    let unit = unit.unwrap()
+    release_versions_override[release.unit_id] = release_version
+    let unit = units_by_id[release.unit_id]
     let version_path = unit.version_path
     let source = snapshot.sources.get(version_path).unwrap_or("")
     let span_and_lit : (Int32, Int32, String)? = if unit.ecosystem == "moonbit" {
@@ -878,7 +907,28 @@ pub fn build_version_plan_with_metadata(
       }
     }
   }
-  for intent in analysis.dependency_updates {
+  for raw_intent in analysis.dependency_updates {
+    let intent : @model.DependencyIntent = if is_snapshot {
+      match release_versions_override.get(raw_intent.producer) {
+        Some(snap_ver) => {
+          let consumer_eco = units_by_id
+            .get(raw_intent.consumer)
+            .map(u => u.ecosystem)
+            .unwrap_or("moonbit")
+          let rewritten = rewrite_ecosystem_range(
+            consumer_eco,
+            raw_intent.old_requirement,
+            snap_ver,
+          ) catch {
+            _ => snap_ver
+          }
+          { ..raw_intent, new_requirement: rewritten, }
+        }
+        None => raw_intent
+      }
+    } else {
+      raw_intent
+    }
     let source = snapshot.sources.get(intent.path).unwrap_or("")
     let source_bytes = @utf8.encode(source)
     let (span_start, span_end) = if intent.start == 0 &&
@@ -947,10 +997,6 @@ pub fn build_version_plan_with_metadata(
     let owner = spans.last().map(x => x.owner).unwrap_or("moonset")
     add_edit(edits, path, kind, owner, source, after)
   }
-  let is_snapshot = match options.snapshot_tag {
-    Some(tag) => tag.trim() != ""
-    None => false
-  }
   let consumed = if is_snapshot {
     []
   } else {
@@ -968,6 +1014,35 @@ pub fn build_version_plan_with_metadata(
             snapshot.sources.get(snapshot.config.pre_file).unwrap_or(""),
             next_pre.to_json().stringify(indent=2) + "\n",
           )
+          let pre_dir = normalize_pre_directory(snapshot.config.pre_directory)
+          if pre_dir != "" {
+            for changeset in analysis.changesets {
+              if next_pre.consumed.contains(changeset.id) {
+                let target_path = pre_dir + "/" + changeset.id + ".md"
+                if changeset.path != target_path {
+                  if snapshot.sources.get(changeset.path) is Some(content) &&
+                    content != "" {
+                    add_edit(
+                      edits,
+                      target_path,
+                      "changeset",
+                      "moonset",
+                      snapshot.sources.get(target_path).unwrap_or(""),
+                      content,
+                    )
+                    add_edit(
+                      edits,
+                      changeset.path,
+                      "changeset",
+                      "moonset",
+                      content,
+                      "",
+                    )
+                  }
+                }
+              }
+            }
+          }
         }
       None => {
         for changeset in analysis.changesets {
@@ -993,14 +1068,6 @@ pub fn build_version_plan_with_metadata(
       }
     }
   }
-  let release_versions_override : Map[String, String] = Map([])
-  for release in analysis.releases {
-    release_versions_override[release.unit_id] = planned_version(
-      release.new_version,
-      options,
-      generated_at,
-    )
-  }
   let include_dag = has_artifact_specs(snapshot.config) ||
     !snapshot.config.bridges.is_empty()
   let dag_opt = if include_dag {
@@ -1014,7 +1081,9 @@ pub fn build_version_plan_with_metadata(
     releases: analysis.releases.map(release => {
       unit_id: release.unit_id,
       old_version: release.old_version,
-      new_version: planned_version(release.new_version, options, generated_at),
+      new_version: release_versions_override
+      .get(release.unit_id)
+      .unwrap_or(release.new_version),
       level: release.level,
       reasons: release.reasons,
       changesets: release.changesets,

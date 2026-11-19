@@ -28,6 +28,10 @@ pub async fn[H : ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, 
 
 pub fn error_message(Error) -> String
 
+pub async fn format_files(String, @model.Config, Array[String], no_format? : Bool) -> FormatResult
+
+pub async fn[H : ExecutionHost] format_files_with(H, String, @model.Config, Array[String], no_format? : Bool) -> FormatResult
+
 pub fn manager_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
 
 pub fn native_host() -> NativeHost
@@ -48,6 +52,10 @@ pub async fn publish_release(@workspace.LoadedWorkspace, PublishOptions) -> @mod
 
 pub async fn[H : ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
 
+pub async fn publish_release_with_api(@workspace.LoadedWorkspace, PublishOptions, ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
+
+pub async fn[H : ExecutionHost] publish_release_with_api_with(H, @workspace.LoadedWorkspace, PublishOptions, ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
+
 pub async fn publish_release_with_artifacts(@workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
 
 pub async fn[H : ExecutionHost] publish_release_with_artifacts_with(H, @workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
@@ -66,6 +74,8 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(H, String, @workspace.Loade
 
 pub fn utc_date(UInt64) -> String
 
+pub fn utc_datetime(UInt64) -> String
+
 pub async fn verify_artifacts(@workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
 
 pub async fn[H : ExecutionHost] verify_artifacts_with(H, @workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
@@ -75,6 +85,20 @@ pub fn workspace_root_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> 
 // Errors
 
 // Types and methods
+pub(all) struct ApiPublisher {
+  already_published : (@model.PublishTarget) -> Bool raise @model.MoonsetError
+  preflight : (@model.PublishTarget) -> Unit raise @model.MoonsetError
+  publish : (@model.PublishTarget) -> String raise @model.MoonsetError
+}
+pub fn ApiPublisher::from_registry_host(@adapters.RegistryHost) -> Self
+
+pub(all) struct ApiPublisherRegistry {
+  publishers : Map[String, ApiPublisher]
+}
+pub fn ApiPublisherRegistry::new() -> Self
+pub fn ApiPublisherRegistry::register(Self, String, ApiPublisher) -> Unit
+pub fn[P : @adapters.PublisherPort] ApiPublisherRegistry::register_port(Self, String, P) -> Unit
+
 pub(all) struct DoctorCheck {
   name : String
   ok : Bool
@@ -88,6 +112,12 @@ pub(all) struct DoctorReport {
   checks : Array[DoctorCheck]
 }
 pub fn DoctorReport::to_json(Self) -> @json.Json
+
+pub(all) struct FormatResult {
+  formatter : String
+  formatted : Array[String]
+  skipped : Bool
+}
 
 pub struct NativeHost {
 }

@@ -1,6 +1,6 @@
 # 需求规格
 
-> 状态：Phase 1～5 核心能力、混合 workspace、`FR-022` 多平台产物矩阵与 build/publish 分离 DAG、`FR-023` 共存导出、`FR-025` 自动创建 GitHub Release、`NFR-005` 性能基准、PR Bot GitHub Action 与 `OPS-002` 审计事件/`v1` 浮动标签自动化均已实现并完成本地验证；在线 GitHub Runner 环境演练待推送触发，非 crates.io Cargo registry / Tauri 保持 `Partial`/`Deferred`。
+> 状态：Phase 1～5 核心能力、混合 workspace、`FR-022` 多平台产物矩阵与 build/publish 分离 DAG、`FR-023` 共存导出、`FR-025` 自动创建 GitHub Release、`FR-026`～`FR-031`（外部格式化器、Glob 扩展、`snapshot` 配置、`pre.directory` 隔离、复合 SemVer 范围、API Publisher 与分目标发布映射）、`NFR-005` 性能基准、PR Bot GitHub Action 与 `OPS-002` 审计事件/`v1` 浮动标签自动化均已实现并完成本地验证；在线 GitHub Runner 环境演练待推送触发，非 crates.io Cargo registry / Tauri 保持 `Partial`/`Deferred`。
 
 ### 开发验证约束
 
@@ -71,6 +71,12 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 | FR-023 | 与已有工具共存 | Changesets 等工具和 moonset 分区管理，changeset/版本字段/锁文件只有一个写入者；不互相消费记录或静默迁移配置；只读导出跨分区协调摘要。 | Implemented | `engine/coexistence.mbt`、`engine/coexistence_test.mbt`、`workspace/integration_test.mbt` |
 | FR-024 | Adapter 能力契约 | 接口涵盖 discovery、编辑、range、lockfile、pack 和 publish；未知能力在 apply 前明确失败；Cargo crates.io 已接入，其他 Cargo registry/Tauri 保持 Deferred。 | Partial (`executor::ExecutionHost` + `PublisherRegistry` + capability gating; v1 `adapters` traits preserved) | `adapters/protocol_test.mbt`、`executor/executor_test.mbt` |
 | FR-025 | 自动创建 GitHub Release 与 Release Notes 提取 | 提供纯核 `extract_release_notes` 与只读 CLI `moonset release-notes`（支持单包与 `--from-state` 多包）；根 Action `mode: publish` 支持 `create-github-releases`（默认 `'true'`），按 `CHANGELOG.md` 版本章节幂等创建 GitHub Release（无匹配章节回退 `--generate-notes`，已存在则跳过），`release-binaries.yml` 复用该 CLI 替代重复脚本解析。 | Implemented | `changelog/changelog_test.mbt`、`cli/cli_wbtest.mbt`、`scripts/cli-integration.mbtx` |
+| FR-026 | 外部格式化器执行与 `--no-format` | `formatter`（`builtin`/`prettier`/`oxfmt`/`biome`/`dprint`）与 `format`（`false`/`auto`/工具名）生效；`add` 与非 `--dry-run` 的 `version` 在写盘后、自动提交前按工具支持的扩展名通过参数数组调用格式化器；`--no-format` 或 `format: false` 跳过外部调用；只读命令与 `--dry-run` 永不调用格式化器。 | Implemented | `engine/v020_features_test.mbt`、`executor/executor_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-027 | 版本组与变更路径 Glob 扩展 | `fixed`、`linked`、`ignore` 支持 `*`/`?`/`[...]`/`{...}`/`(...)` glob 匹配（展开后去重并检查版本组冲突）；`changedFilePatterns` 支持 `*`/`**`/`?`/`[...]`/`{...}`/`(...)` 与 `!` 否定过滤；非法 glob 语法在写盘前以 `invalid-config` 拒绝。 | Implemented | `engine/glob.mbt`、`engine/v020_features_test.mbt`、`engine/parsing_test.mbt` |
+| FR-028 | `snapshot` 配置驱动与模板生成 | `version --snapshot <tag>` 受 `snapshot.enabled` 门禁保护（未开启则以 `snapshot-disabled` 拒绝）；按 `snapshot.useCalculatedVersion` 选择 `0.0.0` 或计算版本基准；按 `snapshot.prereleaseTemplate`（支持 `{tag}`、`{datetime}`、`{commit}`、`{version}`）渲染并校验合法 SemVer，更新内部依赖范围且不消费稳定 changeset 或写入 `release-state.json`。 | Implemented | `engine/policy.mbt`、`engine/v020_features_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-029 | `pre.directory` 隔离语义 | 在 `pre` `active` 模式下运行 `version` 时，已消费 changeset 原子迁移至 `pre.directory`（默认 `.changeset/pre`）并与 `pre.json` 的 `consumed` 协同；`discover` 在存在 `pre.json`（`active`/`exit`）时合并读取 `changeset_directory` 与 `pre.directory`；`pre exit` 后 `version` 毕业时统一清理两个目录的 changeset 与 `pre.json`。 | Implemented | `engine/v020_features_test.mbt`、`workspace/integration_test.mbt`、`scripts/cli-integration.mbtx` |
+| FR-030 | 复合 SemVer 范围解析与更新 | npm 支持 `||` 联合、空格合取、连字符 `A - B`、`>`/`>=`/`<`/`<=`/`=`/`^`/`~` 与 X-range；Cargo 支持逗号合取、`||` 联合、`>`/`>=`/`<`/`<=`/`=`/`^`/`~` 与通配符；非法语法在规划前报错，更新后范围保证满足目标版本。 | Implemented | `engine/semver_range.mbt`、`engine/v020_features_test.mbt` |
+| FR-031 | API Publisher 注册入口与分目标发布映射 | 提供 `ApiPublisher` / `ApiPublisherRegistry` 与 `publish_release_with_api(_with)` 使 `publisher.kind = "api"` 与单单元自定义 publisher 可编程接入；`--registry` 与 `--tag`（及 `publisher.registry`）支持按生态（`npm=<val>,cargo=<val>`）或按 UnitId（`npm:@acme/ui=<val>`）分目标分发，保留无作用域参数跨混合生态时的安全拒绝。 | Implemented | `engine/v020_features_test.mbt`、`executor/executor_test.mbt`、`cli/cli_wbtest.mbt` |
 
 ## 5. 非功能需求
 
