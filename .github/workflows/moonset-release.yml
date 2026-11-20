@@ -117,6 +117,17 @@ jobs:
         with:
           mode: version-pr
           binary-path: ${{ runner.temp }}/moonset-cli
+      - name: Sync generated CLI version on release branch
+        if: steps.release.outputs.has-changesets == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          moon run scripts/gen-version.mbtx
+          if ! git diff --quiet -- cli/generated_version.mbt; then
+            git add cli/generated_version.mbt
+            git commit --amend --no-edit
+            git push -f origin HEAD
+          fi
 
   release-binaries:
     needs: publish

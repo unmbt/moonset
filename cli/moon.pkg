@@ -1,6 +1,5 @@
 import {
   "moonbitlang/core/json",
-  "unmbt/moon-manifest" @manifest,
   "unmbt/moonset/model",
   "unmbt/moonset/engine",
   "unmbt/moonset/workspace",
@@ -28,12 +27,12 @@ options(
 )
 
 rule(
-  name: "embed_moon_mod",
-  command: ":embed -i $input -o $output --name embedded_moon_mod --text",
+  name: "gen_version",
+  command: "moon run scripts/gen-version.mbtx $input $output",
 )
 
 dev_build(
-  rule: "embed_moon_mod",
+  rule: "gen_version",
   input: "../moon.mod",
-  output: "embedded_version.mbt",
+  output: "generated_version.mbt",
 )

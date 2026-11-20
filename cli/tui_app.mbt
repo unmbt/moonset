@@ -51,31 +51,40 @@ async fn open_in_external_editor(file_path : String) -> Bool {
 }
 
 ///|
+priv enum EditorOutcome {
+  EditorResult(String)
+  EditorEmpty
+  EditorError
+}
+
+///|
 /// Open an external editor to author a multi-line changeset summary.
 async fn edit_summary_in_editor(
   initial : String,
   render_state : TuiRenderState,
-) -> String? {
-  guard parse_editor_command() is Some(_) else { return None }
-  let tmp = @fs.tmpdir(prefix="moonset-summary-") catch { _ => return None }
+) -> EditorOutcome {
+  guard parse_editor_command() is Some(_) else { return EditorError }
+  let tmp = @fs.tmpdir(prefix="moonset-summary-") catch {
+    _ => return EditorError
+  }
   defer (@fs.rmdir(tmp, recursive=true) catch { _ => () })
   let draft_path = @path.Path(tmp).join(@path.Path("SUMMARY.md")).to_string()
   let header = if initial.trim() != "" {
     initial + "\n"
   } else {
-    "\n# Write your changeset summary above. Lines starting with '#' are ignored.\n"
+    "\n\n# Please enter a summary for your changes.\n# An empty message aborts the editor.\n"
   }
   @fs.write_text(draft_path, header) catch {
-    _ => return None
+    _ => return EditorError
   }
   tui_clear_frame(render_state)
   tui_cleanup(render_state)
   let ok = open_in_external_editor(draft_path)
   tui_begin(render_state)
   if !ok {
-    return None
+    return EditorError
   }
-  let raw = @fs.read_text(draft_path) catch { _ => return None }
+  let raw = @fs.read_text(draft_path) catch { _ => return EditorError }
   let kept = raw
     .replace_all(old="\r\n", new="\n")
     .split("\n")
@@ -86,17 +95,17 @@ async fn edit_summary_in_editor(
     .trim()
     .to_owned()
   if kept == "" {
-    None
+    EditorEmpty
   } else {
-    Some(kept)
+    EditorResult(kept)
   }
 }
 
 ///|
 fn stage_visible_limit() -> Int32 {
-  let rows = tty_rows() - 9
-  if rows < 2 {
-    2
+  let rows = tty_rows() - 6
+  if rows < 4 {
+    4
   } else if rows > 16 {
     16
   } else {
@@ -105,98 +114,243 @@ fn stage_visible_limit() -> Int32 {
 }
 
 ///|
-fn tui_choose_indices(
+fn tui_ask_confirm(
   render_state : TuiRenderState,
-  title : String,
-  candidates : Array[Int32],
-  all_labels : Array[String],
-  all_versions : Array[String],
-  all_changed_flags : Array[Bool],
-  all_publish_flags : Array[Bool],
-  color : Bool,
-  allow_empty~ : Bool = false,
-) -> Array[Int32]? {
-  if candidates.is_empty() {
-    return Some([])
-  }
-  let labels : Array[String] = []
-  let versions : Array[String] = []
-  let changed_flags : Array[Bool] = []
-  let publish_flags : Array[Bool] = []
-  for index in candidates {
-    labels.push(all_labels[index])
-    versions.push(all_versions[index])
-    if !all_changed_flags.is_empty() {
-      changed_flags.push(all_changed_flags.get(index).unwrap_or(false))
-    }
-    if !all_publish_flags.is_empty() {
-      publish_flags.push(all_publish_flags.get(index).unwrap_or(true))
-    }
-  }
-  let mut state = SelectState::new(candidates.length())
-  let mut hint = ""
-  while !state.cancelled && !state.confirmed {
-    let prompt = render_package_page(
-      labels,
-      versions,
-      state,
-      changed_flags~,
-      publish_flags~,
-      max_visible=stage_visible_limit(),
-      color~,
-      title~,
-      allow_empty~,
-      hint~,
-    )
+  message : String,
+  initial_value~ : Bool = false,
+  with_guide~ : Bool = true,
+  color~ : Bool = false,
+) -> Bool? {
+  let mut state = ConfirmState::new(initial=initial_value)
+  while !state.confirmed && !state.cancelled {
+    let prompt = render_confirm_prompt(message, state, with_guide~, color~)
     tui_render_screen(render_state, prompt)
-    let key = tui_read_key()
-    let next = reduce_select_stage(state, key, allow_empty~)
-    if key == Enter && !next.confirmed && !allow_empty {
-      hint = "Select at least one package with Space"
-    } else if key != Unknown {
-      hint = ""
-    }
-    state = next
+    state = reduce_confirm(state, tui_read_key())
   }
   if state.cancelled {
+    tui_commit_line(
+      render_state,
+      render_clack_cancel(message, with_guide~, color~),
+    )
+    return None
+  }
+  tui_commit_line(
+    render_state,
+    render_confirm_prompt(message, state, submitted=true, with_guide~, color~),
+  )
+  Some(state.value)
+}
+
+///|
+fn tui_ask_select(
+  render_state : TuiRenderState,
+  message : String,
+  labels : Array[String],
+  submitted_labels~ : Array[String] = [],
+  initial_cursor~ : Int32 = 0,
+  with_guide~ : Bool = true,
+  color~ : Bool = false,
+) -> Int32? {
+  if labels.is_empty() {
+    return None
+  }
+  let mut cursor = if initial_cursor >= 0 && initial_cursor < labels.length() {
+    initial_cursor
+  } else {
+    0
+  }
+  for ;; {
+    let prompt = render_select_prompt(
+      message,
+      labels,
+      cursor,
+      with_guide~,
+      color~,
+    )
+    tui_render_screen(render_state, prompt)
+    let (next_cursor, accepted, cancelled) = reduce_choice(
+      cursor,
+      labels.length(),
+      tui_read_key(),
+    )
+    cursor = next_cursor
+    if cancelled {
+      tui_commit_line(
+        render_state,
+        render_clack_cancel(message, with_guide~, color~),
+      )
+      return None
+    }
+    if accepted {
+      let chosen = submitted_labels.get(cursor).unwrap_or(labels[cursor])
+      tui_commit_line(
+        render_state,
+        render_select_prompt(
+          message,
+          labels,
+          cursor,
+          submitted=true,
+          submitted_text=chosen,
+          with_guide~,
+          color~,
+        ),
+      )
+      return Some(cursor)
+    }
+  }
+}
+
+///|
+fn tui_ask_group_multiselect(
+  render_state : TuiRenderState,
+  message : String,
+  groups : Array[(String, Array[Int32])],
+  item_labels : Array[String],
+  submitted_names~ : Array[String] = [],
+  required~ : Bool = false,
+  with_guide~ : Bool = true,
+  color~ : Bool = false,
+) -> Array[Int32]? {
+  if groups.is_empty() || item_labels.is_empty() {
+    return Some([])
+  }
+  let rows : Array[GroupRow] = []
+  for entry in groups {
+    let (group_name, members) = entry
+    if !members.is_empty() {
+      rows.push(GroupHeader(group_name, members))
+      for idx in members {
+        rows.push(GroupItem(idx))
+      }
+    }
+  }
+  if rows.is_empty() {
+    return Some([])
+  }
+  let mut state = GroupMultiselectState::new(item_labels.length())
+  while !state.cancelled && !state.confirmed {
+    let prompt = render_group_multiselect_prompt(
+      message,
+      rows,
+      item_labels,
+      state,
+      max_visible=stage_visible_limit(),
+      with_guide~,
+      color~,
+    )
+    tui_render_screen(render_state, prompt)
+    state = reduce_group_multiselect(state, rows, tui_read_key(), required~)
+  }
+  if state.cancelled {
+    tui_commit_line(
+      render_state,
+      render_clack_cancel(message, with_guide~, color~),
+    )
     return None
   }
   let selected : Array[Int32] = []
-  for i, value in state.selected {
-    if value {
-      selected.push(candidates[i])
+  let summary_parts : Array[String] = []
+  for i, is_on in state.selected {
+    if is_on {
+      selected.push(i)
+      summary_parts.push(submitted_names.get(i).unwrap_or(item_labels[i]))
     }
   }
+  let submitted_text = summary_parts.join(", ")
+  tui_commit_line(
+    render_state,
+    render_group_multiselect_prompt(
+      message,
+      rows,
+      item_labels,
+      state,
+      submitted=true,
+      submitted_text~,
+      with_guide~,
+      color~,
+    ),
+  )
   Some(selected)
 }
 
 ///|
-/// Confirm a `0.x -> 1.0.0` major release. Returns `None` on cancel (`Esc`/`Ctrl+C`),
-/// `Some(true)` on yes, `Some(false)` on no.
-fn tui_confirm_zero_major(
+priv enum TextPromptResult {
+  TextSubmitted(String)
+  TextOpenEditor(String)
+  TextCancelled
+}
+
+///|
+fn tui_ask_text(
   render_state : TuiRenderState,
-  unit_id : String,
-  version : String,
-  color : Bool,
-) -> Bool? {
-  let mut cursor : Int32 = 0
+  message : String,
+  placeholder~ : String = "",
+  default_value~ : String = "",
+  not_empty~ : Bool = false,
+  allow_ctrl_e~ : Bool = false,
+  allow_empty_submit~ : Bool = false,
+  with_guide~ : Bool = true,
+  color~ : Bool = false,
+) -> TextPromptResult {
+  let mut state = SummaryState::new()
+  let mut error = ""
   for ;; {
-    let prompt = render_zero_major_confirm(unit_id, version, cursor, color~)
+    let prompt = render_text_prompt(
+      message,
+      state,
+      placeholder~,
+      error~,
+      with_guide~,
+      color~,
+    )
     tui_render_screen(render_state, prompt)
     let key = tui_read_key()
-    match key {
-      Char("y") | Char("Y") => return Some(true)
-      Char("n") | Char("N") => return Some(false)
-      _ => {
-        let (next_cursor, accepted, cancelled) = reduce_choice(cursor, 2, key)
-        cursor = next_cursor
-        if cancelled {
-          return None
-        }
-        if accepted {
-          return Some(cursor == 1)
-        }
+    let next = reduce_summary(state, key)
+    if next.cancelled {
+      tui_commit_line(
+        render_state,
+        render_clack_cancel(message, with_guide~, color~),
+      )
+      return TextCancelled
+    }
+    if allow_ctrl_e && next.open_editor {
+      tui_clear_frame(render_state)
+      return TextOpenEditor(state.text())
+    }
+    if next.confirmed {
+      let raw = next.text()
+      let resolved = if raw == "" && default_value != "" {
+        default_value
+      } else {
+        raw
       }
+      if not_empty && resolved.trim() == "" {
+        state = { ..next, confirmed: false, open_editor: false, }
+        error = "Can't be empty."
+        continue
+      }
+      if resolved == "" && !allow_empty_submit && default_value == "" {
+        state = { ..next, confirmed: false, open_editor: false, }
+        error = "Can't be empty."
+        continue
+      }
+      let shown = if resolved == "" { "" } else { summary_preview(resolved) }
+      tui_commit_line(
+        render_state,
+        render_text_prompt(
+          message,
+          state,
+          submitted=true,
+          submitted_text=shown,
+          with_guide~,
+          color~,
+        ),
+      )
+      return TextSubmitted(resolved)
+    }
+    state = { ..next, confirmed: false, open_editor: false, }
+    if key != Unknown {
+      error = ""
     }
   }
 }
@@ -270,6 +424,7 @@ fn sorted_units(
   units : Array[@model.ReleaseUnit],
   changed_files : Array[String],
   changeset_directory~ : String = ".changeset",
+  is_mixed~ : Bool = false,
 ) -> (Array[@model.ReleaseUnit], Array[Bool]) {
   let raw_flags = compute_changed_flags(
     units,
@@ -285,8 +440,15 @@ fn sorted_units(
       unchanged_group.push(unit)
     }
   }
-  changed_group.sort_by((a, b) => a.id.compare(b.id))
-  unchanged_group.sort_by((a, b) => a.id.compare(b.id))
+  let key_fn = (u : @model.ReleaseUnit) => {
+    if is_mixed {
+      u.id
+    } else {
+      u.native_name
+    }
+  }
+  changed_group.sort_by((a, b) => key_fn(a).compare(key_fn(b)))
+  unchanged_group.sort_by((a, b) => key_fn(a).compare(key_fn(b)))
   let ordered : Array[@model.ReleaseUnit] = []
   let flags : Array[Bool] = []
   for unit in changed_group {
@@ -416,7 +578,9 @@ async fn detect_add_changed_files(
 
 ///|
 fn is_pre_one_zero_version(version : String) -> Bool {
-  version.has_prefix("0.")
+  let v = version.trim().to_owned()
+  let clean = if v.has_prefix("v") { v[1:].to_owned() } else { v }
+  clean.has_prefix("0.")
 }
 
 ///|
@@ -436,7 +600,50 @@ fn summary_preview(summary : String) -> String {
 }
 
 ///|
-/// Interactive TUI for `moonset add` powered by our built-in UTF-8 native TTY stub.
+fn confirm_first_major_release(
+  render_state : TuiRenderState,
+  display_name : String,
+  color : Bool,
+) -> Bool? {
+  let warn_lines = [
+    "The " +
+    style_red("major", color) +
+    " version of " +
+    style_blue(display_name, color) +
+    " will be its " +
+    style_red("first major release", color) +
+    " (1.0.0).",
+    "If you are unsure if this is correct, contact the package's maintainers " +
+    style_red("before committing this changeset", color) +
+    ".",
+  ]
+  tui_print_static(
+    render_state,
+    render_note_box(
+      "IMPORTANT",
+      warn_lines,
+      title_yellow=true,
+      body_white=true,
+      with_guide=true,
+      columns=tty_cols(),
+      color~,
+    ),
+  )
+  tui_ask_confirm(
+    render_state,
+    "Are you sure you want to release the " +
+    style_red("first major version", color) +
+    " of " +
+    style_blue(display_name, color) +
+    "?",
+    initial_value=true,
+    with_guide=true,
+    color~,
+  )
+}
+
+///|
+/// Interactive TUI for `moonset add` replicating `@changesets/cli` v3.0.3 (`@clack/prompts`).
 async fn interactive_add(
   options : Options,
   loaded : @workspace.LoadedWorkspace,
@@ -447,15 +654,19 @@ async fn interactive_add(
     loaded.snapshot.units,
   )
   let eligible_units = loaded.snapshot.units.filter(unit => {
-    !ignored_ids.contains(unit.id)
+    !ignored_ids.contains(unit.id) &&
+    unit.version is Some(_) &&
+    (
+      unit.visibility != @model.Private ||
+      loaded.snapshot.config.private_packages.version
+    )
   })
   if eligible_units.is_empty() {
     raise @model.Invalid(
-      @model.diagnostic(
-        "empty-workspace", "No selectable packages in workspace",
-      ),
+      @model.diagnostic("empty-workspace", "No versionable packages found"),
     )
   }
+  let is_mixed = loaded.snapshot.config.is_mixed()
   let detected_changed = if loaded.snapshot.changed_files.is_empty() {
     detect_add_changed_files(
       loaded.snapshot.root,
@@ -469,16 +680,44 @@ async fn interactive_add(
     eligible_units,
     detected_changed,
     changeset_directory=loaded.changeset_directory,
+    is_mixed~,
   )
-  let labels = ordered_units.map(unit => unit.id)
-  let versions = ordered_units.map(unit => unit.version.unwrap_or("unversioned"))
-  let publish_flags = ordered_units.map(unit => unit.publish)
-  let candidates : Array[Int32] = []
-  for i in 0..<ordered_units.length() {
-    candidates.push(i)
-  }
+  let unit_ids = ordered_units.map(u => u.id)
+  let display_names = ordered_units.map(u => {
+    if is_mixed {
+      u.id
+    } else {
+      u.native_name
+    }
+  })
+  let versions = ordered_units.map(u => u.version.unwrap_or("0.0.0"))
+  let pkg_select_labels = ordered_units.mapi((i, u) => {
+    let mut label = display_names[i]
+    if u.visibility == @model.Private {
+      label = label + " (private)"
+    }
+    if is_mixed && !u.publish {
+      label = label + " [no-publish]"
+    }
+    label
+  })
+  let pkg_ver_labels = ordered_units.mapi((i, _) => {
+    style_bold(display_names[i], color) + "@" + style_bold(versions[i], color)
+  })
+  let pkg_ver_plain = ordered_units.mapi((i, _) => {
+    display_names[i] + "@" + versions[i]
+  })
   let has_editor = parse_editor_command() is Some(_)
   let render_state = TuiRenderState::new()
+
+  tui_print_static(
+    render_state,
+    render_clack_intro(
+      "🌙 moonset v" + cli_version(),
+      with_guide=true,
+      color~,
+    ),
+  )
 
   tui_begin(render_state)
   defer tui_cleanup(render_state)
@@ -486,119 +725,130 @@ async fn interactive_add(
   let chosen_indices : Array[Int32] = if ordered_units.length() == 1 {
     [0]
   } else {
-    match
-      tui_choose_indices(
-        render_state, "? Which packages would you like to include?", candidates,
-        labels, versions, changed_flags, publish_flags, color,
-      ) {
-      Some(indices) => indices
-      None => {
-        tui_commit_line(render_state, format_cancelled_step(color~))
-        return 130
+    let changed_indices : Array[Int32] = []
+    let unchanged_indices : Array[Int32] = []
+    for i, changed in changed_flags {
+      if changed {
+        changed_indices.push(i)
+      } else {
+        unchanged_indices.push(i)
       }
+    }
+    let groups : Array[(String, Array[Int32])] = []
+    if !changed_indices.is_empty() {
+      groups.push(("changed packages", changed_indices))
+    }
+    if !unchanged_indices.is_empty() {
+      groups.push(("unchanged packages", unchanged_indices))
+    }
+    match
+      tui_ask_group_multiselect(
+        render_state,
+        "Which packages were affected by the changes you made?",
+        groups,
+        pkg_select_labels,
+        submitted_names=display_names,
+        required=true,
+        with_guide=true,
+        color~,
+      ) {
+      Some(indices) => {
+        let sorted = indices.copy()
+        sorted.sort_by((a, b) => display_names[a].compare(display_names[b]))
+        sorted
+      }
+      None => return 130
     }
   }
   if chosen_indices.is_empty() {
     tui_clear_frame(render_state)
     return 2
   }
-  tui_commit_line(
-    render_state,
-    format_completed_step(
-      "Affected packages: " +
-      chosen_indices.map(i => style_pkg(labels[i], color)).join(", "),
-      color~,
-    ),
-  )
 
   let selected : Array[@model.Change] = []
+  let selected_display : Array[(String, @model.Bump)] = []
+
   if ordered_units.length() == 1 {
-    let choices = ["patch", "minor", "major"]
+    let bump_choices = [
+      "patch " + style_semver_hint("patch", color),
+      "minor " + style_semver_hint("minor", color),
+      "major " + style_semver_hint("major", color),
+    ]
+    let bump_submitted = ["patch", "minor", "major"]
     let mut cursor : Int32 = 0
     let mut chosen_bump : @model.Bump? = None
     while chosen_bump is None {
-      let prompt = render_bump_page(
-        labels[0],
-        versions[0],
-        cursor,
-        choices~,
-        color~,
-      )
-      tui_render_screen(render_state, prompt)
-      let (next_cursor, accepted, cancelled) = reduce_choice(
-        cursor,
-        choices.length(),
-        tui_read_key(),
-      )
-      cursor = next_cursor
-      if cancelled {
-        tui_commit_line(render_state, format_cancelled_step(color~))
-        return 130
-      }
-      if accepted {
-        let candidate = match cursor {
-          0 => @model.Patch
-          1 => @model.Minor
-          _ => @model.Major
-        }
-        if candidate == @model.Major && is_pre_one_zero_version(versions[0]) {
-          match
-            tui_confirm_zero_major(render_state, labels[0], versions[0], color) {
-            None => {
-              tui_commit_line(render_state, format_cancelled_step(color~))
-              return 130
-            }
-            Some(true) => chosen_bump = Some(@model.Major)
-            Some(false) => cursor = 1 // Let user pick minor or patch instead
+      match
+        tui_ask_select(
+          render_state,
+          "What kind of change is this for " +
+          style_blue(display_names[0], color) +
+          "? " +
+          style_gray("(current version is " + versions[0] + ")", color),
+          bump_choices,
+          submitted_labels=bump_submitted,
+          initial_cursor=cursor,
+          with_guide=true,
+          color~,
+        ) {
+        None => return 130
+        Some(picked) => {
+          cursor = picked
+          let candidate = match picked {
+            0 => @model.Patch
+            1 => @model.Minor
+            _ => @model.Major
           }
-        } else {
-          chosen_bump = Some(candidate)
+          if candidate == @model.Major && is_pre_one_zero_version(versions[0]) {
+            match
+              confirm_first_major_release(render_state, display_names[0], color) {
+              None => return 130
+              Some(true) => chosen_bump = Some(@model.Major)
+              Some(false) => cursor = 0
+            }
+          } else {
+            chosen_bump = Some(candidate)
+          }
         }
       }
     }
     let bump = chosen_bump.unwrap()
-    selected.push({ unit_id: labels[0], bump, })
-    tui_commit_line(
-      render_state,
-      format_completed_step(
-        style_bump(bump.text(), color) +
-        ": " +
-        style_pkg(labels[0], color) +
-        style_dim("@" + versions[0], color),
-        color~,
-      ),
-    )
+    selected.push({ unit_id: unit_ids[0], bump, })
+    selected_display.push((display_names[0], bump))
   } else {
     let mut remaining = chosen_indices.copy()
     let major_indices : Array[Int32] = []
     let minor_indices : Array[Int32] = []
+
     match
-      tui_choose_indices(
+      tui_ask_group_multiselect(
         render_state,
-        "? Which packages should have a major bump?",
-        remaining,
-        labels,
-        versions,
-        [],
-        [],
-        color,
-        allow_empty=true,
+        style_bold(
+          "Which packages should have a " +
+          style_red("major", color) +
+          " " +
+          style_semver_hint("major", color) +
+          " bump?",
+          color,
+        ),
+        [("all packages", remaining)],
+        pkg_ver_labels,
+        submitted_names=pkg_ver_plain,
+        required=false,
+        with_guide=true,
+        color~,
       ) {
-      Some(major_selected) => {
-        let major_packages : Array[String] = []
+      None => return 130
+      Some(major_selected) =>
         for index in major_selected {
           let approved = if is_pre_one_zero_version(versions[index]) {
             match
-              tui_confirm_zero_major(
+              confirm_first_major_release(
                 render_state,
-                labels[index],
-                versions[index],
+                display_names[index],
                 color,
               ) {
-              None => {
-                tui_commit_line(render_state, format_cancelled_step(color~))
-                return 130
-              }
+              None => return 130
               Some(ok) => ok
             }
           } else {
@@ -606,140 +856,201 @@ async fn interactive_add(
           }
           if approved {
             major_indices.push(index)
-            major_packages.push(labels[index])
           }
         }
-        remaining = remaining.filter(index => !major_indices.contains(index))
-        let major_summary = if major_packages.is_empty() {
-          style_dim("none", color)
-        } else {
-          major_packages.map(p => style_pkg(p, color)).join(", ")
-        }
-        tui_commit_line(
-          render_state,
-          format_completed_step(
-            style_bump("major", color) + ": " + major_summary,
-            color~,
-          ),
-        )
-      }
-      None => {
-        tui_commit_line(render_state, format_cancelled_step(color~))
-        return 130
-      }
     }
+    remaining = remaining.filter(index => !major_indices.contains(index))
 
     if !remaining.is_empty() {
       match
-        tui_choose_indices(
+        tui_ask_group_multiselect(
           render_state,
-          "? Which packages should have a minor bump?",
-          remaining,
-          labels,
-          versions,
-          [],
-          [],
-          color,
-          allow_empty=true,
+          style_bold(
+            "Which packages should have a " +
+            style_green("minor", color) +
+            " " +
+            style_semver_hint("minor", color) +
+            " bump?",
+            color,
+          ),
+          [("all packages", remaining)],
+          pkg_ver_labels,
+          submitted_names=pkg_ver_plain,
+          required=false,
+          with_guide=true,
+          color~,
         ) {
-        Some(minor_selected) => {
-          let minor_packages : Array[String] = []
+        None => return 130
+        Some(minor_selected) =>
           for index in minor_selected {
             minor_indices.push(index)
-            minor_packages.push(labels[index])
           }
-          let minor_summary = if minor_packages.is_empty() {
-            style_dim("none", color)
-          } else {
-            minor_packages.map(p => style_pkg(p, color)).join(", ")
-          }
-          tui_commit_line(
-            render_state,
-            format_completed_step(
-              style_bump("minor", color) + ": " + minor_summary,
-              color~,
-            ),
-          )
-          remaining = remaining.filter(index => !minor_indices.contains(index))
-        }
-        None => {
-          tui_commit_line(render_state, format_cancelled_step(color~))
-          return 130
-        }
       }
+      remaining = remaining.filter(index => !minor_indices.contains(index))
     }
 
-    let patch_packages = remaining.map(index => labels[index])
-    let staged_changes = assign_bump_stages(
-      labels, chosen_indices, major_indices, minor_indices,
-    )
-    for change in staged_changes {
-      selected.push(change)
-    }
-    if !patch_packages.is_empty() {
-      tui_commit_line(
+    if !remaining.is_empty() {
+      let patch_list = remaining.map(i => pkg_ver_labels[i]).join(", ")
+      tui_print_static(
         render_state,
-        format_completed_step(
-          style_bump("patch", color) +
-          ": " +
-          patch_packages.map(p => style_pkg(p, color)).join(", "),
+        render_clack_log(
+          "info",
+          [
+            "The following packages will be " +
+            style_blue("patch", color) +
+            " " +
+            style_semver_hint("patch", color) +
+            " bumped:",
+            style_gray(patch_list, color),
+          ],
+          with_guide=true,
           color~,
         ),
       )
     }
+
+    let staged_changes = assign_bump_stages(
+      unit_ids, chosen_indices, major_indices, minor_indices,
+    )
+    for i, change in staged_changes {
+      selected.push(change)
+      let idx = chosen_indices[i]
+      selected_display.push((display_names[idx], change.bump))
+    }
   }
 
-  let mut summary_state = SummaryState::new()
-  let mut submitted = false
-  let mut summary_hint = ""
-  while !submitted {
-    let prompt = render_summary_page(
-      summary_state,
-      has_editor,
-      color~,
-      hint=summary_hint,
-    )
-    tui_render_screen(render_state, prompt)
-    let key = tui_read_key()
-    let next = reduce_summary(summary_state, key)
-    if next.cancelled {
-      tui_commit_line(render_state, format_cancelled_step(color~))
-      return 130
-    }
-    if next.open_editor ||
-      (next.confirmed && next.text().trim() == "" && has_editor) {
-      summary_hint = ""
-      match edit_summary_in_editor(summary_state.text(), render_state) {
-        Some(edited) => summary_state = SummaryState::new(initial=edited)
-        None =>
-          summary_state = {
-            ..summary_state,
-            open_editor: false,
-            confirmed: false,
+  let final_summary = match options.summary {
+    Some(pre_summary) if pre_summary.trim() != "" =>
+      pre_summary.trim().to_owned()
+    _ => {
+      let mut summary_text = ""
+      let placeholder = if has_editor {
+        "  (submit nothing to open an external editor)"
+      } else {
+        ""
+      }
+      match
+        tui_ask_text(
+          render_state,
+          "Please enter a summary for this change (this will be in the changelogs).",
+          placeholder~,
+          not_empty=!has_editor,
+          allow_ctrl_e=has_editor,
+          allow_empty_submit=has_editor,
+          with_guide=true,
+          color~,
+        ) {
+        TextCancelled => return 130
+        TextOpenEditor(draft) =>
+          match edit_summary_in_editor(draft, render_state) {
+            EditorResult(edited) => summary_text = edited
+            EditorEmpty =>
+              match
+                tui_ask_text(
+                  render_state,
+                  "Did not find a summary in the edited file. Please enter one:",
+                  not_empty=true,
+                  with_guide=true,
+                  color~,
+                ) {
+                TextSubmitted(s) => summary_text = s.trim().to_owned()
+                _ => return 130
+              }
+            EditorError =>
+              match
+                tui_ask_text(
+                  render_state,
+                  style_red(
+                    "An error happened using external editor. Please type your summary here:",
+                    color,
+                  ),
+                  not_empty=true,
+                  with_guide=true,
+                  color~,
+                ) {
+                TextSubmitted(s) => summary_text = s.trim().to_owned()
+                _ => return 130
+              }
+          }
+        TextSubmitted(entered) =>
+          if entered.trim() != "" {
+            summary_text = entered.trim().to_owned()
+          } else {
+            match edit_summary_in_editor("", render_state) {
+              EditorResult(edited) => summary_text = edited
+              EditorEmpty =>
+                match
+                  tui_ask_text(
+                    render_state,
+                    "Did not find a summary in the edited file. Please enter one:",
+                    not_empty=true,
+                    with_guide=true,
+                    color~,
+                  ) {
+                  TextSubmitted(s) => summary_text = s.trim().to_owned()
+                  _ => return 130
+                }
+              EditorError =>
+                match
+                  tui_ask_text(
+                    render_state,
+                    style_red(
+                      "An error happened using external editor. Please type your summary here:",
+                      color,
+                    ),
+                    not_empty=true,
+                    with_guide=true,
+                    color~,
+                  ) {
+                  TextSubmitted(s) => summary_text = s.trim().to_owned()
+                  _ => return 130
+                }
+            }
           }
       }
-      continue
-    }
-    summary_state = { ..next, open_editor: false, confirmed: false, }
-    if next.confirmed {
-      if summary_state.text().trim() != "" {
-        submitted = true
-      } else {
-        summary_hint = "Summary cannot be empty"
-      }
-    } else if key != Unknown {
-      summary_hint = ""
+      summary_text
     }
   }
 
-  let final_summary = summary_state.text().trim().to_owned()
-  tui_commit_line(
+  let major_names : Array[String] = []
+  let minor_names : Array[String] = []
+  let patch_names : Array[String] = []
+  for item in selected_display {
+    let (name, bump) = item
+    match bump {
+      @model.Major => major_names.push(name)
+      @model.Minor => minor_names.push(name)
+      @model.Patch => patch_names.push(name)
+      @model.None => ()
+    }
+  }
+  tui_print_static(
     render_state,
-    format_completed_step(
-      "Summary: " + style_dim(summary_preview(final_summary), color),
+    render_changeset_summary(
+      major=major_names,
+      minor=minor_names,
+      patch=patch_names,
+      with_guide=true,
       color~,
     ),
   )
+  if ordered_units.length() > 1 {
+    tui_print_static(
+      render_state,
+      render_note_box(
+        "NOTE",
+        [
+          "All packages that depend on these whose required versions will be incompatible will also be " +
+          style_blue("patch", color) +
+          " bumped when this changeset is applied.",
+        ],
+        with_guide=true,
+        columns=tty_cols(),
+        color~,
+      ),
+    )
+  }
+
   // Restore cooked terminal mode & cursor BEFORE file I/O, external formatters,
   // or git commit hooks run.
   tui_cleanup(render_state)
@@ -766,24 +1077,72 @@ async fn interactive_add(
       no_format=options.no_format,
     ),
   )
+  let mut committed = false
   if !options.no_commit &&
     (
       loaded.snapshot.config.commit.mode == @model.CommitMode::Add ||
       loaded.snapshot.config.commit.mode == @model.CommitMode::Both
     ) {
-    ignore(
-      @executor.commit_changes(
-        loaded.snapshot.root,
-        [rel_written],
-        loaded.snapshot.config.commit.add_message,
-      ),
+    committed = @executor.commit_changes(
+      loaded.snapshot.root,
+      [rel_written],
+      loaded.snapshot.config.commit.add_message,
     )
   }
   if options.open_editor {
     ignore(open_in_external_editor(written))
   }
   if !options.quiet {
-    println(style_success("Created ", color) + style_pkg(written, color))
+    let has_major = !major_names.is_empty()
+    if has_major {
+      tui_print_static(
+        render_state,
+        render_note_box(
+          "IMPORTANT",
+          [
+            "This Changeset includes a major change and we STRONGLY recommend adding more information to the changeset:",
+            "  WHAT the breaking change is", "  WHY the change was made", "  HOW a consumer should update their code",
+          ],
+          title_yellow=true,
+          body_white=true,
+          with_guide=true,
+          columns=tty_cols(),
+          color~,
+        ),
+      )
+    }
+    let rel_from_cwd = @path.Path(written)
+      .relative(base=@path.Path(options.cwd))
+      .to_string()
+    let final_lines : Array[String] = [
+      style_green(
+        if committed {
+          "Changeset added and committed!"
+        } else {
+          "Changeset added - you can now commit it!"
+        },
+        color,
+      ),
+    ]
+    if !has_major {
+      final_lines.push(
+        style_green(
+          "If you want to modify or expand on the changeset summary, you can find it here:",
+          color,
+        ),
+      )
+    }
+    final_lines.push(style_blue(rel_from_cwd, color))
+    tui_print_static(
+      render_state,
+      render_clack_log(
+        "success",
+        final_lines,
+        with_guide=true,
+        trailing_bar=false,
+        color~,
+      ),
+    )
   }
   0
 }

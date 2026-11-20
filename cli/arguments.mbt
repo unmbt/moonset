@@ -134,6 +134,8 @@ fn is_always_value_flag(arg : String) -> Bool {
     | "--ignore"
     | "--type"
     | "--summary"
+    | "--message"
+    | "-m"
     | "--id"
     | "--head-repo"
     | "--head-ref"
@@ -467,6 +469,8 @@ fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
       | "--ignore"
       | "--type"
       | "--summary"
+      | "--message"
+      | "-m"
       | "--id"
       | "--head-repo"
       | "--head-ref"
@@ -505,7 +509,7 @@ fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
               }
             }
           "--type" => bump = Some(value)
-          "--summary" => summary = Some(value)
+          "--summary" | "--message" | "-m" => summary = Some(value)
           "--head-repo" => head_repo = Some(value)
           "--head-ref" => head_ref = Some(value)
           "--tag-format" => tag_format = value

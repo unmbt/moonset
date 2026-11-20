@@ -46,7 +46,7 @@ async fn add_command(options : Options) -> Int32 {
   if !options.json &&
     options.packages.is_empty() &&
     !options.empty &&
-    options.summary is None &&
+    options.bump is None &&
     !is_non_interactive() {
     return interactive_add(options, loaded)
   }

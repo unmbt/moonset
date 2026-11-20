@@ -1,11 +1,6 @@
 ///|
 fn cli_version() -> String {
-  let document = @manifest.parse(
-    @manifest.Kind::Mod,
-    embedded_moon_mod,
-    path="moon.mod",
-  )
-  document.version().unwrap_or("0.0.0")
+  VERSION
 }
 
 ///|
@@ -110,6 +105,71 @@ fn style_bump(bump : String, enabled : Bool) -> String {
     bump
   } else {
     style_text(bump, tone, enabled)
+  }
+}
+
+///|
+fn style_bold(text : String, enabled : Bool) -> String {
+  style_text(text, "1", enabled)
+}
+
+///|
+fn style_gray(text : String, enabled : Bool) -> String {
+  style_text(text, "90", enabled)
+}
+
+///|
+fn style_cyan(text : String, enabled : Bool) -> String {
+  style_text(text, "36", enabled)
+}
+
+///|
+fn style_green(text : String, enabled : Bool) -> String {
+  style_text(text, "32", enabled)
+}
+
+///|
+fn style_red(text : String, enabled : Bool) -> String {
+  style_text(text, "31", enabled)
+}
+
+///|
+fn style_blue(text : String, enabled : Bool) -> String {
+  style_text(text, "34", enabled)
+}
+
+///|
+fn style_yellow(text : String, enabled : Bool) -> String {
+  style_text(text, "33", enabled)
+}
+
+///|
+fn style_white(text : String, enabled : Bool) -> String {
+  style_text(text, "37", enabled)
+}
+
+///|
+fn style_inverse(text : String, enabled : Bool) -> String {
+  style_text(text, "7", enabled)
+}
+
+///|
+/// Render `@changesets/cli` colored `(X.X.X)` bump hints (`(X.X.X)` with red/green/blue X).
+fn style_semver_hint(kind : String, enabled : Bool) -> String {
+  match kind {
+    "major" =>
+      style_gray("(", enabled) +
+      style_red("X", enabled) +
+      style_gray(".X.X)", enabled)
+    "minor" =>
+      style_gray("(X.", enabled) +
+      style_green("X", enabled) +
+      style_gray(".X)", enabled)
+    "patch" =>
+      style_gray("(X.X.", enabled) +
+      style_blue("X", enabled) +
+      style_gray(")", enabled)
+    _ => ""
   }
 }
 

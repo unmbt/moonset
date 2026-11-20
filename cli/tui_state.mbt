@@ -21,90 +21,6 @@ priv enum TuiKey {
 }
 
 ///|
-priv struct SelectState {
-  cursor : Int32
-  selected : Array[Bool]
-  cancelled : Bool
-  confirmed : Bool
-}
-
-///|
-fn SelectState::new(length : Int32) -> SelectState {
-  {
-    cursor: 0,
-    selected: Array::make(length, false),
-    cancelled: false,
-    confirmed: false,
-  }
-}
-
-///|
-fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
-  let next = { ..state, }
-  let length = state.selected.length()
-  if length == 0 {
-    match key {
-      Cancel | Escape => return { ..next, cancelled: true, }
-      _ => return next
-    }
-  }
-  match key {
-    Up | Char("k") =>
-      {
-        ..next,
-        cursor: if state.cursor == 0 {
-          length - 1
-        } else {
-          state.cursor - 1
-        },
-      }
-    Down | Char("j") =>
-      {
-        ..next,
-        cursor: if state.cursor + 1 == length {
-          0
-        } else {
-          state.cursor + 1
-        },
-      }
-    Home => { ..next, cursor: 0, }
-    End => { ..next, cursor: length - 1, }
-    Space => {
-      let values = state.selected.copy()
-      values[state.cursor] = !values[state.cursor]
-      { ..next, selected: values, }
-    }
-    Char("a") | Char("A") => {
-      let all_selected = state.selected.all(x => x)
-      let values = Array::make(length, !all_selected)
-      { ..next, selected: values, }
-    }
-    Backspace | Delete => {
-      let values = state.selected.copy()
-      values[state.cursor] = false
-      { ..next, selected: values, }
-    }
-    Enter => { ..next, confirmed: state.selected.any(x => x), }
-    Cancel | Escape => { ..next, cancelled: true, }
-    _ => next
-  }
-}
-
-///|
-fn reduce_select_stage(
-  state : SelectState,
-  key : TuiKey,
-  allow_empty~ : Bool = false,
-) -> SelectState {
-  let next = reduce_select(state, key)
-  if key == Enter && allow_empty {
-    { ..next, confirmed: true, }
-  } else {
-    next
-  }
-}
-
-///|
 fn reduce_choice(
   cursor : Int32,
   length : Int32,
@@ -249,5 +165,150 @@ fn reduce_summary(state : SummaryState, key : TuiKey) -> SummaryState {
     CtrlE => { ..state, open_editor: true, }
     Cancel | Escape => { ..state, cancelled: true, }
     _ => state
+  }
+}
+
+///|
+/// Pure state machine for `@clack/prompts`-style Yes/No confirmation prompts.
+priv struct ConfirmState {
+  value : Bool
+  confirmed : Bool
+  cancelled : Bool
+}
+
+///|
+fn ConfirmState::new(initial~ : Bool = false) -> ConfirmState {
+  { value: initial, confirmed: false, cancelled: false, }
+}
+
+///|
+fn reduce_confirm(state : ConfirmState, key : TuiKey) -> ConfirmState {
+  match key {
+    Left
+    | Right
+    | Up
+    | Down
+    | Tab
+    | Space
+    | Char("h")
+    | Char("l")
+    | Char("j")
+    | Char("k") => { ..state, value: !state.value, }
+    Char("y") | Char("Y") => { ..state, value: true, }
+    Char("n") | Char("N") => { ..state, value: false, }
+    Enter => { ..state, confirmed: true, }
+    Cancel | Escape => { ..state, cancelled: true, }
+    _ => state
+  }
+}
+
+///|
+/// Row entry for `@clack/prompts` `groupMultiselect` (selectable group headers + items).
+priv enum GroupRow {
+  GroupHeader(String, Array[Int32])
+  GroupItem(Int32)
+}
+
+///|
+priv struct GroupMultiselectState {
+  cursor : Int32
+  selected : Array[Bool]
+  error : String
+  confirmed : Bool
+  cancelled : Bool
+}
+
+///|
+fn GroupMultiselectState::new(item_count : Int32) -> GroupMultiselectState {
+  {
+    cursor: 0,
+    selected: Array::make(item_count, false),
+    error: "",
+    confirmed: false,
+    cancelled: false,
+  }
+}
+
+///|
+fn reduce_group_multiselect(
+  state : GroupMultiselectState,
+  rows : Array[GroupRow],
+  key : TuiKey,
+  required~ : Bool = false,
+) -> GroupMultiselectState {
+  let row_count = rows.length()
+  if row_count == 0 {
+    match key {
+      Cancel | Escape => return { ..state, cancelled: true, }
+      Enter =>
+        if !required {
+          return { ..state, confirmed: true, error: "", }
+        } else {
+          return { ..state, error: "Please select at least one option", }
+        }
+      _ => return state
+    }
+  }
+  match key {
+    Up | Char("k") => {
+      let next_cursor = if state.cursor <= 0 {
+        row_count - 1
+      } else {
+        state.cursor - 1
+      }
+      { ..state, cursor: next_cursor, error: "", }
+    }
+    Down | Char("j") => {
+      let next_cursor = if state.cursor + 1 >= row_count {
+        0
+      } else {
+        state.cursor + 1
+      }
+      { ..state, cursor: next_cursor, error: "", }
+    }
+    Home => { ..state, cursor: 0, error: "", }
+    End => { ..state, cursor: row_count - 1, error: "", }
+    Space => {
+      let values = state.selected.copy()
+      match rows[state.cursor] {
+        GroupHeader(_, members) => {
+          let all_on = !members.is_empty() && members.all(idx => values[idx])
+          for idx in members {
+            values[idx] = !all_on
+          }
+        }
+        GroupItem(idx) => values[idx] = !values[idx]
+      }
+      { ..state, selected: values, error: "", }
+    }
+    Char("a") | Char("A") => {
+      let all_on = !state.selected.is_empty() && state.selected.all(x => x)
+      let values = Array::make(state.selected.length(), !all_on)
+      { ..state, selected: values, error: "", }
+    }
+    Backspace | Delete => {
+      let values = state.selected.copy()
+      match rows[state.cursor] {
+        GroupHeader(_, members) =>
+          for idx in members {
+            values[idx] = false
+          }
+        GroupItem(idx) => values[idx] = false
+      }
+      { ..state, selected: values, error: "", }
+    }
+    Enter =>
+      if !required || state.selected.any(x => x) {
+        { ..state, confirmed: true, error: "", }
+      } else {
+        {
+          ..state,
+          confirmed: false,
+          error: "Please select at least one option",
+        }
+      }
+    Cancel | Escape => { ..state, cancelled: true, }
+    Unknown => state
+    _ => { ..state, error: "", }
   }
 }

@@ -2,9 +2,9 @@
 fn render_help(topic : String?) -> String {
   match topic {
     Some("init") =>
-      "moonset init [--force] [--config path] [--json]\n  Initialize .changeset/config.json, .changeset/README.md, and .moonset/.gitignore."
+      "moonset init [--force] [--config path] [--yes] [--json]\n  Initialize .changeset/config.json, .changeset/README.md, and .moonset/.gitignore."
     Some("add") =>
-      "moonset add [--package unit[,unit]] [--type major|minor|patch|none | --major | --minor | --patch] [--summary text] [--empty] [--id stem] [--open] [--no-format] [--no-commit] [--json]\n  Create a changeset interactively (TUI) or non-interactively via flags."
+      "moonset add [--package unit[,unit]] [--type major|minor|patch|none | --major | --minor | --patch] [-m|--message|--summary text] [--empty] [--id stem] [--open] [--no-format] [--no-commit] [--json]\n  Create a changeset interactively (TUI) or non-interactively via flags."
     Some("pre") =>
       "moonset pre enter <tag> | exit | status [--json]\n  Manage Changesets v3 minimal prerelease mode (.changeset/pre.json + .changeset/pre/)."
     Some("status") =>

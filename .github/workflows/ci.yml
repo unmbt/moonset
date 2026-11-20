@@ -28,6 +28,7 @@ jobs:
       - run: moon build --target native --release
       - run: moon package
       - run: moon run scripts/embed-schema.mbtx --check
+      - run: moon run scripts/gen-version.mbtx --check
       - run: moon run scripts/lint-workflows.mbtx
       - run: moon run scripts/cli-integration.mbtx
       - run: moon info

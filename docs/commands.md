@@ -25,25 +25,25 @@ Phase 4 提供 `pack`、`publish`、`tag` 以及此前的 changeset、版本和�
 ## `init`
 
 ```text
-moonset init [--force] [--config path] [--format json]
+moonset init [--force] [--config path] [--format json] [--yes]
 ```
 
 创建：
 
-- `.changeset/config.json`：只在不存在时写入默认配置（`--force` 可显式覆盖）。
-- `.changeset/README.md`：解释 front matter 和提交流程。
+- `.changeset/config.json`：只在不存在时写入配置（`--force` 可显式覆盖）。在交互式 TTY 下（非 `--json`/`--yes`/`--quiet`/`CI=1`/`MOONSET_NON_INTERACTIVE=1`），采用与 `@changesets/cli` v3.0.3 一致的 `@clack/prompts` 无导轨 5 步向导交互采集 `changelog`（是否使用 GitHub changelog 及 `org/repo`）、`commit`（`both` / `never`）、`access`（`restricted` / `public`）与 `baseBranch`（浅灰默认提示 `main`，回车使用默认值）；已存在配置且未传 `--force` 时提示已初始化并退出（不覆盖用户文件）。非交互与 `--json` 模式直接写入默认模板并输出 JSON。
+- `.changeset/README.md`：解释 front matter 和提交流程（不存在时写入）。
 - `.moonset/.gitignore`：忽略运行时临时状态（`version-journal.json`、`publish-state.json`、`pack-results.json`、`pack-results-*.json`）。依据 [ADR-009](decisions/009-changesets-v3-pre-and-snapshot-model.md)，`.changeset/pre.json` 必须提交至 Git，不再写入 `.changeset/.gitignore`。
 
 ## `add`
 
 ```text
 moonset add [--package name ...] [--type major|minor|patch|none | --major | --minor | --patch]
-  [--summary text] [--empty] [--id id] [--open] [--no-format] [--no-commit]
+  [-m|--message|--summary text] [--empty] [--id id] [--open] [--no-format] [--no-commit]
 ```
 
-交互式模式采用内置跨平台 UTF-8 原生 TUI（Windows 下通过 `WriteConsoleW` / `ReadConsoleInputW` 完整支持中文输入法与显示，无乱码），在主屏内联原地重绘，不启用备用屏幕或全屏清除。多包流程先按 changed/unchanged 分组选择，再选择 major 和 minor，剩余包归为 patch；每步确认后折叠为单行摘要。单包直接选择 patch/minor/major。`0.x -> 1.0.0` major 需要确认；摘要支持光标编辑、空摘要调用外部 `$VISUAL`/`$EDITOR` 和 `Ctrl+E`。渲染按终端显示列宽处理中文及全角字符折行。设置 `CI=1` 或 `MOONSET_NON_INTERACTIVE=1` 时自动关闭 TUI。
+交互式模式采用内置跨平台 UTF-8 原生 TUI（Windows 下通过 `WriteConsoleW` / `ReadConsoleInputW` 完整支持中文输入法与显示，无乱码），在主屏内联原地重绘，不启用备用屏幕或全屏清除，并 1:1 复刻 `@changesets/cli` v3.0.3（`@clack/prompts` 导轨模式 `┌`/`│`/`◇`/`◆`/`●`/`└`）流程：过滤不可版本化包（ignored、无 `version` 或未启用 `privatePackages.version` 的私有包）；多包先在 `changed packages` / `unchanged packages` 分组多选中按上下与空格选择（支持在分组标题行按空格整组切换，空回车提示校验错误），再分别选择 major 和 minor（项格式为 `pkg@version` 与彩色 `(X.X.X)` 提示），剩余包以 `●` 展示为 patch；`0.x -> 1.0.0` major 弹出 `IMPORTANT` 圆角框并确认；单包直接通过 `●`/`○` 选择 patch/minor/major；摘要输入显示浅灰 placeholder `  (submit nothing to open an external editor)`，支持 UTF-8 光标编辑、空回车或 `Ctrl+E` 调用外部 `$VISUAL`/`$EDITOR` 及错误/空内容回退提示；完成后输出 `Summary of changesets:`、多包 `NOTE` 提示框、含 major 时的 `IMPORTANT` 提示框及 changeset 相对路径。渲染按终端显示列宽处理中文及全角字符折行。设置 `CI=1` 或 `MOONSET_NON_INTERACTIVE=1` 时自动关闭 TUI。
 
-非交互式模式要求同时提供 `--package`、`--type`（或 `--major`/`--minor`/`--patch`）和 `--summary`，或显式 `--empty`。所有参数均支持 `--flag=value` 与 `--` 终止符；`--id` 严格限制为安全文件名（拒绝路径穿越）。一个文件可以包含多个包的 release。
+非交互式模式要求同时提供 `--package`、`--type`（或 `--major`/`--minor`/`--patch`）和 `--summary`/`--message`/`-m`，或显式 `--empty`。所有参数均支持 `--flag=value` 与 `--` 终止符；`--id` 严格限制为安全文件名（拒绝路径穿越）。一个文件可以包含多个包的 release。
 
 文件格式：
 

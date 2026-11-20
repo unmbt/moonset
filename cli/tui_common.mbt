@@ -79,6 +79,16 @@ fn tui_commit_line(state : TuiRenderState, line : String) -> Unit {
 }
 
 ///|
+/// Print a static block (intro, log message, or note box) while resetting active frame tracking.
+fn tui_print_static(state : TuiRenderState, block : String) -> Unit {
+  if block == "" {
+    return
+  }
+  tty_write(tui_frame_output(state.prev_lines, block))
+  state.prev_lines = 0
+}
+
+///|
 fn tui_read_key() -> TuiKey {
   tui_key(tty_read_raw_event())
 }

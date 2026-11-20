@@ -89,81 +89,129 @@ test "arguments parse pre tag, doctor, publish flags, and tag format without con
 }
 
 ///|
-test "TUI state reducers and deterministic views support package, bump, and summary flow" {
-  let s0 = SelectState::new(2)
-  let s1 = reduce_select(s0, Enter)
-  assert_true(!s1.confirmed)
-  let s2 = reduce_select(s1, Space)
-  let s3 = reduce_select(s2, Down)
-  let s4 = reduce_select(s3, Enter)
-  assert_true(s4.confirmed)
-  assert_eq(s4.selected, [true, false])
-  let page = render_package_page(
-    ["moonbit:acme/a", "moonbit:acme/b"],
-    ["0.1.0", "0.2.0"],
-    s3,
-  )
-  assert_true(page.contains(" [x] moonbit:acme/a  0.1.0"))
-  assert_true(page.contains("> [ ] moonbit:acme/b  0.2.0"))
+test "TUI state reducers and deterministic clack views support group multiselect, confirm, select, text, and note boxes" {
+  let rows = [
+    GroupHeader("changed packages", [0]),
+    GroupItem(0),
+    GroupHeader("unchanged packages", [1]),
+    GroupItem(1),
+  ]
+  let labels = ["@cs-demo/ui", "@cs-demo/utils"]
+  let g0 = GroupMultiselectState::new(2)
+  // Required group multiselect rejects empty Enter with validation message
+  let g1 = reduce_group_multiselect(g0, rows, Enter, required=true)
+  assert_true(!g1.confirmed)
+  assert_true(g1.error != "")
+  // Optional stage allows empty Enter
+  let g_skip = reduce_group_multiselect(g0, rows, Enter, required=false)
+  assert_true(g_skip.confirmed)
+  // Space on GroupHeader("changed packages", [0]) toggles item 0 and clears error
+  let g2 = reduce_group_multiselect(g1, rows, Space, required=true)
+  assert_eq(g2.selected, [true, false])
+  assert_eq(g2.error, "")
+  // Navigate to item 1 and toggle it
+  let g3 = reduce_group_multiselect(g2, rows, Down, required=true)
+  let g4 = reduce_group_multiselect(g3, rows, Down, required=true)
+  let g5 = reduce_group_multiselect(g4, rows, Down, required=true)
+  let g6 = reduce_group_multiselect(g5, rows, Space, required=true)
+  assert_eq(g6.selected, [true, true])
+  let g7 = reduce_group_multiselect(g6, rows, Enter, required=true)
+  assert_true(g7.confirmed)
 
-  let (c1, ok1, back1) = reduce_choice(2, 4, Up)
-  assert_eq(c1, 1)
-  assert_true(!ok1 && !back1)
-  let (_, ok2, back2) = reduce_choice(c1, 4, Left)
-  assert_true(!ok2 && !back2)
-  assert_true(
-    render_bump_page("moonbit:acme/a", "0.1.0", 1).contains("> minor"),
+  let active_group_view = render_group_multiselect_prompt(
+    "Which packages were affected by the changes you made?", rows, labels, g2,
   )
+  assert_true(active_group_view.contains("◆  Which packages were affected"))
+  assert_true(active_group_view.contains("◼ changed packages"))
+  assert_true(active_group_view.contains("◼ @cs-demo/ui"))
+  assert_true(active_group_view.contains("◻ @cs-demo/utils"))
+  let err_group_view = render_group_multiselect_prompt(
+    "Which packages were affected by the changes you made?", rows, labels, g1,
+  )
+  assert_true(err_group_view.contains("▲  Which packages were affected"))
+  assert_true(err_group_view.contains("Please select at least one option"))
+  let submitted_group_view = render_group_multiselect_prompt(
+    "Which packages were affected by the changes you made?",
+    rows,
+    labels,
+    g7,
+    submitted=true,
+    submitted_text="@cs-demo/ui, @cs-demo/utils",
+  )
+  assert_true(
+    submitted_group_view.contains("◇  Which packages were affected"),
+  )
+  assert_true(submitted_group_view.contains("│  @cs-demo/ui, @cs-demo/utils"))
+
+  // Confirm state machine (`init` default No, `0.x` major default Yes)
+  let c0 = ConfirmState::new(initial=false)
+  assert_true(!c0.value)
+  let c1 = reduce_confirm(c0, Left)
+  assert_true(c1.value)
+  let c2 = reduce_confirm(c1, Char("n"))
+  assert_true(!c2.value)
+  let c3 = reduce_confirm(c2, Char("y"))
+  assert_true(c3.value)
+  let c4 = reduce_confirm(c3, Enter)
+  assert_true(c4.confirmed && c4.value)
+  let c_view = render_confirm_prompt(
+    "Should the GitHub integration be used for changelogs?",
+    c0,
+    with_guide=false,
+  )
+  assert_true(c_view.contains("○ Yes / ● No"))
+  assert_true(!c_view.contains("│"))
+
+  // Single-select bump choices
+  let (c_sel1, ok1, back1) = reduce_choice(2, 3, Up)
+  assert_eq(c_sel1, 1)
+  assert_true(!ok1 && !back1)
+  let (_, ok2, back2) = reduce_choice(c_sel1, 3, Left)
+  assert_true(!ok2 && !back2)
+  let sel_view = render_select_prompt(
+    "What kind of change is this for acme/app?",
+    ["patch (X.X.X)", "minor (X.X.X)", "major (X.X.X)"],
+    1,
+  )
+  assert_true(sel_view.contains("● minor (X.X.X)"))
+  assert_true(sel_view.contains("○ patch (X.X.X)"))
+
+  // Text prompt placeholder (`main`) and colored first-char inverse cursor
+  let empty_text = SummaryState::new()
+  let plain_branch = render_text_prompt(
+    "Which base branch should be used?",
+    empty_text,
+    placeholder="main",
+    with_guide=false,
+    color=false,
+  )
+  assert_true(plain_branch.contains("main"))
+  let colored_branch = render_text_prompt(
+    "Which base branch should be used?",
+    empty_text,
+    placeholder="main",
+    with_guide=false,
+    color=true,
+  )
+  assert_true(colored_branch.contains("\u{001b}[7mm\u{001b}[0m"))
+  assert_true(colored_branch.contains("\u{001b}[90main\u{001b}[0m"))
 
   let s1 = reduce_summary(SummaryState::new(), Char("h"))
   let s2 = reduce_summary(s1, Char("i"))
   let s3 = reduce_summary(s2, Backspace)
   assert_eq(s3.text(), "h")
-  let committed = format_completed_step("minor: moonbit:acme/a")
-  assert_eq(committed, "✓ minor: moonbit:acme/a")
-  assert_eq(format_cancelled_step(), "✗ Cancelled")
-  assert_true(
-    render_summary_page(SummaryState::new(initial="Add feature"), false).contains(
-      "Add feature",
-    ),
-  )
-  assert_true(
-    render_summary_page(
-      SummaryState::new(),
-      false,
-      hint="Summary cannot be empty",
-    ).contains("! Summary cannot be empty"),
-  )
+  let cancel_block = render_clack_cancel("Question?", with_guide=true)
+  assert_true(cancel_block.contains("■  Question?"))
+  assert_true(cancel_block.contains("└  Canceled... 👋"))
   let (c_home, _, _) = reduce_choice(2, 4, Home)
   assert_eq(c_home, 0)
   let (c_end, _, _) = reduce_choice(0, 4, End)
   assert_eq(c_end, 3)
-  assert_true(!reduce_select_stage(SelectState::new(2), Enter).confirmed)
-  assert_true(
-    reduce_select_stage(SelectState::new(2), Enter, allow_empty=true).confirmed,
-  )
+
   let staged = assign_bump_stages(["a", "b", "c"], [0, 1, 2], [0], [1])
   assert_true(staged[0].bump == @model.Major)
   assert_true(staged[1].bump == @model.Minor)
   assert_true(staged[2].bump == @model.Patch)
-  let grouped = render_package_page(
-    ["changed", "unchanged"],
-    ["1.0.0", "1.0.0"],
-    SelectState::new(2),
-    changed_flags=[true, false],
-    publish_flags=[true, false],
-  )
-  assert_true(grouped.contains("changed packages"))
-  assert_true(grouped.contains("unchanged packages"))
-  assert_true(grouped.contains("[no-publish]"))
-  // When no package is changed, omit redundant group headers
-  let ungrouped = render_package_page(
-    ["a", "b"],
-    ["1.0.0", "1.0.0"],
-    SelectState::new(2),
-    changed_flags=[false, false],
-  )
-  assert_true(!ungrouped.contains("unchanged packages"))
 }
 
 ///|
@@ -426,20 +474,19 @@ test "v0.3.0 CLI argument parser: --flag=value, --major, tagless --snapshot, --o
 }
 
 ///|
-test "v0.3.0 built-in TUI supports Space, UTF-8 Chinese editing, cursor movement, select-all, changed badge, and 0.x major confirm" {
-  // Select-all toggle ('a') and changed badge
-  let s0 = SelectState::new(2)
-  let s_all = reduce_select(s0, Char("a"))
-  assert_eq(s_all.selected, [true, true])
-  let s_none = reduce_select(s_all, Char("a"))
-  assert_eq(s_none.selected, [false, false])
-  let pkg_view = render_package_page(
-    ["moonbit:acme/a", "moonbit:acme/b"],
-    ["0.2.0", "1.0.0"],
-    s_all,
-    changed_flags=[true, false],
-  )
-  assert_true(pkg_view.contains("[changed]"))
+test "v0.3.0 built-in TUI supports Space, UTF-8 Chinese editing, cursor movement, select-all, and clack note/init config" {
+  // Group select-all toggle ('a')
+  let rows = [
+    GroupHeader("changed packages", [0]),
+    GroupItem(0),
+    GroupHeader("unchanged packages", [1]),
+    GroupItem(1),
+  ]
+  let g0 = GroupMultiselectState::new(2)
+  let g_all = reduce_group_multiselect(g0, rows, Char("a"), required=true)
+  assert_eq(g_all.selected, [true, true])
+  let g_none = reduce_group_multiselect(g_all, rows, Char("a"), required=true)
+  assert_eq(g_none.selected, [false, false])
 
   // Summary editor: Chinese UTF-8 + Space + Left/Right cursor + Backspace + Delete
   let mut st = SummaryState::new()
@@ -455,11 +502,90 @@ test "v0.3.0 built-in TUI supports Space, UTF-8 Chinese editing, cursor movement
   assert_eq(st.text(), "修复 中文显乱码")
   st = reduce_summary(st, Delete)
   assert_eq(st.text(), "修复 中文显码")
-  assert_true(render_summary_page(st, true).contains("Ctrl+E"))
+  assert_true(
+    render_text_prompt(
+      "Please enter a summary for this change (this will be in the changelogs).",
+      st,
+    ).contains("修复 中文显|码"),
+  )
+  st = reduce_summary(st, End)
+  assert_true(
+    render_text_prompt(
+      "Please enter a summary for this change (this will be in the changelogs).",
+      st,
+    ).contains("修复 中文显码|"),
+  )
 
-  // Pre-1.0 major confirmation view
-  let warn = render_zero_major_confirm("moonbit:acme/a", "0.2.0", 0)
-  assert_true(warn.contains("graduate this package to 1.0.0"))
+  // Note box exact visual-width right-border alignment (including CJK and ANSI color)
+  let note_box = render_note_box(
+    "NOTE",
+    [
+      "All packages that depend on these whose required versions will be incompatible will also be patch bumped when this changeset is applied.",
+      "支持中文宽字符与 ANSI 对齐测试",
+    ],
+    columns=60,
+    color=true,
+  )
+  let box_lines = note_box.split("\n").map(x => x.to_owned()).collect()
+  // Last line is trailing "│" when with_guide=true; lines 0..n-1 form the box
+  let expected_w = visual_width(box_lines[0])
+  for i in 0..<(box_lines.length() - 1) {
+    assert_eq(visual_width(box_lines[i]), expected_w)
+  }
+
+  // Changeset summary & intro blocks
+  let sum_block = render_changeset_summary(major=["@cs-demo/ui"], patch=[
+    "@cs-demo/utils",
+  ])
+  assert_true(sum_block.contains("◆  Summary of changesets:"))
+  assert_true(sum_block.contains("│  major:  @cs-demo/ui"))
+  assert_true(sum_block.contains("│  patch:  @cs-demo/utils"))
+  assert_true(
+    render_clack_intro("🌙 moonset v0.3.0", with_guide=true).has_prefix(
+      "┌  🌙 moonset v0.3.0\n│",
+    ),
+  )
+
+  // `-m` / `--message` alias parsing
+  let msg_add = arguments(["add", "-m", "short summary"])
+  assert_eq(msg_add.command, "add")
+  assert_eq(msg_add.summary, Some("short summary"))
+  let msg_long = arguments(["add", "--message=long summary"])
+  assert_eq(msg_long.summary, Some("long summary"))
+
+  // Pre-1.0 major check
+  assert_true(is_pre_one_zero_version("0.2.0"))
+  assert_true(is_pre_one_zero_version("v0.0.1"))
+  assert_true(!is_pre_one_zero_version("1.0.0"))
+
+  // Interactive `init` generated config combinations validate cleanly against `config-v1.json`
+  let cfg_github = build_init_config_json({
+    use_github: true,
+    github_repo: "test/test",
+    auto_commit: true,
+    access: "restricted",
+    base_branch: "",
+  })
+  let parsed_gh = @engine.parse_config(cfg_github)
+  assert_eq(parsed_gh.changelog.generator, "github")
+  assert_eq(parsed_gh.github.repo, Some("test/test"))
+  assert_eq(parsed_gh.commit.mode, @model.CommitMode::Both)
+  assert_eq(parsed_gh.access, @model.Access::Restricted)
+  assert_eq(parsed_gh.base_branch, "main")
+
+  let cfg_builtin = build_init_config_json({
+    use_github: false,
+    github_repo: "",
+    auto_commit: false,
+    access: "public",
+    base_branch: "develop",
+  })
+  let parsed_bi = @engine.parse_config(cfg_builtin)
+  assert_eq(parsed_bi.changelog.generator, "builtin")
+  assert_eq(parsed_bi.github.repo, None)
+  assert_eq(parsed_bi.commit.mode, @model.CommitMode::Never)
+  assert_eq(parsed_bi.access, @model.Access::Public)
+  assert_eq(parsed_bi.base_branch, "develop")
 
   // Diagnostic stderr formatting: omit `:1:1:` when path is empty
   assert_eq(
