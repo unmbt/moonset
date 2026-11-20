@@ -14,6 +14,6 @@ pub fn fixture_render() -> String {
 ///|
 pub fn fixture_adapter_registry() -> Bool raise @api.MoonsetError {
   let registry = @api.AdapterRegistry::with_builtins()
-  registry.require("cargo", @api.Capability::Publish)
+  registry.require(@api.Ecosystem::Cargo, @api.Capability::Publish)
   true
 }

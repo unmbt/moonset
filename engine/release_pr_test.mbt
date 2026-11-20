@@ -1,15 +1,14 @@
 ///|
 test "render_release_pr_body renders intro, pre banner, summary table, and per-package changelog details" {
+  let mod_src = "name = \"unmbt/moonset\"\nversion = \"0.2.0-next.0\"\n"
   let ws0 = snapshot(
-    [unit("unmbt/moonset", version="0.2.0-next.0")],
+    [unit_with_source("unmbt/moonset", mod_src, version="0.2.0-next.0")],
     config="{\"baseBranch\":\"master\",\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"unmbt/moonset\"}}}",
   )
   let ws : @model.WorkspaceSnapshot = {
     ..ws0,
     sources: Map([
-      (
-        "unmbt/moonset/moon.mod", "name = \"unmbt/moonset\"\nversion = \"0.2.0-next.0\"\n",
-      ),
+      ("unmbt/moonset/moon.mod", mod_src),
       (
         ".changeset/feat-1.md", "---\nunmbt/moonset: minor\n---\nAdd automatic GitHub Release creation (#12)\n",
       ),
@@ -21,7 +20,7 @@ test "render_release_pr_body renders intro, pre banner, summary table, and per-p
     path=".changeset/feat-1.md",
   )
   let pre_active = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"next\",\"initialVersions\":{\"moonbit:unmbt/moonset\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:unmbt/moonset\":1},\"consumed\":[]}",
+    "{\"mode\":\"pre\",\"tag\":\"next\"}",
   )
   let analysis = @engine.build_plan(ws, [cs], pre=pre_active)
   let vp = @engine.build_version_plan_with_metadata(
@@ -31,6 +30,7 @@ test "render_release_pr_body renders intro, pre banner, summary table, and per-p
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-19",
     changeset_commits=Map([

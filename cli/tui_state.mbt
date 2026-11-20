@@ -1,17 +1,23 @@
 ///|
-/// Pure keyboard state used by both the native TUI and headless tests.
+/// Pure keyboard state used by both the native TUI and headless unit tests.
 #derive(Eq)
 priv enum TuiKey {
   Up
   Down
   Left
   Right
+  Home
+  End
   Enter
   Space
   Backspace
   Delete
+  Escape
+  Tab
+  CtrlE
   Cancel
   Char(String)
+  Unknown
 }
 
 ///|
@@ -38,12 +44,12 @@ fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
   let length = state.selected.length()
   if length == 0 {
     match key {
-      Cancel => return { ..next, cancelled: true, }
+      Cancel | Escape => return { ..next, cancelled: true, }
       _ => return next
     }
   }
   match key {
-    Up =>
+    Up | Char("k") =>
       {
         ..next,
         cursor: if state.cursor == 0 {
@@ -52,7 +58,7 @@ fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
           state.cursor - 1
         },
       }
-    Down =>
+    Down | Char("j") =>
       {
         ..next,
         cursor: if state.cursor + 1 == length {
@@ -61,9 +67,16 @@ fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
           state.cursor + 1
         },
       }
+    Home => { ..next, cursor: 0, }
+    End => { ..next, cursor: length - 1, }
     Space => {
       let values = state.selected.copy()
       values[state.cursor] = !values[state.cursor]
+      { ..next, selected: values, }
+    }
+    Char("a") | Char("A") => {
+      let all_selected = state.selected.all(x => x)
+      let values = Array::make(length, !all_selected)
       { ..next, selected: values, }
     }
     Backspace | Delete => {
@@ -72,7 +85,7 @@ fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
       { ..next, selected: values, }
     }
     Enter => { ..next, confirmed: state.selected.any(x => x), }
-    Cancel => { ..next, cancelled: true, }
+    Cancel | Escape => { ..next, cancelled: true, }
     _ => next
   }
 }
@@ -85,34 +98,119 @@ fn reduce_choice(
 ) -> (Int32, Bool, Bool) {
   if length <= 0 {
     match key {
-      Cancel => return (0, false, true)
+      Cancel | Escape => return (0, false, true)
       _ => return (0, false, false)
     }
   }
   match key {
-    Up => (if cursor == 0 { length - 1 } else { cursor - 1 }, false, false)
-    Down => (if cursor + 1 == length { 0 } else { cursor + 1 }, false, false)
+    Up | Char("k") =>
+      (if cursor == 0 { length - 1 } else { cursor - 1 }, false, false)
+    Down | Char("j") =>
+      (if cursor + 1 == length { 0 } else { cursor + 1 }, false, false)
     Enter => (cursor, true, false)
-    Cancel | Left => (cursor, false, true)
+    Cancel | Escape | Left => (cursor, false, true)
     _ => (cursor, false, false)
   }
 }
 
 ///|
-fn edit_summary(value : String, key : TuiKey) -> (String, Bool, Bool) {
+/// Character-indexed line editor supporting ASCII, Space, and full UTF-8 / CJK IME input.
+priv struct SummaryState {
+  chars : Array[Char]
+  cursor : Int32
+  confirmed : Bool
+  cancelled : Bool
+  open_editor : Bool
+}
+
+///|
+fn SummaryState::new(initial~ : String = "") -> SummaryState {
+  let chars = initial.to_array()
+  {
+    chars,
+    cursor: chars.length(),
+    confirmed: false,
+    cancelled: false,
+    open_editor: false,
+  }
+}
+
+///|
+fn SummaryState::text(self : SummaryState) -> String {
+  String::from_array(self.chars)
+}
+
+///|
+fn reduce_summary(state : SummaryState, key : TuiKey) -> SummaryState {
   match key {
-    Backspace | Delete => {
-      let chars = value.to_array()
-      if chars.is_empty() {
-        (value, false, false)
-      } else {
-        let _ = chars.pop()
-        (String::from_array(chars), false, false)
+    Left =>
+      { ..state, cursor: if state.cursor > 0 { state.cursor - 1 } else { 0 }, }
+    Right =>
+      {
+        ..state,
+        cursor: if state.cursor < state.chars.length() {
+          state.cursor + 1
+        } else {
+          state.chars.length()
+        },
       }
+    Home => { ..state, cursor: 0, }
+    End => { ..state, cursor: state.chars.length(), }
+    Backspace =>
+      if state.cursor <= 0 {
+        state
+      } else {
+        let next_chars : Array[Char] = []
+        for i in 0..<state.chars.length() {
+          if i != state.cursor - 1 {
+            next_chars.push(state.chars[i])
+          }
+        }
+        { ..state, chars: next_chars, cursor: state.cursor - 1, }
+      }
+    Delete =>
+      if state.cursor >= state.chars.length() {
+        state
+      } else {
+        let next_chars : Array[Char] = []
+        for i in 0..<state.chars.length() {
+          if i != state.cursor {
+            next_chars.push(state.chars[i])
+          }
+        }
+        { ..state, chars: next_chars, }
+      }
+    Space => {
+      let next_chars : Array[Char] = []
+      for i in 0..<state.cursor {
+        next_chars.push(state.chars[i])
+      }
+      next_chars.push(' ')
+      for i in state.cursor..<state.chars.length() {
+        next_chars.push(state.chars[i])
+      }
+      { ..state, chars: next_chars, cursor: state.cursor + 1, }
     }
-    Enter => (value, true, false)
-    Cancel => (value, false, true)
-    Char(text) => (value + text, false, false)
-    _ => (value, false, false)
+    Char(text) => {
+      let inserted = text.to_array()
+      if inserted.is_empty() {
+        return state
+      }
+      let next_chars : Array[Char] = []
+      for i in 0..<state.cursor {
+        next_chars.push(state.chars[i])
+      }
+      for ch in inserted {
+        next_chars.push(ch)
+      }
+      for i in state.cursor..<state.chars.length() {
+        next_chars.push(state.chars[i])
+      }
+      { ..state, chars: next_chars, cursor: state.cursor + inserted.length(), }
+    }
+    Enter => { ..state, confirmed: true, }
+    CtrlE => { ..state, open_editor: true, }
+    Cancel | Escape => { ..state, cancelled: true, }
+    _ => state
   }
 }

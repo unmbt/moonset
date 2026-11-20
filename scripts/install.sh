@@ -73,7 +73,7 @@ else
 fi
 
 echo "Fetching release info from GitHub..."
-if ! RELEASE_JSON=$(curl --fail --silent --show-error --location "$RELEASE_API"); then
+if ! RELEASE_JSON=$(curl --fail --silent --show-error --location -H "User-Agent: moonset-installer" "$RELEASE_API"); then
   echo "Failed to fetch release info. Please check your network or verify a Release exists." >&2
   exit 1
 fi
@@ -126,7 +126,7 @@ fi
 
 (
   cd "$TMP_DIR"
-  grep -E "[[:space:]]${ASSET_NAME}\$" SHA256SUMS > verify.sha256
+  tr -d '\r' < SHA256SUMS | awk -v asset="$ASSET_NAME" '($2 == asset || $2 == "*" asset) { print $1 "  " asset; found=1 } END { exit !found }' > verify.sha256
   if [ ! -s verify.sha256 ]; then
     echo "Asset $ASSET_NAME not found in SHA256SUMS" >&2
     exit 1
@@ -150,28 +150,48 @@ echo "✅ Installed $BIN_NAME v$TARGET_VERSION successfully to $BIN_PATH"
 export_path_line="export PATH=\"\$HOME/.unmbt:\$PATH\""
 add_to_path() {
   local rc_file="$1"
-  if [ -f "$rc_file" ]; then
-    if ! grep -q '\$HOME/.unmbt' "$rc_file"; then
-      echo "" >> "$rc_file"
-      echo "$export_path_line" >> "$rc_file"
-      echo "✅ Automatically added ~/.unmbt to $rc_file"
+  local create_if_missing="${2:-false}"
+  if [ ! -f "$rc_file" ]; then
+    if [ "$create_if_missing" = "true" ]; then
+      touch "$rc_file"
+    else
+      return 1
     fi
-    return 0
   fi
-  return 1
+  if ! grep -Fq '$HOME/.unmbt' "$rc_file"; then
+    echo "" >> "$rc_file"
+    echo "$export_path_line" >> "$rc_file"
+    echo "✅ Automatically added ~/.unmbt to $rc_file"
+  fi
+  return 0
 }
 
 added_to_path=false
-if [ -n "${ZSH_VERSION:-}" ] || [ "${SHELL:-}" = *zsh* ]; then
-  add_to_path "$HOME/.zshrc" && added_to_path=true || true
-elif [ -n "${BASH_VERSION:-}" ] || [ "${SHELL:-}" = *bash* ]; then
-  if add_to_path "$HOME/.bashrc" || add_to_path "$HOME/.bash_profile"; then
-    added_to_path=true
-  fi
+shell_name="${SHELL:-}"
+if [ -n "${ZSH_VERSION:-}" ]; then
+  add_to_path "$HOME/.zshrc" true && added_to_path=true || true
 else
-  add_to_path "$HOME/.zshrc" || true
-  add_to_path "$HOME/.bashrc" || true
-  added_to_path=true
+  case "$shell_name" in
+    *zsh*)
+      add_to_path "$HOME/.zshrc" true && added_to_path=true || true
+      ;;
+    *bash*)
+      if add_to_path "$HOME/.bashrc" false || add_to_path "$HOME/.bash_profile" false || add_to_path "$HOME/.bashrc" true; then
+        added_to_path=true
+      fi
+      ;;
+    *)
+      if [ -n "${BASH_VERSION:-}" ]; then
+        if add_to_path "$HOME/.bashrc" false || add_to_path "$HOME/.bash_profile" false || add_to_path "$HOME/.bashrc" true; then
+          added_to_path=true
+        fi
+      else
+        if add_to_path "$HOME/.zshrc" false || add_to_path "$HOME/.bashrc" false; then
+          added_to_path=true
+        fi
+      fi
+      ;;
+  esac
 fi
 
 if [ "$added_to_path" = true ]; then

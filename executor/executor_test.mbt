@@ -132,6 +132,24 @@ impl @executor.ExecutionHost for FakeHost with fn run(self, program, args, cwd) 
 }
 
 ///|
+impl @executor.ExecutionHost for FakeHost with fn run_with_env(
+  self,
+  program,
+  args,
+  cwd,
+  _env,
+  _stdin,
+  _timeout,
+) {
+  (self.runner)(program, args, cwd)
+}
+
+///|
+impl @executor.ExecutionHost for FakeHost with fn sleep_ms(_self, _ms) {
+  ()
+}
+
+///|
 impl @executor.ExecutionHost for FakeHost with fn getenv(self, name) {
   self.env.get(name)
 }
@@ -142,47 +160,79 @@ impl @executor.ExecutionHost for FakeHost with fn now(self) {
 }
 
 ///|
+fn mk_unit(
+  id : String,
+  native_name : String,
+  ecosystem : @model.Ecosystem,
+  workspace_id : String,
+  root : String,
+  manifest : String,
+  version : String?,
+  publish~ : Bool = true,
+  publish_config? : @model.PublishConfig,
+  dependencies~ : Array[@model.DependencyEdge] = [],
+) -> @model.ReleaseUnit {
+  {
+    id,
+    native_name,
+    ecosystem,
+    workspace_id,
+    root,
+    manifest,
+    version_path: manifest,
+    version_field: "version",
+    version_span: None,
+    version,
+    visibility: @model.Public,
+    publish,
+    publish_config,
+    dependencies,
+  }
+}
+
+///|
 fn sample_loaded(
   config_json~ : String = "{}",
   units? : Array[@model.ReleaseUnit],
+  pre? : @model.PreState,
 ) -> @workspace.LoadedWorkspace raise {
   let config = @engine.parse_config(config_json)
   let default_units = [
-    @model.ReleaseUnit::{
-      id: "moonbit:acme/a",
-      native_name: "acme/a",
-      ecosystem: "moonbit",
-      workspace_id: "main",
-      root: "a",
-      manifest: "a/moon.mod",
-      version_path: "a/moon.mod",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
-    @model.ReleaseUnit::{
-      id: "npm:@acme/b",
-      native_name: "@acme/b",
-      ecosystem: "npm",
-      workspace_id: "js",
-      root: "b",
-      manifest: "b/package.json",
-      version_path: "b/package.json",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
+    mk_unit(
+      "moonbit:acme/a",
+      "acme/a",
+      @model.MoonBit,
+      "main",
+      "a",
+      "a/moon.mod",
+      Some("0.1.1"),
+    ),
+    mk_unit(
+      "npm:@acme/b",
+      "@acme/b",
+      @model.Npm,
+      "js",
+      "b",
+      "b/package.json",
+      Some("0.1.1"),
+    ),
   ]
   {
     snapshot: {
       root: "/repo",
       workspaces: [
-        { id: "main", root: "a", ecosystem: "moonbit", manager: "moon", },
-        { id: "js", root: "b", ecosystem: "npm", manager: "npm", },
+        {
+          id: "main",
+          root: "a",
+          ecosystem: @model.MoonBit,
+          manager: @model.Moon,
+        },
+        {
+          id: "js",
+          root: "b",
+          ecosystem: @model.Npm,
+          manager: @model.PackageManager::Npm,
+        },
       ],
       units: units.unwrap_or(default_units),
       ownership: [],
@@ -194,14 +244,23 @@ fn sample_loaded(
       git_head: None,
     },
     changesets: [],
-    pre: None,
+    pre,
     changeset_directory: ".changeset",
     changeset_commits: Map([]),
   }
 }
 
 ///|
-async test "apply_version_plan rolls back cleanly on rename failure and recovers journal" {
+fn moon_view_404() -> @adapters.ProcessResult {
+  {
+    exit_code: 0,
+    stdout: "{\"version\":1,\"status\":\"failure\",\"result\":null,\"messages\":[{\"level\":\"error\",\"message\":\"HTTP status client error (404 Not Found)\"}]}",
+    stderr: "",
+  }
+}
+
+///|
+async test "apply_version_plan rolls back cleanly on rename failure, blocks unfinished journal, and confines recover paths" {
   let host = fake_host()
   let orig = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
   host.files["/repo/a/moon.mod"] = @utf8.encode(orig)
@@ -239,6 +298,7 @@ async test "apply_version_plan rolls back cleanly on rename failure and recovers
       affected_paths: [],
       changesets: [],
       next_pre_state: None,
+      is_snapshot: false,
       warnings: [],
       generated_at: None,
     },
@@ -254,11 +314,37 @@ async test "apply_version_plan rolls back cleanly on rename failure and recovers
   assert_true(failed)
   assert_eq(@utf8.decode_lossy(host.files["/repo/a/moon.mod"]), orig)
   assert_true(!host.files.contains("/repo/a/CHANGELOG.md"))
-  assert_true(!host.files.contains("/repo/a/CHANGELOG.md.moonset-1.tmp"))
+
+  // Refuses overwriting an existing unfinished journal
+  host.fail_on_rename = None
+  host.files["/repo/.moonset/version-journal.json"] = @utf8.encode(
+    "{\"planFingerprint\":\"old\",\"entries\":[]}",
+  )
+  let blocked_journal = try {
+    ignore(@executor.apply_version_plan_with(host, "/repo", plan))
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "unfinished-journal"
+    _ => false
+  }
+  assert_true(blocked_journal)
+
+  // Refuses path traversal inside tampered journal during recovery
+  host.files["/repo/.moonset/version-journal.json"] = @utf8.encode(
+    "{\"entries\":[{\"path\":\"../escape.txt\",\"existed\":true,\"content\":\"evil\"}]}",
+  )
+  let blocked_escape = try {
+    ignore(@executor.recover_version_with(host, "/repo"))
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "workspace-escape"
+    _ => false
+  }
+  assert_true(blocked_escape)
 }
 
 ///|
-async test "publish updates statuses in-place, enforces --only closure, and retries cleanly" {
+async test "publish dry-run is strictly read-only, enforces --only closure, allows downstream retry, and supports --reconcile" {
   let host = fake_host()
   let release_state : Json = {
     "planFingerprint": "plan-fp-1",
@@ -306,16 +392,17 @@ async test "publish updates statuses in-place, enforces --only closure, and retr
   // Incomplete --only closure must be rejected before publishing.
   let blocked_only = try {
     ignore(
-      @executor.publish_release_with(host, loaded, {
-        dry_run: true,
-        only: ["npm:@acme/b"],
-        registry: None,
-        tag: None,
-        yes: true,
-        allow_uncommitted: true,
-        retry: 0,
-        no_tag: true,
-      }),
+      @executor.publish_release_with(
+        host,
+        loaded,
+        @executor.PublishOptions::new(
+          dry_run=true,
+          only=["npm:@acme/b"],
+          yes=true,
+          allow_uncommitted=true,
+          no_tag=true,
+        ),
+      ),
     )
     false
   } catch {
@@ -329,8 +416,12 @@ async test "publish updates statuses in-place, enforces --only closure, and retr
     if program == "git" && args == ["status", "--porcelain"] {
       return { exit_code: 0, stdout: "", stderr: "", }
     }
+    if program == "moon" && args.contains("view") {
+      return moon_view_404()
+    }
     if program == "npm" && args.contains("view") {
-      return { exit_code: 1, stdout: "", stderr: "E404", }
+      // npm 9/10 empty stdout with exit 0 must also be treated as absent!
+      return { exit_code: 0, stdout: "", stderr: "", }
     }
     if program == "npm" &&
       args.contains("publish") &&
@@ -341,51 +432,48 @@ async test "publish updates statuses in-place, enforces --only closure, and retr
     }
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let first = @executor.publish_release_with(host, loaded, {
-    dry_run: false,
-    only: [],
-    registry: None,
-    tag: None,
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
+
+  // CRITICAL INVARIANT: `--dry-run` MUST NOT write `.moonset/publish-state.json`!
+  let dry = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(dry_run=true, no_tag=true),
+  )
+  assert_true(dry.dry_run)
+  assert_false(host.files.contains("/repo/.moonset/publish-state.json"))
+
+  let first = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
   assert_true(!first.complete)
-  // Exactly 2 statuses (one per unit), no duplicate preflighted/publishing rows!
   assert_eq(first.statuses.length(), 2)
   assert_eq(first.statuses[0].state, @model.Published)
   assert_eq(first.statuses[1].state, @model.Unknown)
 
-  // Retry when npm is unknown is blocked until resolved; reset state to Failed to simulate verified retry.
+  // Retry with `--only npm:@acme/b` + `--reconcile` succeeds because upstream moonbit:acme/a is already Published!
   fail_npm = false
-  host.files["/repo/.moonset/publish-state.json"] = @utf8.encode(
-    @model.canonical_json({
-      "schemaVersion": 1,
-      "planId": "plan-fp-1",
-      "statuses": [
-        first.statuses[0].to_json(),
-        { ..first.statuses[1], state: @model.Failed, }.to_json(),
-      ],
+  let second = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(
+      only=["npm:@acme/b"],
+      yes=true,
+      no_tag=true,
+      reconcile=true,
+    ),
+  )
+  assert_true(second.complete)
+  assert_true(
+    second.statuses.any(s => {
+      s.unit_id == "npm:@acme/b" && s.state == @model.Published
     }),
   )
-  let second = @executor.publish_release_with(host, loaded, {
-    dry_run: false,
-    only: [],
-    registry: None,
-    tag: None,
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
-  assert_true(second.complete)
-  assert_eq(second.statuses.length(), 2)
-  assert_eq(second.statuses[1].state, @model.Published)
 }
 
 ///|
-async test "create_tags skips existing HEAD tags, detects duplicates, and works after release commit" {
+async test "create_tags uses annotated tags, allows dry-run on dirty tree, and pushes locally skipped tags missing on remote" {
   let host = fake_host()
   host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
     (
@@ -410,21 +498,17 @@ async test "create_tags skips existing HEAD tags, detects duplicates, and works 
       } : Json).stringify(),
   )
   let loaded = sample_loaded(units=[
-    {
-      id: "moonbit:acme/a",
-      native_name: "acme/a",
-      ecosystem: "moonbit",
-      workspace_id: "main",
-      root: "a",
-      manifest: "a/moon.mod",
-      version_path: "a/moon.mod",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
+    mk_unit(
+      "moonbit:acme/a",
+      "acme/a",
+      @model.MoonBit,
+      "main",
+      "a",
+      "a/moon.mod",
+      Some("0.1.1"),
+    ),
   ])
+  let pushed_cmds : Array[Array[String]] = []
   host.runner = (_program, args, _cwd) => {
     if args == ["rev-parse", "HEAD"] {
       return { exit_code: 0, stdout: "new-release-commit-sha\n", stderr: "", }
@@ -432,7 +516,7 @@ async test "create_tags skips existing HEAD tags, detects duplicates, and works 
     if args == ["status", "--porcelain"] {
       return {
         exit_code: 0,
-        stdout: "?? .moonset/publish-state.json\n?? .moonset/pack-results.json\n",
+        stdout: "?? .moonset/publish-state.json\n?? .moonset/pack-results-linux-x64.json\n",
         stderr: "",
       }
     }
@@ -442,61 +526,76 @@ async test "create_tags skips existing HEAD tags, detects duplicates, and works 
     if args == ["rev-list", "-n", "1", "refs/tags/v0.1.1"] {
       return { exit_code: 0, stdout: "new-release-commit-sha\n", stderr: "", }
     }
+    if args == ["ls-remote", "--tags", "origin"] {
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if args.length() > 0 && args[0] == "push" {
+      pushed_cmds.push(args)
+    }
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let res = @executor.create_tags_with(host, loaded, {
-    dry_run: false,
-    push: false,
-    force: false,
-    yes: false,
-    format: "",
-  })
+  // Even though tag already exists locally (skipped), `--push` pushes it because it's missing on origin!
+  let res = @executor.create_tags_with(
+    host,
+    loaded,
+    @executor.TagOptions::new(push=true),
+  )
   assert_eq(res.skipped, ["v0.1.1"])
   assert_eq(res.created, [])
+  assert_eq(res.pushed, ["v0.1.1"])
+  assert_eq(pushed_cmds, [["push", "origin", "refs/tags/v0.1.1"]])
+
+  // Dry-run succeeds even when worktree is dirty
+  host.runner = (_program, args, _cwd) => {
+    if args == ["rev-parse", "HEAD"] {
+      return { exit_code: 0, stdout: "sha1\n", stderr: "", }
+    }
+    if args == ["status", "--porcelain"] {
+      return { exit_code: 0, stdout: " M README.md\n", stderr: "", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let dry = @executor.create_tags_with(
+    host,
+    loaded,
+    @executor.TagOptions::new(dry_run=true),
+  )
+  assert_true(dry.dry_run)
+  assert_eq(dry.tags, ["v0.1.1"])
 }
 
 ///|
-async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix repairs .changeset, and command publisher routes via PublisherRegistry" {
+async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix omits pre.json gitignore, and commit uses --only" {
   let host = fake_host()
   let recorded : Array[(String, Array[String])] = []
   host.runner = (program, args, _cwd) => {
     recorded.push((program, args))
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let cargo_unit : @model.ReleaseUnit = {
-    id: "cargo:acme-rs",
-    native_name: "acme-rs",
-    ecosystem: "cargo",
-    workspace_id: "rs",
-    root: "rs",
-    manifest: "rs/Cargo.toml",
-    version_path: "rs/Cargo.toml",
-    version_field: "package",
-    version: Some("0.1.0"),
-    visibility: "public",
-    publish: true,
-    dependencies: [],
-  }
-  let mbt_unit : @model.ReleaseUnit = {
-    id: "moonbit:acme/a",
-    native_name: "acme/a",
-    ecosystem: "moonbit",
-    workspace_id: "main",
-    root: "a",
-    manifest: "a/moon.mod",
-    version_path: "a/moon.mod",
-    version_field: "version",
-    version: Some("0.1.0"),
-    visibility: "public",
-    publish: true,
-    dependencies: [],
-  }
+  let cargo_unit = mk_unit(
+    "cargo:acme-rs",
+    "acme-rs",
+    @model.Cargo,
+    "rs",
+    "rs",
+    "rs/Cargo.toml",
+    Some("0.1.0"),
+  )
+  let mbt_unit = mk_unit(
+    "moonbit:acme/a",
+    "acme/a",
+    @model.MoonBit,
+    "main",
+    "a",
+    "a/moon.mod",
+    Some("0.1.0"),
+  )
   let loaded = sample_loaded(units=[mbt_unit, cargo_unit])
-  let packed = @executor.pack_artifacts_with(host, loaded, {
-    dry_run: true,
-    frozen: true,
-    packages: [],
-  })
+  let packed = @executor.pack_artifacts_with(
+    host,
+    loaded,
+    @executor.PackOptions::new(dry_run=true, frozen=true),
+  )
   assert_eq(packed.length(), 2)
   assert_true(packed.all(r => r.verified))
   assert_true(
@@ -515,7 +614,7 @@ async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix repairs
     }),
   )
 
-  // doctor --fix initializes missing files safely without overwriting existing config
+  // doctor --fix initializes missing files cleanly without gitignoring pre.json
   let doc_host = fake_host()
   doc_host.files["/repo/moon.mod"] = @utf8.encode(
     "name = \"acme/doc\"\nversion = \"0.1.0\"\n",
@@ -523,14 +622,19 @@ async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix repairs
   let rep = @executor.run_doctor_with(doc_host, "/repo", fix=true)
   assert_true(doc_host.files.contains("/repo/.changeset/config.json"))
   assert_true(doc_host.files.contains("/repo/.changeset/README.md"))
+  assert_false(doc_host.files.contains("/repo/.changeset/.gitignore"))
+  let ms_ignore = @utf8.decode_lossy(
+    doc_host.files["/repo/.moonset/.gitignore"],
+  )
+  assert_true(ms_ignore.contains("pack-results-*.json"))
   assert_true(rep.checks.any(c => c.name == "fix" && c.ok))
 
-  // commit_changes_with invokes git add + git commit cleanly
+  // commit_changes_with invokes git commit --only -- <paths>
   let git_cmds : Array[Array[String]] = []
   let git_host = fake_host()
   git_host.runner = (_program, args, _cwd) => {
     git_cmds.push(args)
-    if args == ["diff", "--cached", "--quiet"] {
+    if args.length() >= 3 && args[0] == "diff" && args[1] == "--cached" {
       return { exit_code: 1, stdout: "", stderr: "", }
     }
     { exit_code: 0, stdout: "", stderr: "", }
@@ -542,7 +646,14 @@ async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix repairs
     "chore: add changeset",
   )
   assert_true(did_commit)
-  assert_true(git_cmds.any(a => a == ["commit", "-m", "chore: add changeset"]))
+  assert_true(
+    git_cmds.any(a => {
+      a ==
+      [
+        "commit", "--only", "-m", "chore: add changeset", "--", ".changeset/a.md",
+      ]
+    }),
+  )
 }
 
 ///|
@@ -569,20 +680,15 @@ async test "publish uses moon view --json to skip already-published moonbit unit
       } : Json).stringify(),
   )
   let loaded = sample_loaded(units=[
-    {
-      id: "moonbit:acme/a",
-      native_name: "acme/a",
-      ecosystem: "moonbit",
-      workspace_id: "main",
-      root: "a",
-      manifest: "a/moon.mod",
-      version_path: "a/moon.mod",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
+    mk_unit(
+      "moonbit:acme/a",
+      "acme/a",
+      @model.MoonBit,
+      "main",
+      "a",
+      "a/moon.mod",
+      Some("0.1.1"),
+    ),
   ])
   let mut publish_called = false
   host.runner = (program, args, _cwd) => {
@@ -598,16 +704,11 @@ async test "publish uses moon view --json to skip already-published moonbit unit
     }
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let skipped = @executor.publish_release_with(host, loaded, {
-    dry_run: false,
-    only: [],
-    registry: None,
-    tag: None,
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
+  let skipped = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
   assert_true(skipped.complete)
   assert_true(!publish_called)
   assert_eq(skipped.statuses[0].state, @model.Published)
@@ -617,27 +718,18 @@ async test "publish uses moon view --json to skip already-published moonbit unit
   host.files.remove("/repo/.moonset/publish-state.json") |> ignore
   host.runner = (program, args, _cwd) => {
     if program == "moon" && args == ["view", "acme/a@0.1.1", "--json"] {
-      return {
-        exit_code: 0,
-        stdout: "{\"version\":1,\"status\":\"failure\",\"result\":null,\"messages\":[{\"level\":\"error\",\"message\":\"HTTP status client error (404 Not Found)\"}]}",
-        stderr: "",
-      }
+      return moon_view_404()
     }
     if program == "moon" && args == ["publish"] {
       publish_called = true
     }
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let published = @executor.publish_release_with(host, loaded, {
-    dry_run: false,
-    only: [],
-    registry: None,
-    tag: None,
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
+  let published = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
   assert_true(published.complete)
   assert_true(publish_called)
   assert_eq(published.statuses[0].state, @model.Published)
@@ -677,48 +769,34 @@ async test "MIX-010 multi-platform artifact verification blocks missing required
     #|  }
     #|}
   let units : Array[@model.ReleaseUnit] = [
-    {
-      id: "moonbit:acme/engine",
-      native_name: "acme/engine",
-      ecosystem: "moonbit",
-      workspace_id: "native",
-      root: "native",
-      manifest: "native/moon.mod",
-      version_path: "native/moon.mod",
-      version_field: "version",
-      version: Some("0.2.0"),
-      visibility: "public",
-      publish: false,
-      dependencies: [],
-    },
-    {
-      id: "npm:@acme/engine-linux-x64",
-      native_name: "@acme/engine-linux-x64",
-      ecosystem: "npm",
-      workspace_id: "js",
-      root: "js/linux",
-      manifest: "js/linux/package.json",
-      version_path: "js/linux/package.json",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
-    {
-      id: "npm:@acme/engine",
-      native_name: "@acme/engine",
-      ecosystem: "npm",
-      workspace_id: "js",
-      root: "js/main",
-      manifest: "js/main/package.json",
-      version_path: "js/main/package.json",
-      version_field: "version",
-      version: Some("0.1.1"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
+    mk_unit(
+      "moonbit:acme/engine",
+      "acme/engine",
+      @model.MoonBit,
+      "native",
+      "native",
+      "native/moon.mod",
+      Some("0.2.0"),
+      publish=false,
+    ),
+    mk_unit(
+      "npm:@acme/engine-linux-x64",
+      "@acme/engine-linux-x64",
+      @model.Npm,
+      "js",
+      "js/linux",
+      "js/linux/package.json",
+      Some("0.1.1"),
+    ),
+    mk_unit(
+      "npm:@acme/engine",
+      "@acme/engine",
+      @model.Npm,
+      "js",
+      "js/main",
+      "js/main/package.json",
+      Some("0.1.1"),
+    ),
   ]
   let loaded = sample_loaded(config_json=cfg, units~)
   host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
@@ -820,70 +898,50 @@ async test "MIX-010 multi-platform artifact verification blocks missing required
     { exit_code: 0, stdout: "", stderr: "", }
   }
 
-  // Only pack main wrapper; missing linux-x64 must block BOTH linux-x64 and main!
   ignore(
-    @executor.pack_artifacts_for_target_with(
+    @executor.pack_artifacts_with(
       host,
       loaded,
-      { dry_run: false, frozen: false, packages: ["npm:@acme/engine"], },
-      target="source",
+      @executor.PackOptions::new(packages=["npm:@acme/engine"], target="source"),
     ),
   )
   let missing_report = @executor.verify_artifacts_with(host, loaded)
   assert_true(!missing_report.ok)
   assert_true(missing_report.blocked_units.contains("npm:@acme/engine"))
 
-  let blocked_pub = @executor.publish_release_with_artifacts_with(
+  let blocked_pub = @executor.publish_release_with(
     host,
     loaded,
-    {
-      dry_run: false,
-      only: [],
-      registry: None,
-      tag: None,
-      yes: true,
-      allow_uncommitted: false,
-      retry: 0,
-      no_tag: false,
-    },
+    @executor.PublishOptions::new(yes=true, no_tag=false),
   )
   assert_true(!blocked_pub.complete)
   assert_true(!tag_called)
   assert_true(blocked_pub.statuses.all(s => s.state == @model.Blocked))
 
-  // Now pack required linux-x64 target in its own manifest; publish succeeds in topological order
   ignore(
-    @executor.pack_artifacts_for_target_with(
+    @executor.pack_artifacts_with(
       host,
       loaded,
-      {
-        dry_run: false,
-        frozen: false,
-        packages: ["npm:@acme/engine-linux-x64"],
-      },
-      target="linux-x64",
+      @executor.PackOptions::new(
+        packages=["@acme/engine-linux-x64"],
+        target="linux-x64",
+      ),
     ),
   )
   let ok_report = @executor.verify_artifacts_with(host, loaded)
   assert_true(ok_report.ok)
-  // Reset publish-state from blocked run and publish cleanly
   host.files.remove("/repo/.moonset/publish-state.json") |> ignore
-  let ok_pub = @executor.publish_release_with_artifacts_with(host, loaded, {
-    dry_run: false,
-    only: [],
-    registry: None,
-    tag: None,
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
+  let ok_pub = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
   assert_true(ok_pub.complete)
   assert_eq(publish_order, ["/repo/js/linux", "/repo/js/main"])
 }
 
 ///|
-async test "FR-026 format_files executes configured external formatter and respects --no-format" {
+async test "FR-026 format_files resolves local node_modules/.bin, executes configured formatter, and respects --no-format" {
   let host = fake_host()
   host.files["/repo/CHANGELOG.md"] = @utf8.encode("# Changelog\n")
   host.files["/repo/package.json"] = @utf8.encode("{\"name\":\"a\"}\n")
@@ -903,7 +961,7 @@ async test "FR-026 format_files executes configured external formatter and respe
   assert_eq(res.formatted, ["CHANGELOG.md", "package.json"])
   assert_eq(calls.length(), 1)
   assert_eq(calls[0].0, "prettier")
-  assert_eq(calls[0].1, ["--write", "CHANGELOG.md", "package.json"])
+  assert_eq(calls[0].1, ["--write", "--", "CHANGELOG.md", "package.json"])
 
   // --no-format skips execution completely
   let skipped = @executor.format_files_with(
@@ -917,7 +975,7 @@ async test "FR-026 format_files executes configured external formatter and respe
   assert_eq(skipped.formatter, "none")
   assert_eq(calls.length(), 1)
 
-  // biome only formats JSON files with `biome format --write`
+  // biome only formats JSON files with `biome format --write --`
   let biome_cfg = @engine.parse_config("{\"format\":\"biome\"}")
   let biome_res = @executor.format_files_with(host, "/repo", biome_cfg, [
     "CHANGELOG.md", "package.json",
@@ -925,7 +983,7 @@ async test "FR-026 format_files executes configured external formatter and respe
   assert_eq(biome_res.formatted, ["package.json"])
   assert_eq(calls.length(), 2)
   assert_eq(calls[1].0, "biome")
-  assert_eq(calls[1].1, ["format", "--write", "package.json"])
+  assert_eq(calls[1].1, ["format", "--write", "--", "package.json"])
 
   // Non-zero formatter exit raises Io error
   host.runner = (_p, _a, _c) => {
@@ -946,51 +1004,41 @@ async test "FR-026 format_files executes configured external formatter and respe
 }
 
 ///|
-async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/--tag routing" {
+async test "FR-031 API publisher registry, npm --access/--otp/pre auto-tag, and scoped mixed-ecosystem routing" {
   let host = fake_host()
   let units : Array[@model.ReleaseUnit] = [
-    {
-      id: "moonbit:acme/a",
-      native_name: "acme/a",
-      ecosystem: "moonbit",
-      workspace_id: "mbt",
-      root: "a",
-      manifest: "a/moon.mod",
-      version_path: "a/moon.mod",
-      version_field: "version",
-      version: Some("0.2.0"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
-    {
-      id: "npm:@acme/b",
-      native_name: "@acme/b",
-      ecosystem: "npm",
-      workspace_id: "js",
-      root: "b",
-      manifest: "b/package.json",
-      version_path: "b/package.json",
-      version_field: "version",
-      version: Some("1.1.0"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
-    {
-      id: "cargo:acme-c",
-      native_name: "acme-c",
-      ecosystem: "cargo",
-      workspace_id: "rs",
-      root: "c",
-      manifest: "c/Cargo.toml",
-      version_path: "c/Cargo.toml",
-      version_field: "package",
-      version: Some("0.3.0"),
-      visibility: "public",
-      publish: true,
-      dependencies: [],
-    },
+    mk_unit(
+      "moonbit:acme/a",
+      "acme/a",
+      @model.MoonBit,
+      "mbt",
+      "a",
+      "a/moon.mod",
+      Some("0.2.0"),
+    ),
+    mk_unit(
+      "npm:@acme/b",
+      "@acme/b",
+      @model.Npm,
+      "js",
+      "b",
+      "b/package.json",
+      Some("1.1.0"),
+      publish_config={
+        access: Some(@model.Access::Restricted),
+        registry: None,
+        directory: None,
+      },
+    ),
+    mk_unit(
+      "cargo:acme-c",
+      "acme-c",
+      @model.Cargo,
+      "rs",
+      "c",
+      "c/Cargo.toml",
+      Some("0.3.0"),
+    ),
   ]
   let rel_state : Json = {
     "planFingerprint": "plan-mixed-1",
@@ -1030,30 +1078,47 @@ async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/
   host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
     rel_state.stringify(),
   )
+  let base_loaded = sample_loaded(units~)
   let loaded_mixed : @workspace.LoadedWorkspace = {
-    ..sample_loaded(units~),
+    ..base_loaded,
     snapshot: {
-      ..sample_loaded(units~).snapshot,
+      ..base_loaded.snapshot,
       workspaces: [
-        { id: "mbt", root: "a", ecosystem: "moonbit", manager: "moon", },
-        { id: "js", root: "b", ecosystem: "npm", manager: "npm", },
-        { id: "rs", root: "c", ecosystem: "cargo", manager: "cargo", },
+        {
+          id: "mbt",
+          root: "a",
+          ecosystem: @model.MoonBit,
+          manager: @model.Moon,
+        },
+        {
+          id: "js",
+          root: "b",
+          ecosystem: @model.Npm,
+          manager: @model.PackageManager::Pnpm,
+        },
+        {
+          id: "rs",
+          root: "c",
+          ecosystem: @model.Cargo,
+          manager: @model.PackageManager::Cargo,
+        },
       ],
     },
   }
   // Global --registry across mixed ecosystems is still rejected
   let global_rejected = try {
     ignore(
-      @executor.publish_release_with(host, loaded_mixed, {
-        dry_run: true,
-        only: [],
-        registry: Some("https://registry.npmjs.org"),
-        tag: None,
-        yes: true,
-        allow_uncommitted: true,
-        retry: 0,
-        no_tag: true,
-      }),
+      @executor.publish_release_with(
+        host,
+        loaded_mixed,
+        @executor.PublishOptions::new(
+          dry_run=true,
+          registry="https://registry.npmjs.org",
+          yes=true,
+          allow_uncommitted=true,
+          no_tag=true,
+        ),
+      ),
     )
     false
   } catch {
@@ -1062,38 +1127,48 @@ async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/
   }
   assert_true(global_rejected)
 
-  // Scoped --registry and --tag route cleanly to npm & cargo without touching moonbit
+  // Scoped --registry, --tag, --otp, publishConfig.access, and pnpm --no-git-checks route cleanly
   let invoked : Array[(String, Array[String])] = []
   host.runner = (program, args, _cwd) => {
     invoked.push((program, args))
     if program == "git" && args == ["status", "--porcelain"] {
       return { exit_code: 0, stdout: "", stderr: "", }
     }
-    if program == "npm" && args.contains("view") {
-      return { exit_code: 1, stdout: "", stderr: "E404", }
+    if program == "moon" && args.contains("view") {
+      return moon_view_404()
+    }
+    if program == "pnpm" && args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "ERR_PNPM_FETCH_404", }
     }
     if program == "cargo" && args.contains("info") {
       return { exit_code: 1, stdout: "", stderr: "could not find", }
     }
     { exit_code: 0, stdout: "", stderr: "", }
   }
-  let scoped_res = @executor.publish_release_with(host, loaded_mixed, {
-    dry_run: false,
-    only: [],
-    registry: Some("npm=https://npm.pkg.github.com,cargo=private-crates"),
-    tag: Some("npm:@acme/b=canary"),
-    yes: true,
-    allow_uncommitted: false,
-    retry: 0,
-    no_tag: true,
-  })
+  let scoped_res = @executor.publish_release_with(
+    host,
+    loaded_mixed,
+    @executor.PublishOptions::new(
+      registry="npm=https://npm.pkg.github.com,cargo=private-crates",
+      tag="npm:@acme/b=canary",
+      otp="123456",
+      yes=true,
+      no_tag=true,
+    ),
+  )
   assert_true(scoped_res.complete)
   assert_true(
     invoked.any(c => {
-      c.0 == "npm" &&
+      c.0 == "pnpm" &&
       c.1.contains("publish") &&
+      c.1.contains("--no-git-checks") &&
+      c.1.contains("--access") &&
+      c.1.contains("restricted") &&
+      c.1.contains("--otp") &&
+      c.1.contains("123456") &&
       c.1.contains("https://npm.pkg.github.com") &&
-      c.1.contains("canary")
+      c.1.contains("canary") &&
+      !c.1.contains("--ignore-scripts")
     }),
   )
   assert_true(
@@ -1121,20 +1196,17 @@ async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/
       "ext-" + t.unit_id + "@" + t.version
     },
   })
-  let api_res = @executor.publish_release_with_api_with(
+  let api_res = @executor.publish_release_with(
     host,
     loaded_api,
-    {
-      dry_run: false,
-      only: [],
-      registry: Some("npm=https://custom.npm"),
-      tag: Some("npm=next"),
-      yes: true,
-      allow_uncommitted: true,
-      retry: 0,
-      no_tag: true,
-    },
-    registry,
+    @executor.PublishOptions::new(
+      registry="npm=https://custom.npm",
+      tag="npm=next",
+      yes=true,
+      allow_uncommitted=true,
+      no_tag=true,
+      api_publishers=registry,
+    ),
   )
   assert_true(api_res.complete)
   assert_true(api_calls.contains("pre:npm:@acme/b:dist-tag:next"))
@@ -1145,4 +1217,63 @@ async test "FR-031 API publisher registry and scoped mixed-ecosystem --registry/
       s.external_id == Some("ext-npm:@acme/b@1.1.0")
     }),
   )
+}
+
+///|
+async test "v0.3.0 snapshot publish auto-tags npm and skips Git tag creation" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "snap-1",
+        "sourceHead": Json::null(),
+        "isSnapshot": true,
+        "releases": [
+          {
+            "unitId": "npm:@acme/b",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.0.0-canary-20261120120000",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let loaded = sample_loaded(units=[
+    mk_unit(
+      "npm:@acme/b",
+      "@acme/b",
+      @model.Npm,
+      "js",
+      "b",
+      "b/package.json",
+      Some("0.0.0-canary-20261120120000"),
+    ),
+  ])
+  let mut tag_called = false
+  let npm_args : Array[Array[String]] = []
+  host.runner = (program, args, _cwd) => {
+    if program == "git" && args.contains("tag") {
+      tag_called = true
+    }
+    if program == "npm" && args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "E404", }
+    }
+    if program == "npm" && args.contains("publish") {
+      npm_args.push(args)
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=false),
+  )
+  assert_true(res.complete)
+  assert_false(tag_called)
+  assert_true(npm_args.any(a => a.contains("--tag") && a.contains("canary")))
 }

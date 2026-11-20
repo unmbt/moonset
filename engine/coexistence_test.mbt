@@ -7,7 +7,7 @@ fn make_test_unit(
   {
     id: "moonbit:" + native_name,
     native_name,
-    ecosystem: "moonbit",
+    ecosystem: @model.MoonBit,
     workspace_id: "main",
     root,
     manifest: if root == "" {
@@ -22,8 +22,10 @@ fn make_test_unit(
     },
     version_field: "version",
     version: Some(version),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
 }
@@ -36,7 +38,12 @@ test "coexistence_json exports read-only cross-partition summary without touchin
   let snapshot : @model.WorkspaceSnapshot = {
     root: "/repo",
     workspaces: [
-      { id: "native", root: "native", ecosystem: "moonbit", manager: "moon", },
+      {
+        id: "native",
+        root: "native",
+        ecosystem: @model.MoonBit,
+        manager: @model.Moon,
+      },
     ],
     units: [make_test_unit("acme/core", "native", "0.1.0")],
     ownership: [
@@ -82,7 +89,7 @@ test "coexistence_json returns None for ordinary single-ecosystem snapshot witho
   let snapshot : @model.WorkspaceSnapshot = {
     root: "/repo",
     workspaces: [
-      { id: "main", root: "", ecosystem: "moonbit", manager: "moon", },
+      { id: "main", root: "", ecosystem: @model.MoonBit, manager: @model.Moon, },
     ],
     units: [make_test_unit("acme/app", "", "0.1.0")],
     ownership: [],

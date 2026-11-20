@@ -36,6 +36,12 @@ pub(all) struct VersionOptions {
   dry_run : Bool
   no_changelog : Bool
   snapshot_tag : String?
+  snapshot : Bool
+}
+
+///|
+pub fn VersionOptions::default() -> VersionOptions {
+  { dry_run: false, no_changelog: false, snapshot_tag: None, snapshot: false, }
 }
 
 ///|
@@ -54,10 +60,11 @@ pub(all) struct VersionPlan {
 }
 
 ///|
-/// Persisted intent consumed by the tag command.
+/// Persisted intent consumed by pack, publish, tag, and release-notes commands.
 pub(all) struct ReleaseState {
   plan_fingerprint : String
   source_head : String?
+  is_snapshot : Bool
   releases : Array[Release]
   tags : Array[TagIntent]
   consumed_changesets : Array[String]
@@ -76,9 +83,9 @@ pub(all) struct ApplyResult {
 /// Explicit workspace declaration for a mixed release domain.
 pub(all) struct MixedWorkspaceSpec {
   id : String
-  ecosystem : String
+  ecosystem : Ecosystem
   root : String
-  manager : String
+  manager : PackageManager
   include_root : Bool
 }
 
@@ -88,7 +95,7 @@ pub(all) struct Bridge {
   consumer : UnitId
   producer : UnitId
   bump : Bump
-  wait_for : String
+  wait_for : BridgeWaitFor
 }
 
 ///|
@@ -97,6 +104,7 @@ pub(all) struct UnitOverride {
   publish : Bool?
   publisher : String?
   tag_format : String?
+  artifacts : Array[ArtifactTargetSpec]
 }
 
 ///|
@@ -154,6 +162,20 @@ pub extend PublishState with Eq::{equal, not_equal}
 
 ///|
 pub extend PublishState with Debug::{to_repr}
+
+///|
+pub fn PublishState::parse(value : String) -> PublishState? {
+  match value {
+    "pending" => Some(Pending)
+    "preflighted" => Some(Preflighted)
+    "published" => Some(Published)
+    "skipped" => Some(Skipped)
+    "failed" => Some(Failed)
+    "blocked" => Some(Blocked)
+    "unknown" => Some(Unknown)
+    _ => None
+  }
+}
 
 ///|
 /// Durable per-target result used for retries and audit output.

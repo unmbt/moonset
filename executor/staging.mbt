@@ -24,19 +24,46 @@ async fn[H : ExecutionHost] copy_staging_tree(
 }
 
 ///|
-/// Apply planned edits in staging and produce lockfile edits with manager validation.
+fn workspace_has_manifest_edit(
+  plan : @model.VersionPlan,
+  workspace_root : String,
+  manifest_name : String,
+) -> Bool {
+  let clean_root = if workspace_root == "." { "" } else { workspace_root }
+  let prefix = if clean_root == "" { "" } else { clean_root + "/" }
+  for edit in plan.edits {
+    if edit.kind == "manifest" &&
+      (prefix == "" || edit.path.has_prefix(prefix)) &&
+      (edit.path == manifest_name || edit.path.has_suffix("/" + manifest_name)) {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Apply planned edits in staging and produce lockfile edits for affected JS/Cargo workspaces.
 pub async fn[H : ExecutionHost] stage_lockfiles_with(
   host : H,
   root : String,
   loaded : @workspace.LoadedWorkspace,
   plan : @model.VersionPlan,
 ) -> @model.VersionPlan {
-  let npm_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
-    x.ecosystem == "npm"
-  })
-  let cargo_workspaces = loaded.snapshot.config.mixed_workspaces.filter(x => {
-    x.ecosystem == "cargo"
-  })
+  if plan.edits.is_empty() {
+    return plan
+  }
+  let npm_workspaces = loaded.snapshot.config
+    .mixed_workspaces()
+    .filter(x => {
+      x.ecosystem == @model.Npm &&
+      workspace_has_manifest_edit(plan, x.root, "package.json")
+    })
+  let cargo_workspaces = loaded.snapshot.config
+    .mixed_workspaces()
+    .filter(x => {
+      x.ecosystem == @model.Cargo &&
+      workspace_has_manifest_edit(plan, x.root, "Cargo.toml")
+    })
   if npm_workspaces.is_empty() && cargo_workspaces.is_empty() {
     return plan
   }
@@ -53,6 +80,7 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
       host.write_text(target, edit.after_text)
     }
   }
+  let lockfiles_mode = loaded.snapshot.config.lockfiles()
   let lock_edits : Array[@model.FileEdit] = []
   for workspace in npm_workspaces {
     let workspace_root = if workspace.root == "." { "" } else { workspace.root }
@@ -71,70 +99,71 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
           path=package_path,
         )
     }
-    let manager_value = match package_json {
-      { "packageManager": String(value), .. } => value
-      _ =>
+    let manager_program = package_manager_program(host, workspace.manager)
+    // Validate `packageManager` if declared; do not require it for repos not using Corepack.
+    if package_json is { "packageManager": String(manager_value), .. } {
+      let expected_prefix = workspace.manager.text() + "@"
+      if !manager_value.has_prefix(expected_prefix) {
         raise invalid_error(
-          "package-manager-required",
-          "package.json must declare an exact packageManager version",
+          "package-manager-conflict",
+          "packageManager does not match the configured workspace manager",
           path=package_path,
         )
-    }
-    let expected_prefix = workspace.manager + "@"
-    if !manager_value.has_prefix(expected_prefix) {
-      raise invalid_error(
-        "package-manager-conflict",
-        "packageManager does not match the configured workspace manager",
-        path=package_path,
+      }
+      let version_parts = manager_value[expected_prefix.length():]
+        .to_owned()
+        .split("+")
+        .collect()
+      let exact_version = version_parts[0].to_owned()
+      if exact_version == "" || !exact_version.contains(".") {
+        raise invalid_error(
+          "package-manager-required",
+          "packageManager must contain an exact version",
+          path=package_path,
+        )
+      }
+      let version_probe = host.run(
+        manager_program,
+        ["--version"],
+        Some(absolute_path(stage, workspace_root)),
       )
+      if version_probe.exit_code != 0 ||
+        version_probe.stdout.trim().to_owned() != exact_version {
+        raise invalid_error(
+          "package-manager-version",
+          "Installed " +
+          workspace.manager.text() +
+          " does not match packageManager " +
+          exact_version,
+          path=package_path,
+        )
+      }
     }
-    let version_parts = manager_value[expected_prefix.length():]
-      .to_owned()
-      .split("+")
-      .collect()
-    let exact_version = version_parts[0].to_owned()
-    if exact_version == "" || !exact_version.contains(".") {
-      raise invalid_error(
-        "package-manager-required",
-        "packageManager must contain an exact version",
-        path=package_path,
-      )
-    }
-    let manager_program = package_manager_program(host, workspace.manager)
-    let version_probe = host.run(
-      manager_program,
-      ["--version"],
-      Some(absolute_path(stage, workspace_root)),
-    )
-    if version_probe.exit_code != 0 ||
-      version_probe.stdout.trim().to_owned() != exact_version {
-      raise invalid_error(
-        "package-manager-version",
-        "Installed " +
-        workspace.manager +
-        " does not match packageManager " +
-        exact_version,
-        path=package_path,
-      )
-    }
-    let args = if workspace.manager == "pnpm" {
+    let offline_args = if workspace.manager == @model.PackageManager::Pnpm {
       ["install", "--lockfile-only", "--ignore-scripts", "--offline"]
     } else {
       ["install", "--package-lock-only", "--ignore-scripts", "--offline"]
     }
-    let install = host.run(
-      manager_program,
-      args,
-      Some(absolute_path(stage, workspace_root)),
-    )
+    let stage_cwd = Some(absolute_path(stage, workspace_root))
+    let mut install = host.run(manager_program, offline_args, stage_cwd)
+    if install.exit_code != 0 {
+      // Retry without --offline when local cache does not satisfy lockfile resolution.
+      let online_args = if workspace.manager == @model.PackageManager::Pnpm {
+        ["install", "--lockfile-only", "--ignore-scripts"]
+      } else {
+        ["install", "--package-lock-only", "--ignore-scripts"]
+      }
+      install = host.run(manager_program, online_args, stage_cwd)
+    }
     if install.exit_code != 0 {
       raise invalid_error(
         "lockfile-stage-failed",
-        "Package manager could not resolve lockfile offline: " + install.stderr,
+        "Package manager could not resolve lockfile: " +
+        process_failure_detail(install),
         path=package_path,
       )
     }
-    let lock_path = if workspace.manager == "pnpm" {
+    let lock_path = if workspace.manager == @model.PackageManager::Pnpm {
       if workspace_root == "" {
         "pnpm-lock.yaml"
       } else {
@@ -160,7 +189,7 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
     } else {
       ""
     }
-    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
+    if lockfiles_mode == @model.LockfileMode::VerifyOnly && before != after {
       raise invalid_error(
         "lockfile-out-of-date",
         "Generated lockfile differs in verify-only mode",
@@ -180,16 +209,19 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
   }
   for workspace in cargo_workspaces {
     let workspace_root = if workspace.root == "." { "" } else { workspace.root }
-    let cwd = absolute_path(stage, workspace_root)
-    let generated = host.run(
+    let cwd = Some(absolute_path(stage, workspace_root))
+    let mut generated = host.run(
       "cargo",
       ["generate-lockfile", "--offline"],
-      Some(cwd),
+      cwd,
     )
+    if generated.exit_code != 0 {
+      generated = host.run("cargo", ["generate-lockfile"], cwd)
+    }
     if generated.exit_code != 0 {
       raise invalid_error(
         "lockfile-stage-failed",
-        "Cargo could not stage Cargo.lock: " + generated.stderr,
+        "Cargo could not stage Cargo.lock: " + process_failure_detail(generated),
       )
     }
     let lock_path = if workspace_root == "" {
@@ -212,7 +244,7 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
     } else {
       ""
     }
-    if loaded.snapshot.config.lockfiles == "verify-only" && before != after {
+    if lockfiles_mode == @model.LockfileMode::VerifyOnly && before != after {
       raise invalid_error(
         "lockfile-out-of-date",
         "Cargo.lock differs in verify-only mode",
@@ -230,7 +262,7 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
       })
     }
   }
-  if loaded.snapshot.config.lockfiles == "verify-only" {
+  if lockfiles_mode == @model.LockfileMode::VerifyOnly {
     return plan
   }
   let edits = plan.edits + lock_edits

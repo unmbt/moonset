@@ -12,6 +12,7 @@ permissions: {}
 
 jobs:
   check:
+    if: ${{ !startsWith(github.event.pull_request.head.ref, 'moonset-release/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
           persist-credentials: false
       - id: check

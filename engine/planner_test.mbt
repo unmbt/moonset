@@ -1,4 +1,43 @@
 ///|
+fn find_quoted_version_span(
+  source : String,
+  version : String,
+) -> @model.TextSpan? {
+  let needle = "\"" + version + "\""
+  let bytes = @utf8.encode(source)
+  let needle_bytes = @utf8.encode(needle)
+  if needle_bytes.length() == 0 || bytes.length() < needle_bytes.length() {
+    return None
+  }
+  for i in 0..<=(bytes.length() - needle_bytes.length()) {
+    let mut matched = true
+    for j in 0..<needle_bytes.length() {
+      if bytes[i + j] != needle_bytes[j] {
+        matched = false
+        break
+      }
+    }
+    if matched {
+      return Some({ start: i, end: i + needle_bytes.length(), })
+    }
+  }
+  None
+}
+
+///|
+fn unit_with_source(
+  name : String,
+  source : String,
+  version~ : String = "0.1.0",
+  deps~ : Array[(String, String)] = [],
+) -> @model.ReleaseUnit {
+  {
+    ..unit(name, version~, deps~),
+    version_span: find_quoted_version_span(source, version),
+  }
+}
+
+///|
 fn unit(
   name : String,
   version~ : String = "0.1.0",
@@ -7,15 +46,17 @@ fn unit(
   {
     id: "moonbit:" + name,
     native_name: name,
-    ecosystem: "moonbit",
+    ecosystem: @model.MoonBit,
     workspace_id: "main",
     root: name,
     manifest: name + "/moon.mod",
     version_path: name + "/moon.mod",
     version_field: "version",
     version: Some(version),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: deps.map(pair => {
       producer: "moonbit:" + pair.0,
       requirement: pair.1,
@@ -150,27 +191,27 @@ test "cycles ignore conflicts and versionless releases are rejected" {
 
 ///|
 test "prerelease planning is pure and exit graduates published prereleases" {
-  let state = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\"},\"nextNumbers\":{},\"consumed\":[]}",
-  )
+  let state = @engine.parse_pre_state("{\"mode\":\"pre\",\"tag\":\"alpha\"}")
   let ws = snapshot([unit("acme/a")])
   let plan = @engine.build_plan(ws, [change("acme/a", bump="minor")], pre=state)
   assert_eq(plan.releases[0].new_version, "0.2.0-alpha.0")
-  assert_eq(plan.next_pre_state.unwrap().next_numbers["moonbit:acme/a"], 1)
-  assert_eq(state.consumed.length(), 0)
-  assert_eq(state.next_numbers.length(), 0)
+  assert_eq(plan.next_pre_state.unwrap().mode, @model.Pre)
+  assert_eq(plan.next_pre_state.unwrap().tag, "alpha")
   let advanced = snapshot([unit("acme/a", version="0.2.0-alpha.0")])
+  let already_in_pre = @engine.parse_changeset(
+    "---\n\"acme/a\": minor\n---\nSummary",
+    id="test",
+    path=".changeset/pre/test.md",
+    in_pre_dir=true,
+  )
   let next = @engine.build_plan(
     advanced,
-    [change("acme/a", bump="minor")],
+    [already_in_pre],
     pre=plan.next_pre_state.unwrap(),
   )
   assert_eq(next.releases.length(), 0)
-  let exit_state : @model.PreState = {
-    ..plan.next_pre_state.unwrap(),
-    mode: "exit",
-  }
-  let stable = @engine.build_plan(advanced, [], pre=exit_state)
+  let exit_state = @model.PreState::new(@model.Exit, "alpha")
+  let stable = @engine.build_plan(advanced, [already_in_pre], pre=exit_state)
   assert_eq(stable.releases[0].new_version, "0.2.0")
   assert_true(stable.next_pre_state is None)
 }
@@ -215,10 +256,8 @@ test "public planner validates field ownership and canonical identities" {
 }
 
 ///|
-test "pre mode secondary minor bump uses initialVersions and stays monotonic" {
-  let state = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/a\":1},\"consumed\":[\"c1\"]}",
-  )
+test "pre mode secondary minor bump stays monotonic under Changesets v3 model" {
+  let state = @engine.parse_pre_state("{\"mode\":\"pre\",\"tag\":\"alpha\"}")
   let ws = snapshot([unit("acme/a", version="0.1.1-alpha.0")])
   let plan = @engine.build_plan(
     ws,
@@ -226,8 +265,8 @@ test "pre mode secondary minor bump uses initialVersions and stays monotonic" {
     pre=state,
   )
   assert_eq(plan.releases[0].new_version, "0.2.0-alpha.1")
-  assert_eq(plan.next_pre_state.unwrap().next_numbers["moonbit:acme/a"], 2)
-  assert_eq(plan.next_pre_state.unwrap().consumed, ["c1", "c2"])
+  assert_eq(plan.next_pre_state.unwrap().mode, @model.Pre)
+  assert_eq(plan.next_pre_state.unwrap().tag, "alpha")
 }
 
 ///|
@@ -236,29 +275,33 @@ test "mixed bridges propagate consumer bumps, detect cycles, and preserve npm wo
   let js_core : @model.ReleaseUnit = {
     id: "npm:@acme/core",
     native_name: "@acme/core",
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     workspace_id: "js",
     root: "js/core",
     manifest: "js/core/package.json",
     version_path: "js/core/package.json",
     version_field: "version",
     version: Some("1.0.0"),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
   let js_app : @model.ReleaseUnit = {
     id: "npm:@acme/app",
     native_name: "@acme/app",
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     workspace_id: "js",
     root: "js/app",
     manifest: "js/app/package.json",
     version_path: "js/app/package.json",
     version_field: "version",
     version: Some("1.0.0"),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [
       {
         producer: "npm:@acme/core",
@@ -283,15 +326,17 @@ test "mixed bridges propagate consumer bumps, detect cycles, and preserve npm wo
   let js_ws : @model.ReleaseUnit = {
     id: "npm:@acme/ws",
     native_name: "@acme/ws",
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     workspace_id: "js",
     root: "js/ws",
     manifest: "js/ws/package.json",
     version_path: "js/ws/package.json",
     version_field: "version",
     version: Some("1.0.0"),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
   let cfg = "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"native\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":false}],\"bridges\":[{\"consumer\":\"npm:@acme/core\",\"producer\":\"moonbit:acme/native\",\"kind\":\"build\",\"bump\":\"patch\",\"waitFor\":\"build\"}]}}}"
@@ -328,9 +373,9 @@ test "mixed bridges propagate consumer bumps, detect cycles, and preserve npm wo
 }
 
 ///|
-test "MIX-005 MIX-006 pre fixed group stays anchored on initialVersions" {
+test "MIX-005 MIX-006 pre fixed group stays monotonic on v3 pre model" {
   let pre_state = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\",\"moonbit:acme/b\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/a\":1,\"moonbit:acme/b\":1},\"consumed\":[\"c1\"]}",
+    "{\"mode\":\"pre\",\"tag\":\"alpha\"}",
   )
   let ws = snapshot(
     [

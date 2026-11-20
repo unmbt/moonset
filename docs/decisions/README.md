@@ -9,3 +9,5 @@ ADR 文件记录影响多个阶段的设计选择。修改已接受决策时新�
 - [ADR-005：扩展 API 与 JSONL 插件边界](005-extension-boundary.md)
 - [ADR-006：以发布单元管理混合生态 workspace](006-mixed-workspaces.md)
 - [ADR-007：以模块化 GitHub Action 替代 GitHub App 服务端](007-pr-bot-as-action.md)
+- [ADR-008：v0.3.0 公共 API、Adapter 与轻量原生 TUI 收敛](008-v030-api-and-adapter-convergence.md)
+- [ADR-009：向 Changesets v3 极简预发布与统一快照模型靠拢](009-changesets-v3-pre-and-snapshot-model.md)

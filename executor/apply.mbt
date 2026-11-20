@@ -1,10 +1,30 @@
 ///|
-fn invalid_error(
-  code : String,
-  message : String,
-  path~ : String = "",
-) -> @model.MoonsetError {
-  @model.Invalid(@model.diagnostic(code, message, path~))
+fn validate_journal_relative_path(
+  raw : String,
+  context~ : String,
+) -> String raise @model.MoonsetError {
+  let clean = raw.replace_all(old="\\", new="/").trim().to_owned()
+  if clean == "" ||
+    clean.has_prefix("/") ||
+    clean.contains("\u{0000}") ||
+    (clean.length() >= 2 && clean[1] == ':') ||
+    @path.Path(clean).is_absolute() {
+    raise invalid_error(
+      "workspace-escape",
+      "Illegal absolute or empty path in " + context + ": " + raw,
+      path=raw,
+    )
+  }
+  for segment in clean.split("/") {
+    if segment == ".." {
+      raise invalid_error(
+        "workspace-escape",
+        "Path traversal is not allowed in " + context + ": " + raw,
+        path=raw,
+      )
+    }
+  }
+  clean
 }
 
 ///|
@@ -14,73 +34,7 @@ fn parse_release_state_from_edits(
   for edit in plan.edits {
     if edit.path == ".moonset/release-state.json" && edit.after_text != "" {
       let json = @json.parse(edit.after_text) catch { _ => return None }
-      guard json
-        is {
-          "planFingerprint": String(plan_fingerprint),
-          "releases": Array(release_items),
-          "tags": Array(tag_items),
-          "consumedChangesets": Array(consumed_items),
-          ..
-        } else {
-        return None
-      }
-      let source_head = match json {
-        { "sourceHead": String(head), .. } => Some(head)
-        _ => None
-      }
-      let releases : Array[@model.Release] = []
-      for item in release_items {
-        if item
-          is {
-            "unitId": String(unit_id),
-            "oldVersion": String(old_version),
-            "newVersion": String(new_version),
-            "level": String(level_text),
-            "publish": publish_json,
-            ..
-          } {
-          let level = match level_text {
-            "major" => @model.Major
-            "minor" => @model.Minor
-            "patch" => @model.Patch
-            _ => @model.None
-          }
-          releases.push({
-            unit_id,
-            old_version,
-            new_version,
-            level,
-            reasons: [],
-            changesets: [],
-            publish: publish_json == Json::boolean(true),
-          })
-        }
-      }
-      let tags : Array[@model.TagIntent] = []
-      for item in tag_items {
-        if item
-          is {
-            "unitId": String(unit_id),
-            "version": String(version),
-            "name": String(name),
-            ..
-          } {
-          tags.push({ unit_id, version, name, })
-        }
-      }
-      let consumed_changesets : Array[String] = []
-      for item in consumed_items {
-        if item is String(id) {
-          consumed_changesets.push(id)
-        }
-      }
-      return Some({
-        plan_fingerprint,
-        source_head,
-        releases,
-        tags,
-        consumed_changesets,
-      })
+      return Some(@model.ReleaseState::from_json(json)) catch { _ => None }
     }
   }
   None
@@ -110,18 +64,23 @@ pub async fn[H : ExecutionHost] recover_version_with(
       path=journal_path,
     )
   }
-  let recovered : Array[String] = []
+  // Validate all entry paths BEFORE modifying any file on disk.
+  let validated : Array[(String, Bool, String)] = []
   for item in entries {
     match item {
       { "path": String(path), "existed": True, "content": String(content), .. } => {
-        let target = absolute_path(root, path)
-        host.mkdir(parent_dir(target))
-        host.write_text(target, content)
-        recovered.push(path)
+        let safe_path = validate_journal_relative_path(
+          path,
+          context="version journal entry",
+        )
+        validated.push((safe_path, true, content))
       }
       { "path": String(path), "existed": False, "content": String(_), .. } => {
-        host.remove(absolute_path(root, path))
-        recovered.push(path)
+        let safe_path = validate_journal_relative_path(
+          path,
+          context="version journal entry",
+        )
+        validated.push((safe_path, false, ""))
       }
       _ =>
         raise invalid_error(
@@ -130,6 +89,19 @@ pub async fn[H : ExecutionHost] recover_version_with(
           path=journal_path,
         )
     }
+  }
+  let recovered : Array[String] = []
+  let mut idx = 0
+  for entry in validated {
+    let (path, existed, content) = entry
+    let target = absolute_path(root, path)
+    if existed {
+      atomic_write_text(host, target, content, "recover-" + idx.to_string())
+    } else {
+      host.remove(target)
+    }
+    recovered.push(path)
+    idx += 1
   }
   host.remove(journal_path)
   recovered
@@ -149,31 +121,49 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
   if plan.edits.is_empty() {
     return { applied: false, rolled_back: false, journal: None, state: None, }
   }
-  let originals : Array[Json] = []
+  let journal_path = absolute_path(root, ".moonset/version-journal.json")
+  if host.exists(journal_path) {
+    raise invalid_error(
+      "unfinished-journal",
+      "An unfinished version journal already exists; run `moonset version --recover` before applying a new plan",
+      path=".moonset/version-journal.json",
+    )
+  }
+  let originals : Array[(String, Bool, String)] = []
+  let journal_entries : Array[Json] = []
   for edit in plan.edits {
-    let target = absolute_path(root, edit.path)
+    let safe_path = validate_journal_relative_path(
+      edit.path,
+      context="version plan edit",
+    )
+    let target = absolute_path(root, safe_path)
     let existed = host.exists(target)
     let current = if existed { host.read_text(target) } else { "" }
     if @model.fingerprint(Json::string(current)) != edit.before_hash {
       raise invalid_error(
         "stale-plan",
-        "Stale version plan input: " + edit.path,
-        path=edit.path,
+        "Stale version plan input: " + safe_path,
+        path=safe_path,
       )
     }
-    originals.push({ "path": edit.path, "existed": existed, "content": current })
+    originals.push((safe_path, existed, current))
+    journal_entries.push({
+      "path": safe_path,
+      "existed": existed,
+      "content": current,
+    })
   }
-  let journal_dir = absolute_path(root, ".moonset")
-  let journal_path = absolute_path(root, ".moonset/version-journal.json")
-  host.mkdir(journal_dir)
-  host.write_text(
+  atomic_write_text(
+    host,
     journal_path,
     @model.canonical_json({
       "planFingerprint": plan.fingerprint,
-      "entries": originals,
+      "entries": journal_entries,
     }) +
     "\n",
+    "journal",
   )
+  let mut applied_count = 0
   try {
     let mut index = 0
     for edit in plan.edits {
@@ -182,44 +172,36 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
         edit.after_text == "" {
         host.remove(target)
       } else {
-        let temporary = target + ".moonset-" + index.to_string() + ".tmp"
-        host.mkdir(parent_dir(target))
-        errdefer @async.protect_from_cancel(() => {
-          host.remove(temporary) catch {
-            _ => ()
-          }
-        })
-        host.write_text(temporary, edit.after_text)
-        host.rename(temporary, target)
+        atomic_write_text(
+          host,
+          target,
+          edit.after_text,
+          "edit-" + index.to_string(),
+        )
       }
+      applied_count += 1
       index += 1
-    }
-    host.remove(journal_path)
-    {
-      applied: true,
-      rolled_back: false,
-      journal: None,
-      state: parse_release_state_from_edits(plan),
     }
   } catch {
     error => {
+      // Only roll back files that were touched (0..applied_count inclusive of failing edit)
+      let rollback_limit = if applied_count < originals.length() {
+        applied_count + 1
+      } else {
+        originals.length()
+      }
       let mut rollback_ok = true
-      for original in originals {
-        match original {
-          {
-            "path": String(path),
-            "existed": True,
-            "content": String(content),
-            ..
-          } =>
-            host.write_text(absolute_path(root, path), content) catch {
-              _ => rollback_ok = false
-            }
-          { "path": String(path), "existed": False, .. } =>
-            host.remove(absolute_path(root, path)) catch {
-              _ => rollback_ok = false
-            }
-          _ => ()
+      for i in 0..<rollback_limit {
+        let (path, existed, content) = originals[i]
+        let target = absolute_path(root, path)
+        if existed {
+          atomic_write_text(host, target, content, "rb-" + i.to_string()) catch {
+            _ => rollback_ok = false
+          }
+        } else {
+          host.remove(target) catch {
+            _ => rollback_ok = false
+          }
         }
       }
       if rollback_ok {
@@ -237,6 +219,19 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
       }
     }
   }
+  // Remove journal outside the edit try-block so a cleanup error never rolls back applied edits.
+  let remaining_journal = try {
+    host.remove(journal_path)
+    None
+  } catch {
+    _ => Some(".moonset/version-journal.json")
+  }
+  {
+    applied: true,
+    rolled_back: false,
+    journal: remaining_journal,
+    state: parse_release_state_from_edits(plan),
+  }
 }
 
 ///|
@@ -248,7 +243,8 @@ pub async fn apply_version_plan(
 }
 
 ///|
-/// Stage the given domain-relative paths and commit them via parameter arrays.
+/// Stage and commit ONLY the specified domain-relative paths (`git commit --only`),
+/// so unrelated pre-staged user changes are never swept into the release commit.
 pub async fn[H : ExecutionHost] commit_changes_with(
   host : H,
   root : String,
@@ -261,15 +257,17 @@ pub async fn[H : ExecutionHost] commit_changes_with(
   let add_args = ["add", "-A", "--"] + paths
   let added = host.run("git", add_args, Some(root))
   if added.exit_code != 0 {
-    raise @model.Io("git add failed: " + added.stderr)
+    raise @model.Io("git add failed: " + process_failure_detail(added))
   }
-  let diff = host.run("git", ["diff", "--cached", "--quiet"], Some(root))
+  let diff_args = ["diff", "--cached", "--quiet", "--"] + paths
+  let diff = host.run("git", diff_args, Some(root))
   if diff.exit_code == 0 {
     return false
   }
-  let committed = host.run("git", ["commit", "-m", message], Some(root))
+  let commit_args = ["commit", "--only", "-m", message, "--"] + paths
+  let committed = host.run("git", commit_args, Some(root))
   if committed.exit_code != 0 {
-    raise @model.Io("git commit failed: " + committed.stderr)
+    raise @model.Io("git commit failed: " + process_failure_detail(committed))
   }
   true
 }

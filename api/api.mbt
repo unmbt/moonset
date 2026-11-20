@@ -1,10 +1,50 @@
 ///|
-/// Stable API entry points for Phase 5 integrations.
+/// The API contract version. Independent of the CLI version; v2.0.0 aligns with ADR-008 & ADR-009.
+pub let api_version : String = "2.0.0"
+
+///|
+/// Core domain models, strong enums, config types, and release state structures.
 pub using @model {
   type UnitId,
+  type Ecosystem,
+  type PackageManager,
+  type Visibility,
+  type PreMode,
+  type UpdateDependents,
+  type Access,
+  type CommitMode,
+  type LockfileMode,
+  type BridgeWaitFor,
+  type MixedMode,
+  type Bump,
+  type TextSpan,
+  type PublishConfig,
+  type Change,
+  type Changeset,
+  type ChangesetDraft,
+  type Release,
+  type DependencyIntent,
+  type DependencyKind,
+  type DependencyEdge,
+  type Ownership,
+  type EcosystemWorkspace,
+  type MixedWorkspaceSpec,
+  type Bridge,
+  type UnitOverride,
+  type ArtifactTargetSpec,
+  type ChangelogConfig,
+  type CommitConfig,
+  type PrivatePackagesConfig,
+  type PreConfig,
+  type SnapshotConfig,
+  type TagConfig,
+  type PublisherConfig,
+  type GithubConfig,
+  type MixedWorkspacesConfig,
+  type GeneratorPluginConfig,
+  type Config,
   type ReleaseUnit,
   type WorkspaceSnapshot,
-  type Changeset,
   type PreState,
   type ReleasePlan,
   type VersionPlan,
@@ -14,36 +54,35 @@ pub using @model {
   type TagIntent,
   type ReleaseState,
   type ApplyResult,
-  type Diagnostic,
-  type MoonsetError,
-  type GeneratorPluginConfig,
-  type DependencyKind,
-  type DependencyEdge,
-  type Ownership,
   type ArtifactIntent,
   type PackResult,
   type PublishTarget,
+  type PublishState,
+  type PublishStatus,
+  type PublishResult,
+  type Diagnostic,
+  type MoonsetError,
 }
 
 ///|
-/// The API contract version. It is independent of the CLI version.
-pub let api_version : String = "1.0.0"
-
-///|
+/// Pure planning, versioning, snapshot, PR rendering, and coexistence analysis APIs.
 pub using @engine {
-  type ArtifactTargetSpec,
   type ExecutionNode,
   type ExecutionDag,
   type ArtifactIssue,
   type ArtifactVerificationReport,
-  type SnapshotConfig,
   type PublishTargetOverride,
+  type CommentOptions,
   build_plan,
   build_version_plan,
   build_version_plan_with_metadata,
   changelog_contexts_with_metadata,
   render_release_pr_body,
   release_pr_title,
+  status_json,
+  status_markdown,
+  error_markdown,
+  coexistence_json,
   build_execution_dag,
   parse_artifact_specs,
   verify_artifact_matrix,
@@ -59,16 +98,18 @@ pub using @engine {
   parse_target_mapping,
   resolve_target_override,
   parse_changeset,
+  format_changeset,
   parse_config,
   parse_pre_state,
-  status_json,
+  render_builtin_changelog,
 }
 
 ///|
+/// Read-only workspace discovery.
 pub using @workspace {discover, type LoadedWorkspace}
 
 ///|
-/// Experimental operational adapter contracts and JSONL plugin protocol.
+/// Capability registry and JSONL plugin protocol.
 pub using @adapters {
   type Capability,
   type CapabilityReport,
@@ -76,30 +117,34 @@ pub using @adapters {
   type PluginSpec,
   type JsonlRequest,
   type JsonlResponse,
-  type FileHost,
-  type ProcessHost,
+  type ProcessResult,
   type RegistryHost,
+  type PublisherRegistry,
+  trait PublisherPort,
+  parse_request,
+  parse_response,
   run_jsonl,
   generator_result,
-  trait DiscoveryPort,
-  trait RangePort,
-  trait OwnershipPort,
-  trait LockfilePort,
-  trait ArtifactPort,
-  trait PublisherPort,
-  trait OperationalAdapter,
+  require_capability,
+  validate_conformance,
 }
 
 ///|
+/// Pure changelog rendering and release-note extraction.
 pub using @changelog {
   type ChangelogContext,
+  type ReleaseLineContext,
+  type GeneratorKind,
   type GeneratorRegistry,
   trait ChangelogGenerator,
+  generator_kind,
+  render,
   extract_release_notes,
+  extract_unit_release_notes,
 }
 
 ///|
-/// Operational execution facade backed by injectable ExecutionHost ports.
+/// Operational execution facade backed by injectable `ExecutionHost` ports.
 pub using @executor {
   type NativeHost,
   type PackOptions,
@@ -127,16 +172,10 @@ pub using @executor {
   stage_lockfiles_with,
   pack_artifacts,
   pack_artifacts_with,
-  pack_artifacts_for_target,
-  pack_artifacts_for_target_with,
   verify_artifacts,
   verify_artifacts_with,
   publish_release,
   publish_release_with,
-  publish_release_with_artifacts,
-  publish_release_with_artifacts_with,
-  publish_release_with_api,
-  publish_release_with_api_with,
   create_tags,
   create_tags_with,
   run_doctor,

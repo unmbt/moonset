@@ -108,7 +108,7 @@ moonset publish --yes   # 干净工作树下会自动触发 tag（可用 --no-ta
 moonset tag --push --yes
 ```
 
-> **预发布模式提示**：可通过 `moonset pre enter alpha --initial-version` 进入预发布，多次发布后执行 `moonset pre exit && moonset version` 毕业为正式版。`--since main` 只读取 `HEAD` 已提交快照，适合 CI 校验 PR 是否附带了 changeset。更多问题见 [常见问题与排障 FAQ](docs/faq.md)。
+> **预发布模式提示**：可通过 `moonset pre enter alpha` 进入预发布（遵循 Changesets v3 极简模型，`.changeset/pre.json` 提交至 Git），多次发布后执行 `moonset pre exit && moonset version` 毕业为正式版。`--since main` 只读取 `HEAD` 已提交快照，适合 CI 校验 PR 是否附带了 changeset。更多问题见 [常见问题与排障 FAQ](docs/faq.md)。
 
 ### 理念
 

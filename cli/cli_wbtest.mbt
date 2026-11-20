@@ -115,10 +115,10 @@ test "TUI state reducers and deterministic views support package, bump, and summ
     render_bump_page("moonbit:acme/a", "0.1.0", 1).contains("> minor"),
   )
 
-  let (t1, _, _) = edit_summary("", Char("h"))
-  let (t2, _, _) = edit_summary(t1, Char("i"))
-  let (t3, _, _) = edit_summary(t2, Backspace)
-  assert_eq(t3, "h")
+  let s1 = reduce_summary(SummaryState::new(), Char("h"))
+  let s2 = reduce_summary(s1, Char("i"))
+  let s3 = reduce_summary(s2, Backspace)
+  assert_eq(s3.text(), "h")
   let confirm = render_confirmation("Add feature", [
     { unit_id: "moonbit:acme/a", bump: @model.Minor, },
   ])
@@ -174,4 +174,130 @@ test "arguments parse release-notes flags without conflicting with global --vers
     Some("npm=https://npm.pkg.github.com,cargo=private"),
   )
   assert_eq(scoped_pub.dist_tag, Some("npm=next,npm:@acme/ui=canary"))
+}
+
+///|
+test "v0.3.0 CLI argument parser: --flag=value, --major, tagless --snapshot, --otp, --reconcile, --help topic, --dry-run guard, int32 overflow" {
+  let add_eq = arguments([
+    "add", "--package=acme/a", "--major", "--summary=Breaking change", "--open",
+  ])
+  assert_eq(add_eq.command, "add")
+  assert_eq(add_eq.packages, ["acme/a"])
+  assert_eq(add_eq.bump, Some("major"))
+  assert_eq(add_eq.summary, Some("Breaking change"))
+  assert_true(add_eq.open_editor)
+
+  let snap_tagless = arguments(["version", "--snapshot", "--ignore=acme/demo"])
+  assert_eq(snap_tagless.command, "version")
+  assert_true(snap_tagless.snapshot_enabled)
+  assert_eq(snap_tagless.snapshot, None)
+  assert_eq(snap_tagless.ignore_packages, ["acme/demo"])
+
+  let snap_tagged = arguments(["version", "--snapshot=canary", "--dry-run"])
+  assert_true(snap_tagged.snapshot_enabled)
+  assert_eq(snap_tagged.snapshot, Some("canary"))
+  assert_true(snap_tagged.dry_run)
+
+  let pub_reconcile = arguments([
+    "publish", "--otp=654321", "--reconcile", "--yes",
+  ])
+  assert_eq(pub_reconcile.otp, Some("654321"))
+  assert_true(pub_reconcile.reconcile)
+
+  let help_sub = arguments(["publish", "--help"])
+  assert_eq(help_sub.command, "help")
+  assert_eq(help_sub.help_topic, Some("publish"))
+  assert_true(render_help(help_sub.help_topic).contains("--reconcile"))
+
+  let help_before = arguments(["--help", "version"])
+  assert_eq(help_before.command, "help")
+  assert_eq(help_before.help_topic, Some("version"))
+
+  // Reject `--dry-run` on unsupported subcommands
+  let bad_dry = try {
+    ignore(arguments(["add", "--dry-run"]))
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "usage"
+    _ => false
+  }
+  assert_true(bad_dry)
+
+  // Reject int32 overflow (2147483648)
+  let bad_retry = try {
+    ignore(arguments(["publish", "--retry", "2147483648"]))
+    false
+  } catch {
+    @model.Invalid(d) => d.code == "usage"
+    _ => false
+  }
+  assert_true(bad_retry)
+
+  // Validate `--id` path traversal protection
+  assert_eq(validate_changeset_id("feat-1.0_ok"), "feat-1.0_ok")
+  for bad_id in ["../evil", "dir/file", "a\\b", ".hidden", "..", ""] {
+    let rejected = try {
+      ignore(validate_changeset_id(bad_id))
+      false
+    } catch {
+      @model.Invalid(_) => true
+      _ => false
+    }
+    assert_true(rejected)
+  }
+}
+
+///|
+test "v0.3.0 built-in TUI supports Space, UTF-8 Chinese editing, cursor movement, select-all, changed badge, and 0.x major confirm" {
+  // Select-all toggle ('a') and changed badge
+  let s0 = SelectState::new(2)
+  let s_all = reduce_select(s0, Char("a"))
+  assert_eq(s_all.selected, [true, true])
+  let s_none = reduce_select(s_all, Char("a"))
+  assert_eq(s_none.selected, [false, false])
+  let pkg_view = render_package_page(
+    ["moonbit:acme/a", "moonbit:acme/b"],
+    ["0.2.0", "1.0.0"],
+    s_all,
+    changed_flags=[true, false],
+  )
+  assert_true(pkg_view.contains("[changed]"))
+
+  // Summary editor: Chinese UTF-8 + Space + Left/Right cursor + Backspace + Delete
+  let mut st = SummaryState::new()
+  st = reduce_summary(st, Char("修复"))
+  st = reduce_summary(st, Space)
+  st = reduce_summary(st, Char("中文乱码"))
+  assert_eq(st.text(), "修复 中文乱码")
+  st = reduce_summary(st, Left)
+  st = reduce_summary(st, Left)
+  st = reduce_summary(st, Char("显示"))
+  assert_eq(st.text(), "修复 中文显示乱码")
+  st = reduce_summary(st, Backspace)
+  assert_eq(st.text(), "修复 中文显乱码")
+  st = reduce_summary(st, Delete)
+  assert_eq(st.text(), "修复 中文显码")
+  assert_true(render_summary_page(st, true).contains("Ctrl+E"))
+
+  // Pre-1.0 major confirmation view
+  let warn = render_zero_major_confirm("moonbit:acme/a", "0.2.0", 0)
+  assert_true(warn.contains("graduate this package to 1.0.0"))
+
+  // Diagnostic stderr formatting: omit `:1:1:` when path is empty
+  assert_eq(
+    format_diagnostic_stderr(@model.diagnostic("usage", "missing tag")),
+    "usage: missing tag",
+  )
+  assert_eq(
+    format_diagnostic_stderr(
+      @model.diagnostic(
+        "invalid-json",
+        "bad token",
+        path="moon.mod",
+        line=3,
+        column=5,
+      ),
+    ),
+    "moon.mod:3:5: invalid-json: bad token",
+  )
 }

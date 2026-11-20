@@ -2,28 +2,34 @@
 
 > API 目标：让 MoonBit 库、CI action 和外部工具复用同一个模型与 planner。名称在实现前为设计名，发布时以生成的 `.mbti` 为准。
 
-稳定入口位于 `unmbt/moonset/api`，由 root 包 re-export。`model`、`engine`（无 I/O）与 `workspace`（core/async 读取）仍分别拥有领域类型、纯规划能力和发现能力。公共 API 当前为 v1.0；adapter 扩展仍标记 experimental。
+稳定入口位于 `unmbt/moonset/api`，由根包 `unmbt/moonset` 对等重导出。`model`、`engine`、`changelog` 为无宿主 I/O 纯库（双目标 `native` + `wasm-gc`）；`workspace`、`adapters`、`executor`、`api` 与根包为 `native` 宿主能力层。公共 API 当前遵循 [ADR-008](decisions/008-v030-api-and-adapter-convergence.md) 收敛至 **`api_version = "2.0.0"`**，所有公开函数签名涉及的类型均从门面完整重导出。
 
 ```text
 engine.parse_config(source, path?) -> Config
-engine.parse_changeset(source, id~, path~, mixed?) -> Changeset
+engine.parse_changeset(source, id~, path~, mixed?, in_pre_dir?) -> Changeset
 engine.parse_pre_state(source, path?) -> PreState
-engine.build_plan(snapshot, changesets, pre?, generated_at?) -> ReleasePlan
+engine.build_plan(snapshot, changesets, pre?, generated_at?, snapshot_tag?) -> ReleasePlan
+engine.build_version_plan_with_metadata(snapshot, analysis, options, ...) -> VersionPlan
 engine.status_json(snapshot, plan, changeset_directory?) -> Json
-workspace.discover(cwd, config_path?, since?) -> LoadedWorkspace  // async
-cli.run(args_without_executable) -> Int                         // async
+workspace.discover(cwd, config_path?, since?) -> LoadedWorkspace          // async
+executor.pack_artifacts_with(host, loaded, options) -> Array[PackResult]  // async
+executor.publish_release_with(host, loaded, options) -> PublishResult     // async
+executor.create_tags_with(host, loaded, options) -> TagResult             // async
+cli.run(args_without_executable) -> Int                                   // async
 ```
 
-纯函数使用 `MoonsetError` 报告输入错误；I/O 层可能返回底层文件或进程错误，CLI 将其转换为结构化诊断及退出码。LoadedWorkspace 同时包含 snapshot、changesets、pre 和 changeset 目录。`build_plan` 不读取任何外部状态。下文接口表和 adapter traits 保留为后续阶段设计。
+纯函数使用 `MoonsetError` 报告输入错误；I/O 层使用 `ExecutionHost` 注入宿主文件、进程与时钟能力。`PublishOptions`、`PackOptions`、`TagOptions`、`VersionOptions` 采用默认构造 + Builder setter 模式，避免函数签名组合爆炸。
 
 ## 1. 公共包
 
 | 包 | 责任 | 稳定性 |
 |---|---|---|
-| `@moonset/api` | 稳定 facade 与 `api_version` | v1.0 |
-| `@moonset/model` / `@moonset/engine` | 领域类型、纯规划、版本计划 | 由 api facade 暴露 |
-| `@moonset/changelog` | 内置生成器、`ChangelogGenerator`、registry | v1 稳定 |
-| `@moonset/adapters` | JSONL runner、publisher registry、capability contracts | v1 实验，v2 稳定 |
+| `@moonset/api` / `@moonset` | 统一对等 facade 与 `api_version = "2.0.0"` | v2.0 |
+| `@moonset/model` | 强类型枚举、嵌套 `Config`、领域类型与统一 `ReleaseState` 编解码（`native` + `wasm-gc`） | v2.0 |
+| `@moonset/engine` | 纯规划器、Changesets v3 `pre`/统一 `snapshot`、SemVer/Glob/Markdown 渲染（`native` + `wasm-gc`） | v2.0 |
+| `@moonset/changelog` | 内置生成器、`ChangelogGenerator`、registry、release-notes 提取（`native` + `wasm-gc`） | v2.0 |
+| `@moonset/adapters` | 能力契约、JSONL 进程插件协议、`PublisherRegistry`、`PublisherPort`/`RegistryHost` | v2.0 |
+| `@moonset/executor` | `ExecutionHost`、异步生态驱动（MoonBit/npm/Cargo）、journal、staging、pack、publish、tag、doctor | v2.0 |
 
 CLI 通过 workspace 读取输入，再调用同一个 engine planner；不能复制规划逻辑。
 

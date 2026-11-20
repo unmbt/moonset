@@ -7,13 +7,17 @@ import {
 }
 
 // Values
-pub fn builtin_context(String, String, String, String, repository? : String, thanks? : Bool) -> ChangelogContext
+pub fn builtin_context(String, String, String, String, repository? : String, links? : Bool, thanks? : Bool, server_url? : String) -> ChangelogContext
 
 pub fn extract_release_notes(String, String) -> String?
+
+pub fn extract_unit_release_notes(String, String, String) -> String?
 
 pub fn generator_kind(String) -> GeneratorKind
 
 pub fn render(GeneratorKind, ChangelogContext) -> String
+
+pub fn splice_changelog_entry(String, String) -> String
 
 // Errors
 
@@ -26,7 +30,9 @@ pub(all) struct ChangelogContext {
   dependency_lines : Array[String]
   existing : String
   repository : String?
+  links : Bool
   thanks : Bool
+  server_url : String
 }
 pub fn ChangelogContext::to_json(Self) -> @json.Json
 
@@ -54,7 +60,7 @@ pub(all) struct ReleaseLineContext {
   new_version : String
   commit : String?
   pull_request : String?
-  author : String?
+  authors : Array[String]
 }
 
 // Type aliases

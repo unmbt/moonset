@@ -3,35 +3,50 @@ pub(all) struct PackOptions {
   dry_run : Bool
   frozen : Bool
   packages : Array[String]
+  target : String
+  manifest_out : String?
 }
 
 ///|
-fn find_moonbit_archive(
-  entries : Array[String],
-  unit_name : String,
-  version : String,
-) -> String? {
-  let clean = unit_name.replace_all(old="/", new="-")
-  let expected_prefix = clean + "-" + version
-  for entry in entries {
-    if (
-        entry.has_suffix(".tar.gz") ||
-        entry.has_suffix(".zip") ||
-        entry.has_suffix(".pkg")
-      ) &&
-      (entry.contains(expected_prefix) || entry.contains(version)) {
-      return Some(entry)
+pub fn PackOptions::new(
+  dry_run~ : Bool = false,
+  frozen~ : Bool = false,
+  packages~ : Array[String] = [],
+  target~ : String = "source",
+  manifest_out? : String,
+) -> PackOptions {
+  { dry_run, frozen, packages, target, manifest_out, }
+}
+
+///|
+fn sanitize_target_filename(target : String) -> String {
+  let out = StringBuilder()
+  for ch in target.to_array() {
+    if (ch >= 'a' && ch <= 'z') ||
+      (ch >= 'A' && ch <= 'Z') ||
+      (ch >= '0' && ch <= '9') ||
+      ch == '-' ||
+      ch == '_' ||
+      ch == '.' {
+      out.write_char(ch)
+    } else {
+      out.write_char('_')
     }
   }
-  None
+  let rendered = out.to_string()
+  if rendered == "" || rendered == "." || rendered == ".." {
+    "target"
+  } else {
+    rendered
+  }
 }
 
 ///|
 fn declared_target_spec(
-  specs_by_unit : Map[String, Array[@engine.ArtifactTargetSpec]],
+  specs_by_unit : Map[String, Array[@model.ArtifactTargetSpec]],
   unit_id : String,
   target : String,
-) -> @engine.ArtifactTargetSpec? {
+) -> @model.ArtifactTargetSpec? {
   for spec in specs_by_unit.get(unit_id).unwrap_or([]) {
     if spec.target == target {
       return Some(spec)
@@ -39,7 +54,7 @@ fn declared_target_spec(
   }
   for _, specs in specs_by_unit {
     for spec in specs {
-      if spec.target == target && spec.package_unit_id == Some(unit_id) {
+      if spec.target == target && spec.linked_package == Some(unit_id) {
         return Some(spec)
       }
     }
@@ -116,14 +131,17 @@ fn parse_artifact_intent_json(item : Json) -> @model.ArtifactIntent? {
 }
 
 ///|
-/// Pack release units for a given target platform and write a target-scoped manifest.
-pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(
+/// Pack release units for `options.target` and atomically write a target-scoped manifest.
+pub async fn[H : ExecutionHost] pack_artifacts_with(
   host : H,
   loaded : @workspace.LoadedWorkspace,
   options : PackOptions,
-  target~ : String = "source",
-  manifest_out? : String,
 ) -> Array[@model.PackResult] {
+  let target = if options.target.trim() == "" {
+    "source"
+  } else {
+    options.target.trim().to_owned()
+  }
   let adapter_registry = @adapters.AdapterRegistry::with_builtins()
   let specs_by_unit = @engine.parse_artifact_specs(loaded.snapshot.config)
   let requested : Array[String] = []
@@ -132,15 +150,20 @@ pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(
     if trimmed == "" {
       continue
     }
-    let id = @engine.canonical_id(trimmed)
-    if !loaded.snapshot.units.any(u => u.id == id || u.native_name == trimmed) {
+    let canonical = @engine.canonical_id(trimmed)
+    let matched = loaded.snapshot.units
+      .iter()
+      .find_first(u => {
+        u.id == trimmed || u.id == canonical || u.native_name == trimmed
+      })
+    guard matched is Some(found) else {
       raise invalid_error(
         "unknown-unit",
         "Unknown package requested for pack: " + pkg,
       )
     }
-    if !requested.contains(id) {
-      requested.push(id)
+    if !requested.contains(found.id) {
+      requested.push(found.id)
     }
   }
   let results : Array[@model.PackResult] = []
@@ -204,148 +227,17 @@ pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(
           }
         }
       _ => {
-        let args = if unit.ecosystem == "moonbit" {
-          let base = ["package"]
-          if options.dry_run {
-            base.push("--dry-run")
-          }
-          if options.frozen {
-            base.push("--frozen")
-          }
-          base
-        } else if unit.ecosystem == "cargo" {
-          let base = ["package", "--allow-dirty"]
-          if options.dry_run {
-            base.push("--list")
-          }
-          if options.frozen {
-            base.push("--frozen")
-          }
-          base
-        } else {
-          let base = ["pack"]
-          if options.dry_run {
-            base.push("--dry-run")
-          }
-          if options.frozen {
-            base.push("--offline")
-          }
-          base.push("--ignore-scripts")
-          base.push("--json")
-          base
-        }
-        let program = if unit.ecosystem == "moonbit" {
-          "moon"
-        } else if unit.ecosystem == "cargo" {
-          "cargo"
-        } else {
-          package_manager_program(host, manager_for_unit(loaded.snapshot, unit))
-        }
-        let output = host.run(program, args, Some(cwd))
-        if output.exit_code != 0 {
-          raise @model.Io(
-            program + " pack failed for " + unit.id + ": " + output.stderr,
-          )
-        }
-        if unit.ecosystem == "moonbit" {
-          if options.dry_run {
-            ("", "", true)
-          } else {
-            let mut found_archive : String? = None
-            for rel_dir in ["_build/package", "target/package"] {
-              if found_archive is None {
-                let pkg_dir = absolute_path(cwd, rel_dir)
-                if host.is_dir(pkg_dir) {
-                  let entries = host.readdir(pkg_dir)
-                  found_archive = find_moonbit_archive(
-                    entries,
-                    unit.native_name,
-                    version,
-                  ).map(name => absolute_path(pkg_dir, name))
-                }
-              }
-            }
-            match found_archive {
-              Some(path) => {
-                let bytes = host.read_binary(path)
-                (path, bytes_fingerprint(bytes), true)
-              }
-              None => ("", "", true)
-            }
-          }
-        } else if unit.ecosystem == "cargo" {
-          if options.dry_run {
-            ("", "", true)
-          } else {
-            let workspace_root = workspace_root_for_unit(loaded.snapshot, unit)
-            let ws_rel = (if workspace_root == "" {
-                ""
-              } else {
-                workspace_root + "/"
-              }) +
-              "target/package/" +
-              unit.native_name +
-              "-" +
-              version +
-              ".crate"
-            let unit_rel = (if unit.root == "" { "" } else { unit.root + "/" }) +
-              "target/package/" +
-              unit.native_name +
-              "-" +
-              version +
-              ".crate"
-            let ws_path = absolute_path(loaded.snapshot.root, ws_rel)
-            let unit_path = absolute_path(loaded.snapshot.root, unit_rel)
-            let archive_path = if host.exists(ws_path) {
-              ws_path
-            } else {
-              unit_path
-            }
-            if host.exists(archive_path) {
-              (
-                archive_path,
-                bytes_fingerprint(host.read_binary(archive_path)),
-                true,
-              )
-            } else {
-              raise invalid_error(
-                "artifact-missing",
-                "cargo package did not produce the expected .crate archive",
-                path=ws_rel,
-              )
-            }
-          }
-        } else {
-          let packed = @json.parse(output.stdout) catch { _ => Json::null() }
-          let (filename, integrity) = match packed {
-            Array(
-              [
-                {
-                  "filename": String(filename),
-                  "integrity": String(integrity),
-                  ..
-                },
-                ..,
-              ]
-            ) => (filename, integrity)
-            { "filename": String(filename), "integrity": String(integrity), .. } =>
-              (filename, integrity)
-            _ => ("", "")
-          }
-          let archive_path = if filename == "" {
-            ""
-          } else if options.dry_run {
-            filename
-          } else {
-            let candidate = absolute_path(cwd, filename)
-            if host.exists(candidate) {
-              candidate
-            } else {
-              filename
-            }
-          }
-          (archive_path, integrity, filename != "" && integrity != "")
-        }
+        let manager = manager_for_unit(loaded.snapshot, unit)
+        driver_pack(
+          host,
+          loaded,
+          unit,
+          manager,
+          version,
+          cwd,
+          options.dry_run,
+          options.frozen,
+        )
       }
     }
     let artifact_id = if target == "source" {
@@ -365,18 +257,18 @@ pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(
     })
   }
   if !options.dry_run && !results.is_empty() {
-    let manifest_rel = match manifest_out {
+    let manifest_rel = match options.manifest_out {
       Some(path) => path
       None =>
         if target == "source" {
           ".moonset/pack-results.json"
         } else {
-          ".moonset/pack-results-" + target + ".json"
+          ".moonset/pack-results-" + sanitize_target_filename(target) + ".json"
         }
     }
     let pack_state_path = absolute_path(loaded.snapshot.root, manifest_rel)
-    host.mkdir(parent_dir(pack_state_path))
-    host.write_text(
+    atomic_write_text(
+      host,
       pack_state_path,
       @model.canonical_json({
         "schemaVersion": 1,
@@ -384,34 +276,10 @@ pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(
         "results": results.map(x => x.to_json()),
       }) +
       "\n",
+      "pack",
     )
   }
   results
-}
-
-///|
-pub async fn pack_artifacts_for_target(
-  loaded : @workspace.LoadedWorkspace,
-  options : PackOptions,
-  target~ : String = "source",
-  manifest_out? : String,
-) -> Array[@model.PackResult] {
-  pack_artifacts_for_target_with(
-    native_host(),
-    loaded,
-    options,
-    target~,
-    manifest_out?,
-  )
-}
-
-///|
-pub async fn[H : ExecutionHost] pack_artifacts_with(
-  host : H,
-  loaded : @workspace.LoadedWorkspace,
-  options : PackOptions,
-) -> Array[@model.PackResult] {
-  pack_artifacts_for_target_with(host, loaded, options)
 }
 
 ///|
@@ -430,72 +298,27 @@ pub async fn[H : ExecutionHost] verify_artifacts_with(
   loaded : @workspace.LoadedWorkspace,
   artifacts_dir? : String,
 ) -> @engine.ArtifactVerificationReport {
-  let state_path = absolute_path(
+  let (release_state, raw_state) = load_release_state(
+    host,
     loaded.snapshot.root,
-    ".moonset/release-state.json",
   )
-  if !host.exists(state_path) {
-    raise invalid_error(
-      "usage",
-      "No release state exists; run version first",
-      path=state_path,
-    )
-  }
-  let state = @json.parse(host.read_text(state_path)) catch {
-    _ =>
-      raise invalid_error(
-        "usage",
-        "Release state is not valid JSON",
-        path=state_path,
-      )
-  }
   let intents : Array[@model.ArtifactIntent] = []
-  match state {
+  match raw_state {
     { "artifacts": Array(items), .. } =>
       for item in items {
         if parse_artifact_intent_json(item) is Some(intent) {
           intents.push(intent)
         }
       }
-    { "releases": Array(rel_items), .. } => {
-      let releases : Array[@model.Release] = []
-      for item in rel_items {
-        if item
-          is {
-            "unitId": String(unit_id),
-            "oldVersion": String(old_version),
-            "newVersion": String(new_version),
-            "level": String(level_text),
-            "publish": publish_json,
-            ..
-          } {
-          let level = match level_text {
-            "major" => @model.Major
-            "minor" => @model.Minor
-            "patch" => @model.Patch
-            _ => @model.None
-          }
-          releases.push({
-            unit_id,
-            old_version,
-            new_version,
-            level,
-            reasons: [],
-            changesets: [],
-            publish: publish_json == Json::boolean(true),
-          })
-        }
-      }
+    _ => {
       let plan : @model.ReleasePlan = {
-        fingerprint: match state {
-          { "planFingerprint": String(fp), .. } => fp
-          _ => ""
-        },
-        releases,
+        fingerprint: release_state.plan_fingerprint,
+        releases: release_state.releases,
         dependency_updates: [],
         affected_paths: [],
         changesets: [],
         next_pre_state: None,
+        is_snapshot: release_state.is_snapshot,
         warnings: [],
         generated_at: None,
       }
@@ -504,12 +327,6 @@ pub async fn[H : ExecutionHost] verify_artifacts_with(
         intents.push(intent)
       }
     }
-    _ =>
-      raise invalid_error(
-        "usage",
-        "Release state has an invalid shape",
-        path=state_path,
-      )
   }
   let scan_dir = absolute_path(
     loaded.snapshot.root,
@@ -556,7 +373,7 @@ pub async fn[H : ExecutionHost] verify_artifacts_with(
   let owners_by_package : Map[String, Array[String]] = Map([])
   for owner_id, specs in specs_by_unit {
     for spec in specs {
-      if spec.required && spec.package_unit_id is Some(pkg) && pkg != owner_id {
+      if spec.required && spec.linked_package is Some(pkg) && pkg != owner_id {
         let owners = owners_by_package.get(pkg).unwrap_or([])
         if !owners.contains(owner_id) {
           owners.push(owner_id)
@@ -565,9 +382,9 @@ pub async fn[H : ExecutionHost] verify_artifacts_with(
       }
     }
   }
-  let expected_head = match state {
-    { "sourceHead": String(head), .. } => Some(head)
-    _ => loaded.snapshot.git_head
+  let expected_head = match release_state.source_head {
+    Some(head) => Some(head)
+    None => loaded.snapshot.git_head
   }
   @engine.verify_artifact_matrix(
     intents,

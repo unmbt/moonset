@@ -109,22 +109,35 @@ jobs:
             chmod +x dist/moonset-linux-x64
             ./dist/moonset-linux-x64 release-notes --version "$version" --file "$tmp_dir/CHANGELOG.md" > "$notes_file" || : > "$notes_file"
           fi
+          extra_flags=()
+          if [[ "$version" == *-* ]]; then
+            extra_flags+=(--prerelease)
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/moonset-* dist/SHA256SUMS --clobber
           elif [ -s "$notes_file" ]; then
-            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --notes-file "$notes_file"
+            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --notes-file "$notes_file" "${extra_flags[@]}"
           else
-            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --generate-notes
+            gh release create "$tag" dist/moonset-* dist/SHA256SUMS --title "$tag" --generate-notes "${extra_flags[@]}"
           fi
-          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            target_sha="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.sha')"
-            ref_obj_type="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.type')"
-            if [ "$ref_obj_type" = "tag" ]; then
-              target_sha="$(gh api "repos/${GH_REPO}/git/tags/${target_sha}" --jq '.object.sha')"
+          if [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            float_tag="v${major}"
+            if [ "$major" -eq 0 ]; then
+              float_tag="v1"
             fi
-            if gh api "repos/${GH_REPO}/git/ref/tags/v1" >/dev/null 2>&1; then
-              gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/v1" -f "sha=${target_sha}" -F "force=true" >/dev/null
-            else
-              gh api -X POST "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/v1" -f "sha=${target_sha}" >/dev/null
+            # Only advance floating tag when this release is the highest stable tag in its series
+            highest="$(gh release list -R "$GH_REPO" --exclude-drafts --exclude-pre-releases --limit 50 --json tagName --jq '[.[] | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[]' | tr -d '\r' | sort -V | tail -n 1 || true)"
+            if [ -z "$highest" ] || [ "$(printf '%s\n%s\n' "$highest" "$tag" | sort -V | tail -n 1)" = "$tag" ]; then
+              target_sha="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.sha' | tr -d '\r')"
+              ref_obj_type="$(gh api "repos/${GH_REPO}/git/ref/tags/${tag}" --jq '.object.type' | tr -d '\r')"
+              if [ "$ref_obj_type" = "tag" ]; then
+                target_sha="$(gh api "repos/${GH_REPO}/git/tags/${target_sha}" --jq '.object.sha' | tr -d '\r')"
+              fi
+              if gh api "repos/${GH_REPO}/git/ref/tags/${float_tag}" >/dev/null 2>&1; then
+                gh api -X PATCH "repos/${GH_REPO}/git/refs/tags/${float_tag}" -f "sha=${target_sha}" -F "force=true" >/dev/null
+              else
+                gh api -X POST "repos/${GH_REPO}/git/refs" -f "ref=refs/tags/${float_tag}" -f "sha=${target_sha}" >/dev/null
+              fi
             fi
           fi

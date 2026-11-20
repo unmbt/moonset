@@ -28,7 +28,7 @@ fn matches_schema_pattern(text : String, pattern : String) -> Bool {
     }
     return suffix != "" && !has_whitespace(suffix)
   }
-  true
+  false
 }
 
 ///|
@@ -158,11 +158,8 @@ fn schema_issue(
   }
   if property(schema, "allOf") is Array(rules) {
     for rule in rules {
-      if schema_issue(value, property(rule, "if"), root, path) is None {
-        if schema_issue(value, property(rule, "then"), root, path)
-          is Some(issue) {
-          return Some(issue)
-        }
+      if schema_issue(value, rule, root, path) is Some(issue) {
+        return Some(issue)
       }
     }
   }

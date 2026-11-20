@@ -80,14 +80,17 @@ runs:
           local raw
           raw="$(date +%s%3N 2>/dev/null || true)"
           case "$raw" in
-            *[0-9]*)
+            ''|*[!0-9]*)
+              printf '%s000' "$(date +%s)"
+              ;;
+            *)
               if [ "${#raw}" -ge 13 ]; then
                 printf '%s' "$raw"
-                return
+              else
+                printf '%s000' "$(date +%s)"
               fi
               ;;
           esac
-          printf '%s000' "$(date +%s)"
         }
         start_ms="$(now_ms)"
         tmp_dir="$(mktemp -d)"
@@ -111,14 +114,14 @@ runs:
         err_code=""
         plan_fp=""
         if [ -s "$tmp_dir/status.json" ]; then
-          plan_fp="$(jq -r '.planFingerprint // .fingerprint // empty' "$tmp_dir/status.json" 2>/dev/null || true)"
-          err_code="$(jq -r '.errors[0].code // empty' "$tmp_dir/status.json" 2>/dev/null || true)"
+          plan_fp="$(jq -r '.planFingerprint // .fingerprint // empty' "$tmp_dir/status.json" 2>/dev/null | tr -d '\r' || true)"
+          err_code="$(jq -r '.errors[0].code // empty' "$tmp_dir/status.json" 2>/dev/null | tr -d '\r' || true)"
         fi
 
         if [ "$exit_code" -eq 0 ]; then
           if [ "$json_code" -eq 0 ]; then
-            has_release="$(jq -r '.hasRelease // false' "$tmp_dir/status.json")"
-            cs_count="$(jq -r '.changesets | length' "$tmp_dir/status.json")"
+            has_release="$(jq -r '.hasRelease // false' "$tmp_dir/status.json" | tr -d '\r')"
+            cs_count="$(jq -r '.changesets | length' "$tmp_dir/status.json" | tr -d '\r')"
             if [ "$has_release" = "true" ]; then
               state="release"
             elif [ "$cs_count" -gt 0 ]; then
@@ -155,9 +158,10 @@ runs:
           --arg res "$state" \
           --argjson duration "$duration" \
           --arg err "$err_code" \
-          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:(if $fp == "" then null else $fp end),result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}')"
+          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:(if $fp == "" then null else $fp end),result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}' | tr -d '\r')"
 
-        delimiter="MOONSET_EOF_$(date +%s)_$$"
+        rand_hex="$(od -An -tx1 -N12 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%s_%s_%s' "$(date +%s)" "$$" "${RANDOM:-0}")"
+        delimiter="MOONSET_EOF_${rand_hex}"
         {
           echo "state=$state"
           echo "exit-code=$exit_code"

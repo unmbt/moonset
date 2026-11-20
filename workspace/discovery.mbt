@@ -14,13 +14,21 @@ async fn locate(
   since : String?,
 ) -> (String, String) {
   let start = @fs.realpath(cwd)
-  let head_files = if since is Some(_) {
-    let repo = git(start, ["rev-parse", "--show-toplevel"]).trim().to_owned()
-    let paths = git(repo, ["ls-tree", "-r", "--name-only", "-z", "HEAD"])
-      .split("\u0000")
-      .map(x => join(repo, x.to_owned()))
-      .collect()
-    Some(paths)
+  let head_files : Map[String, Bool]? = if since is Some(_) {
+    let repo_raw = git(start, ["rev-parse", "--show-toplevel"])
+      .trim()
+      .to_owned()
+    let repo = @fs.realpath(repo_raw) catch { _ => repo_raw }
+    let map : Map[String, Bool] = Map([])
+    for
+      x in git(repo, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]).split(
+        "\u0000",
+      ) {
+      if x != "" {
+        map[norm_cmp_path(join(repo, x.to_owned()))] = true
+      }
+    }
+    Some(map)
   } else {
     None
   }
@@ -33,7 +41,15 @@ async fn locate(
     if head_files is None && !@fs.exists(absolute) {
       fail_input("Explicit config does not exist", path=absolute)
     }
-    let config_root_dir = parent(parent(absolute))
+    let config_dir = parent(absolute)
+    let dir_name = @path.Path(config_dir).basename().to_owned()
+    // Standard `.changeset/config.json` or `.moonset/config.json` lives one level under the domain root;
+    // a standalone `--config ./moonset.json` lives directly in the domain root.
+    let config_root_dir = if dir_name == ".changeset" || dir_name == ".moonset" {
+      parent(config_dir)
+    } else {
+      config_dir
+    }
     let root = if @fs.exists(config_root_dir) {
       @fs.realpath(config_root_dir)
     } else {
@@ -43,24 +59,34 @@ async fn locate(
   }
   let mut cursor = start
   let mut single : String? = None
+  let mut legacy_json_root : String? = None
   for ;; {
     let has_config = match head_files {
-      Some(paths) => paths.contains(join(cursor, ".changeset/config.json"))
+      Some(paths) =>
+        paths.contains(norm_cmp_path(join(cursor, ".changeset/config.json")))
       None => @fs.exists(join(cursor, ".changeset/config.json"))
     }
     let has_work = match head_files {
-      Some(paths) => paths.contains(join(cursor, "moon.work"))
+      Some(paths) => paths.contains(norm_cmp_path(join(cursor, "moon.work")))
       None => @fs.exists(join(cursor, "moon.work"))
     }
     let has_mod = match head_files {
-      Some(paths) => paths.contains(join(cursor, "moon.mod"))
+      Some(paths) => paths.contains(norm_cmp_path(join(cursor, "moon.mod")))
       None => @fs.exists(join(cursor, "moon.mod"))
+    }
+    let has_legacy_mod_json = match head_files {
+      Some(paths) =>
+        paths.contains(norm_cmp_path(join(cursor, "moon.mod.json")))
+      None => @fs.exists(join(cursor, "moon.mod.json"))
     }
     if has_config || has_work {
       return (cursor, ".changeset/config.json")
     }
     if single is None && has_mod {
       single = Some(cursor)
+    }
+    if legacy_json_root is None && has_legacy_mod_json {
+      legacy_json_root = Some(cursor)
     }
     if @fs.exists(join(cursor, ".git")) || parent(cursor) == cursor {
       break
@@ -70,6 +96,13 @@ async fn locate(
   match single {
     Some(root) => (root, ".changeset/config.json")
     None => {
+      if legacy_json_root is Some(legacy_dir) {
+        fail_input(
+          "Legacy moon.mod.json is unsupported; migrate to modern moon.mod (MoonBit toolchain)",
+          path=join(legacy_dir, "moon.mod.json"),
+          code="unsupported-capability",
+        )
+      }
       fail_input(
         "No MoonBit module, workspace or release config found",
         path=start,
@@ -105,21 +138,30 @@ fn manifest_document(
 async fn nested_checkout(reader : Reader, path : String) -> Bool {
   let mut cursor = path
   while cursor != "" && cursor != "." {
-    match reader.git_root {
-      Some(root) => {
+    if reader.use_git_tree {
+      if reader.git_root is Some(root) {
         let key = relative(root, join(reader.root, cursor))
         if reader.tree.get(key) == Some("160000") {
           return true
         }
       }
-      None =>
-        if @fs.exists(join(reader.root, join(cursor, ".git"))) {
-          return true
-        }
+    } else if @fs.exists(join(reader.root, join(cursor, ".git"))) {
+      return true
     }
     cursor = slash(parent(cursor))
   }
   false
+}
+
+///|
+fn is_ignored_changeset_filename(file : String) -> Bool {
+  let lower = file.to_lower()
+  !lower.has_suffix(".md") ||
+  file.has_prefix(".") ||
+  lower == "readme.md" ||
+  lower == "agents.md" ||
+  lower == "claude.md" ||
+  lower == "gemini.md"
 }
 
 ///|
@@ -148,37 +190,20 @@ pub async fn discover(
   let units : Array[@model.ReleaseUnit] = []
   let ownership : Array[@model.Ownership] = []
   let unmanaged : Array[String] = []
+  let managed_root_manifests : Array[String] = []
   let roots : Array[(String, String, Bool)] = []
-  match config.raw {
-    {
-      "experimental": {
-        "mixedWorkspaces": { "workspaces": Array(items), .. },
-        ..
-      },
-      ..
-    } =>
-      for item in items {
-        if item
-          is {
-            "id": String(id),
-            "root": String(path),
-            "ecosystem": String(ecosystem),
-            "includeRoot": include_root,
-            ..
-          } {
-          if ecosystem == "moonbit" {
-            roots.push(
-              (
-                id,
-                relative(root, join(root, path)),
-                include_root == Json::boolean(true),
-              ),
-            )
-          }
+  match config.mixed {
+    Some(mixed_cfg) =>
+      for spec in mixed_cfg.workspaces {
+        if spec.ecosystem == @model.MoonBit {
+          roots.push(
+            (spec.id, relative(root, join(root, spec.root)), spec.include_root),
+          )
         }
       }
-    _ => roots.push(("main", "", reader.read("moon.work") is None))
+    None => roots.push(("main", "", reader.read("moon.work") is None))
   }
+  let overrides = config.unit_overrides()
   let seen : Map[String, Bool] = Map([])
   for (workspace_id, ws_root, include_root) in roots {
     let members : Array[String] = []
@@ -199,13 +224,21 @@ pub async fn discover(
           members.push(ws_root)
         }
       }
-      None => if include_root { members.push(ws_root) }
+      None =>
+        if include_root {
+          members.push(ws_root)
+        } else if reader.read(slash(join(ws_root, "moon.mod"))) is Some(_) {
+          fail_input(
+            "MoonBit workspace has no moon.work; set includeRoot: true for single-module root",
+            path=work_path,
+          )
+        }
     }
     workspaces.push({
       id: workspace_id,
       root: ws_root,
-      ecosystem: "moonbit",
-      manager: "moon",
+      ecosystem: @model.MoonBit,
+      manager: @model.Moon,
     })
     let member_manifests = members.map(m => slash(join(m, "moon.mod")))
     reader.prefetch(member_manifests)
@@ -237,7 +270,7 @@ pub async fn discover(
         fail_input("Workspace member has no moon.mod", path=manifest)
         continue
       }
-      let canonical = if reader.head is None {
+      let canonical = if !reader.use_git_tree {
         @fs.realpath(join(root, manifest))
       } else {
         manifest
@@ -272,70 +305,53 @@ pub async fn discover(
           end: dep.span.end,
           target_condition: None,
         })
-      let publish = match config.raw {
-        {
-          "experimental": {
-            "mixedWorkspaces": { "units": Object(overrides), .. },
-            ..
-          },
-          ..
-        } =>
-          match overrides.get(id) {
-            Some({ "publish": False, .. }) => false
-            _ => true
-          }
+      let publish = match overrides.get(id) {
+        Some({ publish: Some(flag), .. }) => flag
         _ => true
+      }
+      let version_span : @model.TextSpan? = match
+        document.string_field("version") {
+        Some(field) => Some({ start: field.span.start, end: field.span.end, })
+        None => None
       }
       units.push({
         id,
         native_name: name,
-        ecosystem: "moonbit",
+        ecosystem: @model.MoonBit,
         workspace_id,
         root: member_path,
         manifest,
         version_path: manifest,
         version_field: "version",
         version: document.version(),
+        version_span,
         visibility: if document.is_private() {
-          "restricted"
+          @model.Restricted
         } else {
-          "public"
+          @model.Public
         },
         publish,
+        publish_config: None,
         dependencies,
       })
       ownership.push({ path: manifest, field: "version", owner: id, })
     }
   }
-  for spec in config.mixed_workspaces {
-    if spec.ecosystem == "npm" {
+  for spec in config.mixed_workspaces() {
+    if spec.ecosystem == @model.Npm {
       discover_npm_workspace(
-        reader,
-        root,
-        spec,
-        units,
-        workspaces,
-        ownership,
-        unmanaged,
-        seen,
-        config.unit_overrides,
+        reader, root, spec, units, workspaces, ownership, seen, overrides, managed_root_manifests,
       )
-    } else if spec.ecosystem == "cargo" {
+    } else if spec.ecosystem == @model.Cargo {
       discover_cargo_workspace(
-        reader,
-        spec,
-        units,
-        workspaces,
-        ownership,
-        seen,
-        config.unit_overrides,
+        reader, root, spec, units, workspaces, ownership, seen, overrides, managed_root_manifests,
       )
     }
   }
   if units.is_empty() {
     fail_input("No managed release units were discovered", path=root)
   }
-  for id, unit_override in config.unit_overrides {
+  for id, unit_override in overrides {
     let mut found : @model.ReleaseUnit? = None
     for unit in units {
       if unit.id == id {
@@ -350,21 +366,20 @@ pub async fn discover(
       continue
     }
     if unit_override.publisher is Some(publisher) {
-      let allowed = if config.publisher_kind == "api" ||
-        config.publisher_kind == "command" {
+      let allowed = if config.publisher.kind == "api" ||
+        config.publisher.kind == "command" {
         publisher.trim() != ""
       } else {
         match unit.ecosystem {
-          "moonbit" => publisher == "moon"
-          "npm" => publisher == "npm" || publisher == "pnpm"
-          "cargo" => publisher == "cargo"
-          _ => false
+          @model.MoonBit => publisher == "moon"
+          @model.Npm => publisher == "npm" || publisher == "pnpm"
+          @model.Cargo => publisher == "cargo"
         }
       }
       if !allowed {
         fail_input(
           "Unsupported publisher override for " +
-          unit.ecosystem +
+          unit.ecosystem.text() +
           ": " +
           publisher,
           path=config_file,
@@ -385,7 +400,8 @@ pub async fn discover(
   for dir in inspection_roots {
     for file in ["package.json", "pnpm-workspace.yaml", "Cargo.toml"] {
       let path = slash(join(dir, file))
-      let managed = units.any(unit => unit.manifest == path)
+      let managed = units.any(unit => unit.manifest == path) ||
+        managed_root_manifests.contains(path)
       if !managed && !unmanaged.contains(path) && reader.read(path) is Some(_) {
         unmanaged.push(path)
       }
@@ -401,76 +417,79 @@ pub async fn discover(
   units.sort_by((a, b) => a.id.compare(b.id))
   ownership.sort_by((a, b) => a.path.compare(b.path))
   unmanaged.sort()
-  // Version planning needs the current changelog and persisted release state
-  // in its immutable source snapshot so stale hashes can be checked before
-  // any write occurs.
   let preload_paths : Array[String] = [".moonset/release-state.json"]
   for unit in units {
     let changelog = if unit.root == "" {
-      config.changelog_file
+      config.changelog.file
     } else {
-      slash(join(unit.root, config.changelog_file))
+      slash(join(unit.root, config.changelog.file))
     }
     preload_paths.push(changelog)
   }
   reader.prefetch(preload_paths)
   for unit in units {
     let changelog = if unit.root == "" {
-      config.changelog_file
+      config.changelog.file
     } else {
-      slash(join(unit.root, config.changelog_file))
+      slash(join(unit.root, config.changelog.file))
     }
     ignore(reader.read(changelog))
   }
   ignore(reader.read(".moonset/release-state.json"))
-  let pre_file = match config.raw {
-    { "pre": { "file": String(path), .. }, .. } => path
-    _ => slash(join(changeset_directory, "pre.json"))
+  let pre_file = if config.pre.file == ".changeset/pre.json" &&
+    changeset_directory != ".changeset" &&
+    changeset_directory != "" {
+    slash(join(changeset_directory, "pre.json"))
+  } else {
+    config.pre.file
   }
   let pre = match reader.read(pre_file) {
     Some(source) => Some(@engine.parse_pre_state(source, path=pre_file))
     None => None
   }
-  let changeset_dirs : Array[String] = [changeset_directory]
-  if pre is Some(_) {
-    let raw_pre_dir = slash(config.pre_directory).trim().to_owned()
-    let pre_dir = if raw_pre_dir.has_suffix("/") {
-      raw_pre_dir[:raw_pre_dir.length() - 1].to_owned()
-    } else {
-      raw_pre_dir
-    }
-    if pre_dir != "" && pre_dir != "." && !changeset_dirs.contains(pre_dir) {
-      changeset_dirs.push(pre_dir)
-    }
+  let raw_pre_dir = slash(config.pre.directory).trim().to_owned()
+  let pre_dir = if raw_pre_dir.has_suffix("/") {
+    raw_pre_dir[:raw_pre_dir.length() - 1].to_owned()
+  } else {
+    raw_pre_dir
+  }
+  let changeset_dirs : Array[(String, Bool)] = [(changeset_directory, false)]
+  if pre is Some(_) &&
+    pre_dir != "" &&
+    pre_dir != "." &&
+    pre_dir != changeset_directory {
+    changeset_dirs.push((pre_dir, true))
   }
   let changesets = []
   let changeset_commits : Map[String, String] = Map([])
   let pending_commit_paths : Array[(String, String)] = []
-  let cs_entries : Array[(String, String)] = []
+  let cs_entries : Array[(String, String, Bool)] = []
   let cs_paths : Array[String] = []
-  for dir in changeset_dirs {
+  for pair in changeset_dirs {
+    let (dir, in_pre) = pair
     let cs_files = reader.files(dir)
     for file in cs_files {
-      if !file.has_suffix(".md") || file == "README.md" || file.has_prefix(".") {
+      if is_ignored_changeset_filename(file) {
         continue
       }
       let path = slash(join(dir, file))
       if since is Some(_) && !changed_files.contains(path) {
         continue
       }
-      cs_entries.push((file, path))
+      cs_entries.push((file, path, in_pre))
       cs_paths.push(path)
     }
   }
   reader.prefetch(cs_paths)
   for entry in cs_entries {
-    let (file, path) = entry
+    let (file, path, in_pre_dir) = entry
     if reader.read(path) is Some(source) {
       let cs = @engine.parse_changeset(
         source,
         id=file[:file.length() - 3].to_owned(),
         path~,
-        mixed=config.mixed,
+        mixed=config.is_mixed(),
+        in_pre_dir~,
       )
       changesets.push(cs)
       if include_commits {
@@ -479,13 +498,25 @@ pub async fn discover(
     }
   }
   if include_commits && !pending_commit_paths.is_empty() {
-    let git_dir = match reader.git_root {
-      Some(dir) => Some(dir)
-      None => if @fs.exists(join(root, ".git")) { Some(root) } else { None }
-    }
-    if git_dir is Some(repo) {
+    if reader.git_root is Some(repo) {
+      let is_shallow = (git(repo, ["rev-parse", "--is-shallow-repository"]) catch {
+          _ => "false"
+        })
+        .trim()
+        .to_owned() ==
+        "true"
+      if is_shallow {
+        warnings.push(
+          @model.diagnostic(
+            "shallow-repository",
+            "Git clone is shallow; changeset commit attribution may be incomplete (use fetch-depth: 0 in CI)",
+            path=root,
+          ),
+        )
+      }
       let cs_dir_rels : Array[String] = []
-      for dir in changeset_dirs {
+      for pair in changeset_dirs {
+        let dir = pair.0
         let rel = relative(repo, join(root, dir)) catch { _ => dir }
         if !cs_dir_rels.contains(rel) {
           cs_dir_rels.push(rel)
@@ -514,41 +545,21 @@ pub async fn discover(
           added_by_path[line] = current_sha
         }
       }
-      let mut need_fallback = false
       for item in pending_commit_paths {
         let (cs_id, path) = item
         let repo_rel = relative(repo, join(root, path)) catch { _ => path }
         match added_by_path.get(repo_rel) {
           Some(sha) => changeset_commits[cs_id] = sha
-          None => need_fallback = true
-        }
-      }
-      if need_fallback {
-        let latest_by_path : Map[String, String] = Map([])
-        let log_all = git(
-          repo,
-          ["log", "--name-only", "--format=__MOONSET_COMMIT__%H", "--"] +
-          cs_dir_rels,
-        ) catch {
-          _ => ""
-        }
-        current_sha = ""
-        for raw in log_all.replace_all(old="\r\n", new="\n").split("\n") {
-          let line = raw.trim().to_owned()
-          if line == "" {
-            continue
-          }
-          if line.has_prefix("__MOONSET_COMMIT__") {
-            current_sha = line[18:].to_owned()
-          } else if current_sha != "" && !latest_by_path.contains(line) {
-            latest_by_path[line] = current_sha
-          }
-        }
-        for item in pending_commit_paths {
-          let (cs_id, path) = item
-          if !changeset_commits.contains(cs_id) {
-            let repo_rel = relative(repo, join(root, path)) catch { _ => path }
-            if latest_by_path.get(repo_rel) is Some(sha) {
+          None => {
+            // Follow renames (e.g. `.changeset/foo.md` moved to `.changeset/pre/foo.md`)
+            let followed = git(repo, [
+              "log", "--follow", "--diff-filter=A", "-n", "1", "--format=%H", "--",
+              repo_rel,
+            ]) catch {
+              _ => ""
+            }
+            let sha = followed.trim().to_owned()
+            if sha != "" {
               changeset_commits[cs_id] = sha
             }
           }

@@ -9,7 +9,7 @@ pub(all) struct ReleaseLineContext {
   new_version : String
   commit : String?
   pull_request : String?
-  author : String?
+  authors : Array[String]
 }
 
 ///|
@@ -21,7 +21,9 @@ pub(all) struct ChangelogContext {
   dependency_lines : Array[String]
   existing : String
   repository : String?
+  links : Bool
   thanks : Bool
+  server_url : String
 }
 
 ///|
@@ -36,7 +38,7 @@ pub fn ChangelogContext::to_json(self : ChangelogContext) -> Json {
       Some(value) => Json::string(value)
       None => Json::null()
     }
-    let author : Json = match line.author {
+    let first_author : Json = match line.authors.get(0) {
       Some(value) => Json::string(value)
       None => Json::null()
     }
@@ -49,7 +51,8 @@ pub fn ChangelogContext::to_json(self : ChangelogContext) -> Json {
       "newVersion": line.new_version,
       "commit": commit,
       "pullRequest": pull_request,
-      "author": author,
+      "author": first_author,
+      "authors": line.authors.map(Json::string),
     }
     row
   })
@@ -65,7 +68,9 @@ pub fn ChangelogContext::to_json(self : ChangelogContext) -> Json {
     "dependencyLines": self.dependency_lines,
     "existing": self.existing,
     "repository": repository,
+    "links": self.links,
     "thanks": self.thanks,
+    "serverUrl": self.server_url,
   }
 }
 
@@ -146,15 +151,13 @@ pub fn GeneratorRegistry::render(
 }
 
 ///|
-/// Render a complete changelog document using a registered Phase 5 name.
+/// Render a complete changelog document using a registered generator kind.
 pub fn render(kind : GeneratorKind, context : ChangelogContext) -> String {
   match kind {
     Builtin => render_builtin(context)
     Git => render_git(context)
     GitHub => render_github(context)
     External(name) =>
-      // External generators are executed by adapters. Keeping this result
-      // explicit prevents an unknown name from silently becoming builtin.
       "# Changelog\n\n<!-- unsupported generator: " + name + " -->\n"
   }
 }
@@ -166,7 +169,9 @@ pub fn builtin_context(
   date : String,
   existing : String,
   repository? : String,
+  links~ : Bool = true,
   thanks~ : Bool = true,
+  server_url~ : String = "https://github.com",
 ) -> ChangelogContext {
   {
     unit_id,
@@ -176,7 +181,9 @@ pub fn builtin_context(
     dependency_lines: [],
     existing,
     repository,
+    links,
     thanks,
+    server_url,
   }
 }
 
@@ -205,90 +212,228 @@ fn is_ident_char(ch : Char) -> Bool {
 }
 
 ///|
-fn linkify_issue_refs(text : String, repository : String?) -> String {
+fn clean_server_url(server_url : String) -> String {
+  let trimmed = server_url.trim().to_owned()
+  if trimmed == "" {
+    "https://github.com"
+  } else if trimmed.has_suffix("/") {
+    trimmed[:trimmed.length() - 1].to_owned()
+  } else {
+    trimmed
+  }
+}
+
+///|
+fn linkify_issue_refs(
+  text : String,
+  repository : String?,
+  server_url : String,
+) -> String {
   guard repository is Some(repo) else { return text }
   if repo == "" || !text.contains("#") {
     return text
   }
-  let chars = text.to_array()
-  let len = chars.length()
-  let out = StringBuilder()
-  let mut i = 0
-  let mut in_code = false
-  let mut in_link_text = false
-  let mut in_link_url = false
-  while i < len {
-    let ch = chars[i]
-    if ch == '`' {
-      in_code = !in_code
-      out.write_char(ch)
-      i += 1
+  let base_url = clean_server_url(server_url)
+  let lines = text
+    .replace_all(old="\r\n", new="\n")
+    .split("\n")
+    .map(x => x.to_owned())
+    .collect()
+  let rendered_lines : Array[String] = []
+  let mut in_fence = false
+  let mut fence_char = '`'
+  let mut fence_len = 0
+  for line in lines {
+    let trimmed = line.trim_start().to_owned()
+    if trimmed.has_prefix("```") || trimmed.has_prefix("~~~") {
+      let fc = trimmed.to_array()[0]
+      let mut fl = 0
+      for ch in trimmed.to_array() {
+        if ch == fc {
+          fl += 1
+        } else {
+          break
+        }
+      }
+      if !in_fence {
+        in_fence = true
+        fence_char = fc
+        fence_len = fl
+        rendered_lines.push(line)
+        continue
+      } else if fc == fence_char && fl >= fence_len {
+        in_fence = false
+        rendered_lines.push(line)
+        continue
+      }
+    }
+    if in_fence {
+      rendered_lines.push(line)
       continue
     }
-    if !in_code {
-      if ch == '[' {
-        in_link_text = true
-        out.write_char(ch)
-        i += 1
+    let chars = line.to_array()
+    let len = chars.length()
+    let out = StringBuilder()
+    let mut i = 0
+    let mut code_ticks = 0
+    let mut in_link_text = false
+    let mut in_link_url = false
+    while i < len {
+      let ch = chars[i]
+      if ch == '`' {
+        let mut ticks = 0
+        while i + ticks < len && chars[i + ticks] == '`' {
+          out.write_char('`')
+          ticks += 1
+        }
+        if code_ticks == 0 {
+          code_ticks = ticks
+        } else if ticks == code_ticks {
+          code_ticks = 0
+        }
+        i += ticks
         continue
       }
-      if ch == ']' && in_link_text {
-        in_link_text = false
-        out.write_char(ch)
-        i += 1
-        if i < len && chars[i] == '(' {
-          in_link_url = true
-          out.write_char('(')
+      if code_ticks == 0 {
+        if ch == '[' {
+          in_link_text = true
+          out.write_char(ch)
           i += 1
+          continue
         }
-        continue
-      }
-      if ch == ')' && in_link_url {
-        in_link_url = false
-        out.write_char(ch)
-        i += 1
-        continue
-      }
-      if !in_link_text &&
-        !in_link_url &&
-        ch == '#' &&
-        (i == 0 || !is_ident_char(chars[i - 1])) &&
-        i + 1 < len &&
-        chars[i + 1] >= '1' &&
-        chars[i + 1] <= '9' {
-        let mut j = i + 1
-        let num = StringBuilder()
-        while j < len && is_ascii_digit(chars[j]) {
-          num.write_char(chars[j])
-          j += 1
+        if ch == ']' && in_link_text {
+          in_link_text = false
+          out.write_char(ch)
+          i += 1
+          if i < len && chars[i] == '(' {
+            in_link_url = true
+            out.write_char('(')
+            i += 1
+          }
+          continue
         }
-        let issue = num.to_string()
-        out.write_string(
-          "[#" +
-          issue +
-          "](https://github.com/" +
-          repo +
-          "/issues/" +
-          issue +
-          ")",
-        )
-        i = j
-        continue
+        if ch == ')' && in_link_url {
+          in_link_url = false
+          out.write_char(ch)
+          i += 1
+          continue
+        }
+        if !in_link_text &&
+          !in_link_url &&
+          ch == '#' &&
+          (
+            i == 0 ||
+            (
+              !is_ident_char(chars[i - 1]) &&
+              chars[i - 1] != '/' &&
+              chars[i - 1] != '#'
+            )
+          ) &&
+          i + 1 < len &&
+          chars[i + 1] >= '1' &&
+          chars[i + 1] <= '9' {
+          let mut j = i + 1
+          let num = StringBuilder()
+          while j < len && is_ascii_digit(chars[j]) {
+            num.write_char(chars[j])
+            j += 1
+          }
+          if j == len || !is_ident_char(chars[j]) {
+            let issue = num.to_string()
+            out.write_string(
+              "[#" +
+              issue +
+              "](" +
+              base_url +
+              "/" +
+              repo +
+              "/issues/" +
+              issue +
+              ")",
+            )
+            i = j
+            continue
+          }
+        }
       }
+      out.write_char(ch)
+      i += 1
     }
-    out.write_char(ch)
-    i += 1
+    rendered_lines.push(out.to_string())
   }
-  out.to_string()
+  rendered_lines.join("\n")
 }
 
 ///|
-fn short_commit_link(commit : String, repository : String?) -> String {
+fn short_commit_link(
+  commit : String,
+  repository : String?,
+  links : Bool,
+  server_url : String,
+) -> String {
   let short = if commit.length() > 7 { commit[:7].to_owned() } else { commit }
+  if !links {
+    return "`" + short + "`"
+  }
   match repository {
     Some(repo) if repo != "" =>
-      "[`" + short + "`](https://github.com/" + repo + "/commit/" + commit + ")"
+      "[`" +
+      short +
+      "`](" +
+      clean_server_url(server_url) +
+      "/" +
+      repo +
+      "/commit/" +
+      commit +
+      ")"
     _ => "`" + short + "`"
+  }
+}
+
+///|
+fn indent_multiline_summary(text : String) -> String {
+  let normalized = text.replace_all(old="\r\n", new="\n")
+  let parts = normalized.split("\n").map(x => x.to_owned()).collect()
+  if parts.length() <= 1 {
+    return normalized
+  }
+  let out : Array[String] = [parts[0]]
+  for i in 1..<parts.length() {
+    if parts[i] == "" {
+      out.push("")
+    } else {
+      out.push("  " + parts[i])
+    }
+  }
+  out.join("\n")
+}
+
+///|
+fn format_authors(
+  authors : Array[String],
+  links : Bool,
+  server_url : String,
+) -> String? {
+  let formatted : Array[String] = []
+  let base_url = clean_server_url(server_url)
+  for raw in authors {
+    let author = raw.trim().to_owned()
+    if author == "" {
+      continue
+    }
+    let rendered = if links {
+      "[@" + author + "](" + base_url + "/" + author + ")"
+    } else {
+      "@" + author
+    }
+    if !formatted.contains(rendered) {
+      formatted.push(rendered)
+    }
+  }
+  if formatted.is_empty() {
+    None
+  } else {
+    Some("Thanks " + formatted.join(", ") + "!")
   }
 }
 
@@ -297,49 +442,58 @@ fn line_text(
   line : ReleaseLineContext,
   kind : String,
   repository : String?,
+  links : Bool,
   thanks : Bool,
+  server_url : String,
 ) -> String {
-  let summary_text = if kind == "github" {
-    linkify_issue_refs(line.summary, repository)
+  let summary_text = if kind == "github" && links {
+    linkify_issue_refs(line.summary, repository, server_url)
   } else {
     line.summary
   }
-  let body = summary_text.replace_all(old="\n", new="\n  ")
+  let body = indent_multiline_summary(summary_text)
   if kind == "builtin" {
     return "- " + body
   }
   if kind == "git" {
     return match line.commit {
       Some(commit) if commit != "" =>
-        "- " + short_commit_link(commit, repository) + ": " + body
+        "- " +
+        short_commit_link(commit, repository, links, server_url) +
+        ": " +
+        body
       _ => "- " + body
     }
   }
   // GitHub format aligned with @changesets/changelog-github:
   // - [#PR](...) [`short7`](...) Thanks [@author](...)! - Summary
   let prefix_parts : Array[String] = []
+  let base_url = clean_server_url(server_url)
   match line.pull_request {
-    Some(pr) if pr != "" => {
-      let pr_link = match repository {
-        Some(repo) if repo != "" => "https://github.com/" + repo + "/pull/" + pr
-        _ => "#" + pr
+    Some(pr) if pr != "" =>
+      if links {
+        match repository {
+          Some(repo) if repo != "" =>
+            prefix_parts.push(
+              "[#" + pr + "](" + base_url + "/" + repo + "/pull/" + pr + ")",
+            )
+          _ => prefix_parts.push("#" + pr)
+        }
+      } else {
+        prefix_parts.push("#" + pr)
       }
-      prefix_parts.push("[#" + pr + "](" + pr_link + ")")
-    }
     _ => ()
   }
   match line.commit {
     Some(commit) if commit != "" =>
-      prefix_parts.push(short_commit_link(commit, repository))
+      prefix_parts.push(
+        short_commit_link(commit, repository, links, server_url),
+      )
     _ => ()
   }
   if thanks {
-    match line.author {
-      Some(author) if author != "" =>
-        prefix_parts.push(
-          "Thanks [@" + author + "](https://github.com/" + author + ")!",
-        )
-      _ => ()
+    if format_authors(line.authors, links, server_url) is Some(credit) {
+      prefix_parts.push(credit)
     }
   }
   if prefix_parts.is_empty() {
@@ -350,13 +504,61 @@ fn line_text(
 }
 
 ///|
+/// Insert `entry` into an existing changelog while preserving any `# <title>`
+/// heading and Keep-a-Changelog preamble before the first `## ` release section.
+pub fn splice_changelog_entry(existing : String, entry : String) -> String {
+  let clean_entry = entry.trim().to_owned()
+  if existing.trim() == "" {
+    return "# Changelog\n\n" + clean_entry + "\n"
+  }
+  let normalized = existing
+    .replace_all(old="\r\n", new="\n")
+    .trim_end()
+    .to_owned()
+  let lines = normalized.split("\n").map(x => x.to_owned()).collect()
+  // Find the first top-level release section (`## `) outside fenced code blocks.
+  let mut first_h2 = -1
+  let mut in_fence = false
+  for i, line in lines {
+    let t = line.trim_start().to_owned()
+    if t.has_prefix("```") || t.has_prefix("~~~") {
+      in_fence = !in_fence
+      continue
+    }
+    if !in_fence && line.has_prefix("## ") {
+      first_h2 = i
+      break
+    }
+  }
+  if first_h2 > 0 {
+    let head = lines[:first_h2].to_owned().join("\n").trim_end().to_owned()
+    let tail = lines[first_h2:].to_owned().join("\n").trim_start().to_owned()
+    return head + "\n\n" + clean_entry + "\n\n" + tail + "\n"
+  }
+  if first_h2 == 0 {
+    return "# Changelog\n\n" + clean_entry + "\n\n" + normalized + "\n"
+  }
+  if lines.length() > 0 && lines[0].has_prefix("# ") {
+    return normalized + "\n\n" + clean_entry + "\n"
+  }
+  "# Changelog\n\n" + clean_entry + "\n\n" + normalized + "\n"
+}
+
+///|
 fn render_document(context : ChangelogContext, kind : String) -> String {
   let major_changes : Array[String] = []
   let minor_changes : Array[String] = []
   let patch_changes : Array[String] = []
   for line in context.lines {
     let section_name = section(line.bump)
-    let formatted = line_text(line, kind, context.repository, context.thanks)
+    let formatted = line_text(
+      line,
+      kind,
+      context.repository,
+      context.links,
+      context.thanks,
+      context.server_url,
+    )
     if section_name == "Major Changes" {
       major_changes.push(formatted)
     } else if section_name == "Minor Changes" {
@@ -376,40 +578,28 @@ fn render_document(context : ChangelogContext, kind : String) -> String {
       )
     }
   }
+  if major_changes.is_empty() &&
+    minor_changes.is_empty() &&
+    patch_changes.is_empty() {
+    patch_changes.push("- No changes in this release.")
+  }
   let sections : Array[String] = []
   if !major_changes.is_empty() {
-    sections.push("### Major Changes\n\n" + major_changes.join("\n") + "\n")
+    sections.push("### Major Changes\n\n" + major_changes.join("\n"))
   }
   if !minor_changes.is_empty() {
-    sections.push("### Minor Changes\n\n" + minor_changes.join("\n") + "\n")
+    sections.push("### Minor Changes\n\n" + minor_changes.join("\n"))
   }
   if !patch_changes.is_empty() {
-    sections.push("### Patch Changes\n\n" + patch_changes.join("\n") + "\n")
+    sections.push("### Patch Changes\n\n" + patch_changes.join("\n"))
   }
   let entry = "## " +
     context.version +
     " - " +
     context.date +
     "\n\n" +
-    sections.join("\n")
-  if context.existing == "" {
-    return "# Changelog\n\n" + entry + "\n"
-  }
-  let normalized = context.existing.replace_all(old="\r\n", new="\n")
-  if normalized.has_prefix("# Changelog") {
-    match normalized.find("\n") {
-      Some(index) =>
-        normalized[:index + 1].to_owned() +
-        "\n" +
-        entry +
-        "\n" +
-        normalized[index + 1:].trim_start().to_owned() +
-        "\n"
-      None => normalized + "\n\n" + entry + "\n"
-    }
-  } else {
-    "# Changelog\n\n" + entry + "\n\n" + normalized
-  }
+    sections.join("\n\n")
+  splice_changelog_entry(context.existing, entry)
 }
 
 ///|
@@ -438,11 +628,8 @@ fn normalize_release_version(version : String) -> String {
 }
 
 ///|
-fn parse_heading_version(line : String) -> String? {
-  if !line.has_prefix("## ") {
-    return None
-  }
-  let mut rest = line[3:].trim_start().to_owned()
+fn strip_version_token(raw : String) -> String? {
+  let mut rest = raw.trim_start().to_owned()
   if rest.has_prefix("[") {
     rest = rest[1:].to_owned()
   }
@@ -451,7 +638,7 @@ fn parse_heading_version(line : String) -> String? {
   }
   let buf = StringBuilder()
   for ch in rest.to_array() {
-    if ch == ' ' || ch == '\t' || ch == ']' || ch == '(' {
+    if ch == ' ' || ch == '\t' || ch == ']' || ch == '(' || ch == ':' {
       break
     }
     buf.write_char(ch)
@@ -465,25 +652,82 @@ fn parse_heading_version(line : String) -> String? {
 }
 
 ///|
-/// Extract the Markdown body for a single version heading from CHANGELOG.md.
-pub fn extract_release_notes(markdown : String, version : String) -> String? {
-  let target = normalize_release_version(version)
-  if target == "" {
+fn is_unit_id_prefix(text : String) -> Bool {
+  (
+    text.has_prefix("moonbit:") ||
+    text.has_prefix("npm:") ||
+    text.has_prefix("cargo:")
+  ) &&
+  !text.contains(" ") &&
+  !text.contains("[") &&
+  !text.contains("(")
+}
+
+///|
+fn parse_heading_version(line : String) -> String? {
+  if !line.has_prefix("## ") {
     return None
   }
+  let rest = line[3:].trim_start().to_owned()
+  // Support aggregated multi-unit headings: `## <unit_id> - <version> - <date>`
+  if rest.find(" - ") is Some(sep) {
+    let prefix = rest[:sep].trim().to_owned()
+    if is_unit_id_prefix(prefix) {
+      let after = rest[sep + 3:].to_owned()
+      return strip_version_token(after)
+    }
+  }
+  strip_version_token(rest)
+}
+
+///|
+fn parse_aggregated_heading(line : String) -> (String, String)? {
+  if !line.has_prefix("## ") {
+    return None
+  }
+  let rest = line[3:].trim_start().to_owned()
+  match rest.find(" - ") {
+    Some(sep) => {
+      let unit = rest[:sep].trim().to_owned()
+      if !is_unit_id_prefix(unit) {
+        return None
+      }
+      match strip_version_token(rest[sep + 3:].to_owned()) {
+        Some(ver) => Some((unit, ver))
+        None => None
+      }
+    }
+    None => None
+  }
+}
+
+///|
+fn extract_section_matching(
+  markdown : String,
+  matcher : (String) -> Bool,
+) -> String? {
   let lines = markdown
     .replace_all(old="\r\n", new="\n")
     .split("\n")
     .map(x => x.to_owned())
     .collect()
   let mut found = false
+  let mut in_fence = false
   let collected : Array[String] = []
   for line in lines {
-    if line.has_prefix("## ") {
+    let trimmed = line.trim_start().to_owned()
+    if trimmed.has_prefix("```") || trimmed.has_prefix("~~~") {
+      in_fence = !in_fence
+      if found {
+        collected.push(line)
+      }
+      continue
+    }
+    if !in_fence && line.has_prefix("## ") {
       if found {
         break
       }
-      if parse_heading_version(line) == Some(target) {
+      if matcher(line) {
         found = true
       }
       continue
@@ -507,5 +751,38 @@ pub fn extract_release_notes(markdown : String, version : String) -> String? {
     None
   } else {
     Some(collected[start:end].to_owned().join("\n"))
+  }
+}
+
+///|
+/// Extract the Markdown body for a single version heading from CHANGELOG.md.
+pub fn extract_release_notes(markdown : String, version : String) -> String? {
+  let target = normalize_release_version(version)
+  if target == "" {
+    return None
+  }
+  extract_section_matching(markdown, line => {
+    parse_heading_version(line) == Some(target)
+  })
+}
+
+///|
+/// Extract notes for a specific unit from an aggregated same-directory CHANGELOG.md,
+/// falling back to standard version matching if no aggregated heading exists.
+pub fn extract_unit_release_notes(
+  markdown : String,
+  unit_id : String,
+  version : String,
+) -> String? {
+  let target = normalize_release_version(version)
+  if target == "" {
+    return None
+  }
+  match
+    extract_section_matching(markdown, line => {
+      parse_aggregated_heading(line) == Some((unit_id, target))
+    }) {
+    Some(body) => Some(body)
+    None => extract_release_notes(markdown, version)
   }
 }

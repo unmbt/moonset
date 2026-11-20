@@ -5,6 +5,19 @@ pub(all) struct TagOptions {
   force : Bool
   yes : Bool
   format : String
+  only_units : Array[String]
+}
+
+///|
+pub fn TagOptions::new(
+  dry_run~ : Bool = false,
+  push~ : Bool = false,
+  force~ : Bool = false,
+  yes~ : Bool = false,
+  format~ : String = "",
+  only_units~ : Array[String] = [],
+) -> TagOptions {
+  { dry_run, push, force, yes, format, only_units, }
 }
 
 ///|
@@ -36,65 +49,84 @@ fn formatted_tag(intent : @model.TagIntent, template : String) -> String {
 }
 
 ///|
+fn parse_remote_tags(ls_remote_stdout : String) -> Map[String, Bool] {
+  let remote : Map[String, Bool] = Map([])
+  for raw_line in ls_remote_stdout.replace_all(old="\r\n", new="\n").split("\n") {
+    let line = raw_line.trim().to_owned()
+    if line == "" {
+      continue
+    }
+    let parts = line.split("\t").collect()
+    let ref_name = if parts.length() >= 2 {
+      parts[1].trim().to_owned()
+    } else {
+      let ws_parts = line.split(" ").filter(x => x != "").collect()
+      if ws_parts.length() >= 2 {
+        ws_parts[1].to_owned()
+      } else {
+        ""
+      }
+    }
+    if ref_name.has_prefix("refs/tags/") && !ref_name.has_suffix("^{}") {
+      remote[ref_name[10:].to_owned()] = true
+    }
+  }
+  remote
+}
+
+///|
 pub async fn[H : ExecutionHost] create_tags_with(
   host : H,
   loaded : @workspace.LoadedWorkspace,
   options : TagOptions,
 ) -> TagResult {
-  let state_path = absolute_path(
-    loaded.snapshot.root,
-    ".moonset/release-state.json",
-  )
-  if !host.exists(state_path) {
-    raise invalid_error(
-      "usage",
-      "No release state exists; run version first",
-      path=state_path,
-    )
-  }
-  let state = @json.parse(host.read_text(state_path)) catch {
-    _ =>
-      raise invalid_error(
-        "usage",
-        "Release state is not valid JSON",
-        path=state_path,
-      )
-  }
-  guard state is { "tags": Array(items), .. } else {
-    raise invalid_error(
-      "usage",
-      "Release state has no tag intents",
-      path=state_path,
-    )
+  let (release_state, _raw) = load_release_state(host, loaded.snapshot.root)
+  if release_state.is_snapshot {
+    return {
+      head: loaded.snapshot.git_head.unwrap_or(""),
+      tags: [],
+      created: [],
+      skipped: [],
+      pushed: [],
+      dry_run: options.dry_run,
+    }
   }
   let planned_versions : Map[String, String] = Map([])
-  if state is { "releases": Array(releases), .. } {
-    for rel in releases {
-      if rel is { "unitId": String(uid), "newVersion": String(ver), .. } {
-        planned_versions[uid] = ver
-      }
-    }
+  for rel in release_state.releases {
+    planned_versions[rel.unit_id] = rel.new_version
   }
-  let intents : Array[@model.TagIntent] = []
-  for item in items {
-    guard item
-      is {
-        "unitId": String(unit_id),
-        "version": String(version),
-        "name": String(name),
-        ..
-      } else {
-      raise invalid_error(
-        "usage",
-        "Release state contains an invalid tag intent",
-        path=state_path,
-      )
-    }
-    intents.push({ unit_id, version, name, })
+  let intents = if options.only_units.is_empty() {
+    release_state.tags
+  } else {
+    release_state.tags.filter(t => options.only_units.contains(t.unit_id))
   }
+  // Check publish-state.json when present: refuse tagging failed/blocked/unknown units unless --force.
+  let publish_statuses = load_publish_state(
+    host,
+    loaded.snapshot.root,
+    release_state.plan_fingerprint,
+  )
   let names : Array[String] = []
   let seen_names : Map[String, Bool] = Map([])
   for intent in intents {
+    if !options.force {
+      let key = status_key(intent.unit_id, intent.version, "source")
+      if publish_statuses.get(key) is Some(st) &&
+        (
+          st.state == @model.Failed ||
+          st.state == @model.Blocked ||
+          st.state == @model.Unknown
+        ) {
+        raise invalid_error(
+          "unpublished-unit",
+          "Cannot tag unit whose publish status is " +
+          st.state.text() +
+          ": " +
+          intent.unit_id +
+          " (retry publish or pass --force --yes)",
+        )
+      }
+    }
     let mut unit : @model.ReleaseUnit? = None
     for candidate in loaded.snapshot.units {
       if candidate.id == intent.unit_id {
@@ -102,7 +134,8 @@ pub async fn[H : ExecutionHost] create_tags_with(
       }
     }
     if unit is Some(value) {
-      if value.visibility == "private" && !loaded.snapshot.config.private_tag {
+      if value.visibility == @model.Private &&
+        !loaded.snapshot.config.private_packages.tag {
         raise invalid_error(
           "private-policy",
           "Tagging private unit is disabled: " + intent.unit_id,
@@ -120,7 +153,7 @@ pub async fn[H : ExecutionHost] create_tags_with(
       }
     }
     let unit_override_format = match
-      loaded.snapshot.config.unit_overrides.get(intent.unit_id) {
+      loaded.snapshot.config.unit_overrides().get(intent.unit_id) {
       Some({ tag_format: Some(fmt), .. }) => fmt
       _ => ""
     }
@@ -129,7 +162,7 @@ pub async fn[H : ExecutionHost] create_tags_with(
     } else if unit_override_format != "" {
       unit_override_format
     } else {
-      loaded.snapshot.config.tag_format
+      loaded.snapshot.config.tag.format
     }
     let rendered = formatted_tag(intent, effective_format)
     @engine.validate_git_tag_name(rendered)
@@ -148,19 +181,9 @@ pub async fn[H : ExecutionHost] create_tags_with(
     Some(loaded.snapshot.root),
   )
   if head_res.exit_code != 0 {
-    raise @model.Io(head_res.stderr)
+    raise @model.Io(process_failure_detail(head_res))
   }
   let head = head_res.stdout.trim().to_owned()
-  let dirty_res = host.run(
-    "git",
-    ["status", "--porcelain"],
-    Some(loaded.snapshot.root),
-  )
-  if dirty_res.exit_code == 0 && has_dirty_worktree_changes(dirty_res.stdout) {
-    raise invalid_error(
-      "dirty-working-tree", "Working tree is dirty; commit version changes before tagging",
-    )
-  }
   if options.dry_run {
     return {
       head,
@@ -170,6 +193,16 @@ pub async fn[H : ExecutionHost] create_tags_with(
       pushed: [],
       dry_run: true,
     }
+  }
+  let dirty_res = host.run(
+    "git",
+    ["status", "--porcelain"],
+    Some(loaded.snapshot.root),
+  )
+  if dirty_res.exit_code == 0 && has_dirty_worktree_changes(dirty_res.stdout) {
+    raise invalid_error(
+      "dirty-working-tree", "Working tree is dirty; commit version changes before tagging",
+    )
   }
   if options.force && !options.yes {
     raise invalid_error(
@@ -205,25 +238,45 @@ pub async fn[H : ExecutionHost] create_tags_with(
       }
     }
     let args = if options.force {
-      ["tag", "-f", name, "HEAD"]
+      ["tag", "-a", "-f", name, "-m", name, "HEAD"]
     } else {
-      ["tag", name, "HEAD"]
+      ["tag", "-a", name, "-m", name, "HEAD"]
     }
     let tag_res = host.run("git", args, Some(loaded.snapshot.root))
     if tag_res.exit_code != 0 {
-      raise @model.Io(tag_res.stderr)
+      raise @model.Io(process_failure_detail(tag_res))
     }
     created.push(name)
   }
   if options.push {
-    for name in created {
-      let push_res = host.run(
+    let remote_tags = if options.force {
+      Map([])
+    } else {
+      let ls = host.run(
         "git",
-        ["push", "origin", name],
+        ["ls-remote", "--tags", "origin"],
         Some(loaded.snapshot.root),
       )
+      if ls.exit_code == 0 {
+        parse_remote_tags(ls.stdout)
+      } else {
+        Map([])
+      }
+    }
+    for name in names {
+      if !options.force && remote_tags.contains(name) {
+        continue
+      }
+      let push_args = if options.force {
+        ["push", "-f", "origin", "refs/tags/" + name]
+      } else {
+        ["push", "origin", "refs/tags/" + name]
+      }
+      let push_res = host.run("git", push_args, Some(loaded.snapshot.root))
       if push_res.exit_code != 0 {
-        raise @model.Io("Failed pushing tag " + name + ": " + push_res.stderr)
+        raise @model.Io(
+          "Failed pushing tag " + name + ": " + process_failure_detail(push_res),
+        )
       }
       pushed.push(name)
     }

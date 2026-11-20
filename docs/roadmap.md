@@ -15,7 +15,7 @@
 
 ## Phase 1 — 核心读模型与规划器（已完成）
 
-交付：workspace discovery、无损 manifest 读取、changeset parser、config loader、SemVer、依赖图和纯 release planner；实现 `status` 与 `publish-plan`。验收命令与边界见 [Phase 1 契约](phase-1-contract.md)。
+交付：workspace discovery、无损 manifest 读取、changeset parser、config loader、SemVer、依赖图和纯 release planner；实现 `status` 与 `publish-plan`。验收命令与边界见 [命令契约](commands.md) 与 [需求规格](requirements.md)。
 
 退出条件：
 
@@ -63,7 +63,7 @@
 
 退出条件：
 
-- API 版本策略（`api_version = "1.0.0"`）和兼容承诺写入 [Phase 5 API](phase-5-api.md)。
+- API 版本策略（v1.0.0 -> v2.0.0 收敛）和兼容承诺写入 [编程 API](api.md) 与 [ADR-008](decisions/008-v030-api-and-adapter-convergence.md)。
 - 一个外部 MoonBit 包（`fixtures/external-moonbit-api`）和一个外部进程 JSONL 插件完成端到端测试。
 - 插件超时、非法输出和权限拒绝均有测试。
 

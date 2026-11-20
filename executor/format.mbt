@@ -7,6 +7,26 @@ pub(all) struct FormatResult {
 }
 
 ///|
+async fn[H : ExecutionHost] resolve_formatter_program(
+  host : H,
+  root : String,
+  program : String,
+) -> String {
+  let local_rel = "node_modules/.bin/" + program
+  if is_windows_host(host) {
+    let local_cmd = absolute_path(root, local_rel + ".cmd")
+    if host.exists(local_cmd) {
+      return local_cmd
+    }
+  }
+  let local_bin = absolute_path(root, local_rel)
+  if host.exists(local_bin) {
+    return local_bin
+  }
+  program
+}
+
+///|
 /// Execute the configured external formatter (prettier/oxfmt/biome/dprint)
 /// over supported written files using parameterized argv (never a shell).
 pub async fn[H : ExecutionHost] format_files_with(
@@ -37,21 +57,20 @@ pub async fn[H : ExecutionHost] format_files_with(
   guard @engine.formatter_command(formatter, eligible) is Some((program, args)) else {
     return { formatter, formatted: [], skipped: true, }
   }
-  let output = host.run(program, args, Some(root)) catch {
+  let resolved_program = resolve_formatter_program(host, root, program)
+  let output = host.run(resolved_program, args, Some(root)) catch {
     error =>
-      if host.getenv("ComSpec") is Some(_) {
-        host.run(program + ".cmd", args, Some(root))
+      if is_windows_host(host) &&
+        !resolved_program.to_lower().has_suffix(".cmd") {
+        host.run(resolved_program + ".cmd", args, Some(root))
       } else {
         raise error
       }
   }
   if output.exit_code != 0 {
-    let detail = if output.stderr.trim() != "" {
-      output.stderr.trim().to_owned()
-    } else {
-      output.stdout.trim().to_owned()
-    }
-    raise @model.Io("Formatter '" + formatter + "' failed: " + detail)
+    raise @model.Io(
+      "Formatter '" + formatter + "' failed: " + process_failure_detail(output),
+    )
   }
   { formatter, formatted: eligible, skipped: false, }
 }

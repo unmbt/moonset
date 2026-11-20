@@ -62,17 +62,16 @@ Changeset[] + PreState? + WorkspaceSnapshot
 - `sourcePath`、`sourceLine`：诊断和 changelog 链接。
 - `commit`：可选，引入该文件的 Git commit。
 
-### `PreState`
+### `PreState`（v0.3.0 / ADR-009 Changesets v3 极简模型）
 
 ```text
-mode: active | exit
- tag: String
- initialVersions: Map[UnitId, Version]
- nextNumbers: Map[UnitId, Int32]
- consumed: Set[ChangesetId]
+mode: pre | exit   // 兼容读取历史 "active"
+tag: String
 ```
 
-`exit` 状态用于让最后一次预发布转换回稳定版；读取不到状态文件等同于稳定模式，而损坏状态是配置错误。
+不再持久化 `initialVersions`、`nextNumbers` 或 `consumed` 列表；已消费的预发布 changeset 由 `.changeset/pre/` 目录隔离作为单一事实源，下一预发布序号与毕业稳定版本直接从各清单当前版本推导。`exit` 状态用于让下一次 `version` 毕业为稳定版并清理 `pre.json` 与 `.changeset/pre/`；读取不到状态文件等同于稳定模式，而损坏状态是配置错误。
+
+此外，`v0.3.0`（[ADR-008](decisions/008-v030-api-and-adapter-convergence.md)）将 `Ecosystem`、`PackageManager`、`Visibility`、`PreMode`、`UpdateDependents`、`Access`、`CommitMode`、`LockfileMode`、`BridgeWaitFor`、`MixedMode` 收敛为强枚举，移除 `Config.raw`，为 `ReleaseUnit` 补充 `version_span : TextSpan?` 与 `publish_config : PublishConfig?`，并在 `ReleasePlan` / `ReleaseState` 中显式标记 `is_snapshot : Bool`。
 
 ### `Release`
 

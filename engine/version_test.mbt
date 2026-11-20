@@ -21,11 +21,12 @@ test "builtin changelog groups release summaries and dependency updates" {
 
 ///|
 test "version plan is executable and consumes changesets" {
-  let ws0 = snapshot([unit("acme/a")])
+  let mod_a = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
+  let ws0 = snapshot([unit_with_source("acme/a", mod_a)])
   let ws : @model.WorkspaceSnapshot = {
     ..ws0,
     sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
+      ("acme/a/moon.mod", mod_a),
       (".changeset/test.md", "---\nacme/a: patch\n---\nFix\n"),
     ]),
   }
@@ -38,6 +39,7 @@ test "version plan is executable and consumes changesets" {
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-12",
   )
@@ -56,29 +58,33 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
   let npm_unit : @model.ReleaseUnit = {
     id: "npm:@acme/ui",
     native_name: "@acme/ui",
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     workspace_id: "js",
     root: "js",
     manifest: "js/package.json",
     version_path: "js/package.json",
     version_field: "version",
     version: Some("1.0.0"),
-    visibility: "public",
+    version_span: find_quoted_version_span(pkg_source, "1.0.0"),
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
   let cargo_unit : @model.ReleaseUnit = {
     id: "cargo:acme-rs",
     native_name: "acme-rs",
-    ecosystem: "cargo",
+    ecosystem: @model.Cargo,
     workspace_id: "rs",
     root: "rs",
     manifest: "rs/Cargo.toml",
     version_path: "rs/Cargo.toml",
     version_field: "package",
     version: Some("0.1.0"),
-    visibility: "public",
+    version_span: find_quoted_version_span(cargo_source, "0.1.0"),
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
   let ws : @model.WorkspaceSnapshot = {
@@ -97,9 +103,7 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
     path=".changeset/c1.md",
     mixed=true,
   )
-  let pre_state = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"rc\",\"initialVersions\":{},\"nextNumbers\":{},\"consumed\":[]}",
-  )
+  let pre_state = @engine.parse_pre_state("{\"mode\":\"pre\",\"tag\":\"rc\"}")
   let analysis = @engine.build_plan(ws, [cs], pre=pre_state)
   let vp = @engine.build_version_plan(
     ws,
@@ -108,12 +112,13 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-18",
   )
   assert_true(vp.changelogs.is_empty())
   assert_true(!vp.edits.any(e => e.kind == "changelog"))
-  // Pre mode must isolate consumed changeset into pre.directory (not lose it) and write pre.json update!
+  // Pre mode moves consumed changeset into pre.directory and writes minimal v3 pre.json!
   assert_true(
     vp.edits.any(e => {
       e.kind == "changeset" &&
@@ -130,7 +135,9 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
   )
   assert_true(
     vp.edits.any(e => {
-      e.path == ".changeset/pre.json" && e.after_text.contains("\"c1\"")
+      e.path == ".changeset/pre.json" &&
+      e.after_text.contains("\"mode\": \"pre\"") &&
+      e.after_text.contains("\"tag\": \"rc\"")
     }),
   )
   let pkg_edit = vp.edits
@@ -153,19 +160,19 @@ test "version plan preserves package.json formatting, Cargo CRLF/UTF-8 offsets, 
 
 ///|
 test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.json, and multi-unit dir aggregates changelog" {
+  let mod_pre = "name = \"acme/a\"\nversion = \"0.2.0-alpha.0\"\n"
   let ws_pre : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.2.0-alpha.0")]),
+    ..snapshot([unit_with_source("acme/a", mod_pre, version="0.2.0-alpha.0")]),
     sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.2.0-alpha.0\"\n"),
-      (
-        ".changeset/pre.json", "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{\"moonbit:acme/a\":\"0.1.0\"},\"nextNumbers\":{\"moonbit:acme/a\":1},\"consumed\":[\"c1\"]}",
-      ),
+      ("acme/a/moon.mod", mod_pre),
+      (".changeset/pre.json", "{\"mode\":\"pre\",\"tag\":\"alpha\"}"),
     ]),
   }
   let c1 = @engine.parse_changeset(
     "---\nacme/a: minor\n---\nOld feature already released",
     id="c1",
-    path=".changeset/c1.md",
+    path=".changeset/pre/c1.md",
+    in_pre_dir=true,
   )
   let c2 = @engine.parse_changeset(
     "---\nacme/a: patch\n---\nPR: #77\nAuthor: @wyate\nNew fix in alpha.1",
@@ -184,6 +191,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-18",
   )
@@ -204,6 +212,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-18",
     changeset_commits=Map([("c2", "abcdef1234567890")]),
@@ -217,10 +226,11 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
 
   // Pre exit with zero prereleases still cleans up pre.json
   let exit_state = @engine.parse_pre_state(
-    "{\"mode\":\"exit\",\"tag\":\"alpha\",\"initialVersions\":{},\"nextNumbers\":{},\"consumed\":[]}",
+    "{\"mode\":\"exit\",\"tag\":\"alpha\"}",
   )
+  let mod_exit = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
   let ws_exit : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.1.0")]),
+    ..snapshot([unit_with_source("acme/a", mod_exit, version="0.1.0")]),
     sources: Map([(".changeset/pre.json", "{}")]),
   }
   let exit_analysis = @engine.build_plan(ws_exit, [], pre=exit_state)
@@ -231,6 +241,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-18",
   )
@@ -239,8 +250,10 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
   )
 
   // Same-directory dual-manifest units aggregate into one CHANGELOG.md edit + apply tagFormat
+  let mbt_src = "name = \"acme/same\"\nversion = \"0.1.0\"\n"
+  let npm_src = "{\"name\":\"@acme/same\",\"version\":\"1.0.0\"}\n"
   let mbt_same : @model.ReleaseUnit = {
-    ..unit("acme/same"),
+    ..unit_with_source("acme/same", mbt_src),
     root: "",
     manifest: "moon.mod",
     version_path: "moon.mod",
@@ -248,24 +261,23 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
   let npm_same : @model.ReleaseUnit = {
     id: "npm:@acme/same",
     native_name: "@acme/same",
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     workspace_id: "js",
     root: "",
     manifest: "package.json",
     version_path: "package.json",
     version_field: "version",
     version: Some("1.0.0"),
-    visibility: "public",
+    version_span: find_quoted_version_span(npm_src, "1.0.0"),
+    visibility: @model.Public,
     publish: true,
+    publish_config: None,
     dependencies: [],
   }
   let cfg_mixed = "{\"tag\":{\"format\":\"{ecosystem}/{name}-v{version}\"},\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"mbt\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\".\",\"manager\":\"npm\",\"includeRoot\":true}]}}}"
   let ws_same : @model.WorkspaceSnapshot = {
     ..snapshot([mbt_same, npm_same], config=cfg_mixed),
-    sources: Map([
-      ("moon.mod", "name = \"acme/same\"\nversion = \"0.1.0\"\n"),
-      ("package.json", "{\"name\":\"@acme/same\",\"version\":\"1.0.0\"}\n"),
-    ]),
+    sources: Map([("moon.mod", mbt_src), ("package.json", npm_src)]),
   }
   let cs_same = @engine.parse_changeset(
     "---\n\"moonbit:acme/same\": patch\n\"npm:@acme/same\": minor\n---\nCo-located update",
@@ -280,6 +292,7 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
       dry_run: true,
       no_changelog: false,
       snapshot_tag: None,
+      snapshot: false,
     },
     generated_at="2026-11-18",
   )
@@ -293,14 +306,15 @@ test "pre skips consumed changelogs, empty pre writes nothing, exit cleans pre.j
 
 ///|
 test "Changesets-aligned Major/Minor/Patch Changes and Updated dependencies with commit links" {
+  let mod_a = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
   let mod_b = "name = \"acme/b\"\nversion = \"0.1.0\"\nimport {\n  \"acme/a@0.1.0\",\n}\n"
   let dep_pos = mod_b.find("\"acme/a@0.1.0\"").unwrap()
   let ws : @model.WorkspaceSnapshot = {
     ..snapshot(
       [
-        unit("acme/a", version="0.1.0"),
+        unit_with_source("acme/a", mod_a, version="0.1.0"),
         {
-          ..unit("acme/b", version="0.1.0"),
+          ..unit_with_source("acme/b", mod_b, version="0.1.0"),
           dependencies: [
             {
               producer: "moonbit:acme/a",
@@ -316,10 +330,7 @@ test "Changesets-aligned Major/Minor/Patch Changes and Updated dependencies with
       ],
       config="{\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"unmbt/demo\"}},\"updateInternalDependents\":\"always\"}",
     ),
-    sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
-      ("acme/b/moon.mod", mod_b),
-    ]),
+    sources: Map([("acme/a/moon.mod", mod_a), ("acme/b/moon.mod", mod_b)]),
   }
   let cs = @engine.parse_changeset(
     "---\nacme/a: major\n---\nPR: #2015\nAuthor: @alice\nRemoved legacy error",
@@ -330,7 +341,7 @@ test "Changesets-aligned Major/Minor/Patch Changes and Updated dependencies with
   let vp = @engine.build_version_plan(
     ws,
     plan,
-    { dry_run: true, no_changelog: false, snapshot_tag: None, },
+    { dry_run: true, no_changelog: false, snapshot_tag: None, snapshot: false, },
     generated_at="2026-11-19",
     changeset_commits=Map([("c1", "6a05002deadbeef")]),
   )

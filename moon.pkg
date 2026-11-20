@@ -1,10 +1,4 @@
 import {
-  "unmbt/moonset/model",
-  "unmbt/moonset/engine",
-  "unmbt/moonset/workspace",
-  "unmbt/moonset/changelog",
-  "unmbt/moonset/adapters",
-  "unmbt/moonset/executor",
   "unmbt/moonset/api",
 }
 

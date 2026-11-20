@@ -5,7 +5,11 @@ pub fn has_glob_meta(pattern : String) -> Bool {
   pattern.contains("?") ||
   pattern.contains("[") ||
   pattern.contains("{") ||
-  pattern.contains("(")
+  pattern.contains("@(") ||
+  pattern.contains("?(") ||
+  pattern.contains("+(") ||
+  pattern.contains("*(") ||
+  pattern.contains("!(")
 }
 
 ///|
@@ -18,7 +22,7 @@ pub fn validate_glob_pattern(
   if pattern == "" {
     invalid("Glob pattern cannot be empty", path~, code="invalid-config")
   }
-  let raw = if pattern.has_prefix("!") {
+  let raw = if pattern.has_prefix("!") && !pattern.has_prefix("!(") {
     if !allow_negation {
       invalid(
         "Negated glob patterns are not supported here: " + pattern,
@@ -41,7 +45,7 @@ pub fn validate_glob_pattern(
   let chars = raw.to_array()
   let mut i = 0
   let mut brace_depth = 0
-  let mut paren_depth = 0
+  let mut extglob_depth = 0
   while i < chars.length() {
     let ch = chars[i]
     if ch == '\\' {
@@ -62,6 +66,10 @@ pub fn validate_glob_pattern(
       }
       let mut closed = false
       while j < chars.length() {
+        if chars[j] == '\\' && j + 1 < chars.length() {
+          j += 2
+          continue
+        }
         if chars[j] == ']' {
           closed = true
           break
@@ -100,24 +108,23 @@ pub fn validate_glob_pattern(
           code="invalid-config",
         )
       }
-    } else if ch == '(' {
-      paren_depth += 1
-    } else if ch == ')' {
-      paren_depth -= 1
-      if paren_depth < 0 {
-        invalid(
-          "Unmatched ')' in glob: " + pattern,
-          path~,
-          code="invalid-config",
-        )
-      }
+    } else if is_extglob_prefix(ch) &&
+      i + 1 < chars.length() &&
+      chars[i + 1] == '(' {
+      extglob_depth += 1
+      i += 2
+      continue
+    } else if ch == '(' && extglob_depth > 0 {
+      extglob_depth += 1
+    } else if ch == ')' && extglob_depth > 0 {
+      extglob_depth -= 1
     }
     i += 1
   }
   if brace_depth != 0 {
     invalid("Unclosed '{' in glob: " + pattern, path~, code="invalid-config")
   }
-  if paren_depth != 0 {
+  if extglob_depth != 0 {
     invalid("Unclosed '(' in glob: " + pattern, path~, code="invalid-config")
   }
 }
@@ -142,7 +149,14 @@ fn find_matching_delim(
       if j < chars.length() && (chars[j] == '!' || chars[j] == '^') {
         j += 1
       }
-      while j < chars.length() && chars[j] != ']' {
+      while j < chars.length() {
+        if chars[j] == '\\' && j + 1 < chars.length() {
+          j += 2
+          continue
+        }
+        if chars[j] == ']' {
+          break
+        }
         j += 1
       }
       i = if j < chars.length() { j + 1 } else { chars.length() }
@@ -213,7 +227,14 @@ fn split_top_level(chars : Array[Char], sep : Char) -> Array[String] {
 }
 
 ///|
-fn expand_braces_bounded(pattern : String, limit : Int32) -> Array[String] {
+fn expand_braces_into(
+  pattern : String,
+  limit : Int32,
+  out : Array[String],
+) -> Unit {
+  if out.length() >= limit {
+    return
+  }
   let chars = pattern.to_array()
   let mut open_idx : Int32? = None
   let mut i = 0
@@ -228,7 +249,14 @@ fn expand_braces_bounded(pattern : String, limit : Int32) -> Array[String] {
       if j < chars.length() && (chars[j] == '!' || chars[j] == '^') {
         j += 1
       }
-      while j < chars.length() && chars[j] != ']' {
+      while j < chars.length() {
+        if chars[j] == '\\' && j + 1 < chars.length() {
+          j += 2
+          continue
+        }
+        if chars[j] == ']' {
+          break
+        }
         j += 1
       }
       i = if j < chars.length() { j + 1 } else { chars.length() }
@@ -240,24 +268,37 @@ fn expand_braces_bounded(pattern : String, limit : Int32) -> Array[String] {
     }
     i += 1
   }
-  guard open_idx is Some(start) else { return [pattern] }
+  guard open_idx is Some(start) else {
+    out.push(pattern)
+    return
+  }
   guard find_matching_delim(chars, start, '{', '}') is Some(end) else {
-    return [pattern]
+    out.push(pattern)
+    return
   }
   let prefix = String::from_array(chars[:start].to_owned())
   let inner = chars[start + 1:end].to_owned()
   let suffix = String::from_array(chars[end + 1:].to_owned())
   let alts = split_top_level(inner, ',')
-  let results : Array[String] = []
-  for alt in alts {
-    let expanded = expand_braces_bounded(prefix + alt + suffix, limit)
-    for item in expanded {
-      if results.length() < limit {
-        results.push(item)
-      }
-    }
+  if alts.length() <= 1 {
+    // Preserve single-item `{foo}` as literal per bash/picomatch semantics.
+    let escaped = prefix + "\\{" + String::from_array(inner) + "\\}" + suffix
+    expand_braces_into(escaped, limit, out)
+    return
   }
-  results
+  for alt in alts {
+    if out.length() >= limit {
+      break
+    }
+    expand_braces_into(prefix + alt + suffix, limit, out)
+  }
+}
+
+///|
+fn expand_braces_bounded(pattern : String, limit : Int32) -> Array[String] {
+  let out : Array[String] = []
+  expand_braces_into(pattern, limit, out)
+  out
 }
 
 ///|
@@ -267,18 +308,6 @@ fn match_char_class(
   start : Int32,
   slash_special : Bool,
 ) -> (Bool, Int32)? {
-  if slash_special && ch == '/' {
-    // Still need to find end of class so caller knows pattern is valid,
-    // but '/' never matches a character class in path mode.
-    let mut k = start + 1
-    if k < pat.length() && (pat[k] == '!' || pat[k] == '^') {
-      k += 1
-    }
-    while k < pat.length() && pat[k] != ']' {
-      k += 1
-    }
-    return if k < pat.length() { Some((false, k + 1)) } else { None }
-  }
   let mut j = start + 1
   let mut negate = false
   if j < pat.length() && (pat[j] == '!' || pat[j] == '^') {
@@ -287,13 +316,25 @@ fn match_char_class(
   }
   let mut matched = false
   while j < pat.length() && pat[j] != ']' {
+    let cur = if pat[j] == '\\' && j + 1 < pat.length() {
+      j += 1
+      pat[j]
+    } else {
+      pat[j]
+    }
     if j + 2 < pat.length() && pat[j + 1] == '-' && pat[j + 2] != ']' {
-      if ch >= pat[j] && ch <= pat[j + 2] {
+      let hi = if pat[j + 2] == '\\' && j + 3 < pat.length() {
+        j += 1
+        pat[j + 2]
+      } else {
+        pat[j + 2]
+      }
+      if ch >= cur && ch <= hi {
         matched = true
       }
       j += 3
     } else {
-      if ch == pat[j] {
+      if ch == cur {
         matched = true
       }
       j += 1
@@ -301,6 +342,9 @@ fn match_char_class(
   }
   if j >= pat.length() {
     return None
+  }
+  if slash_special && ch == '/' {
+    return Some((false, j + 1))
   }
   Some((if negate { !matched } else { matched }, j + 1))
 }
@@ -329,33 +373,46 @@ fn match_glob_chars(
     i < text.length() &&
     text[i] == pat[j + 1] &&
     match_glob_chars(text, pat, i + 1, j + 2, slash_special, memo)
-  } else if (
-      (is_extglob_prefix(pat[j]) && j + 1 < pat.length() && pat[j + 1] == '(') ||
-      pat[j] == '('
-    ) &&
-    find_matching_delim(pat, if pat[j] == '(' { j } else { j + 1 }, '(', ')')
-    is Some(close_idx) {
-    let kind = if pat[j] == '(' { '@' } else { pat[j] }
-    let open_idx = if pat[j] == '(' { j } else { j + 1 }
+  } else if is_extglob_prefix(pat[j]) &&
+    j + 1 < pat.length() &&
+    pat[j + 1] == '(' &&
+    find_matching_delim(pat, j + 1, '(', ')') is Some(close_idx) {
+    let kind = pat[j]
+    let open_idx = j + 1
     let inner = pat[open_idx + 1:close_idx].to_owned()
     let alts = split_top_level(inner, '|')
     let next_j = close_idx + 1
     match_extglob(text, pat, i, next_j, kind, alts, slash_special, memo)
   } else if pat[j] == '*' {
-    let double = slash_special && j + 1 < pat.length() && pat[j + 1] == '*'
-    let next = j + (if double { 2 } else { 1 })
-    (
-      double &&
-      next < pat.length() &&
-      pat[next] == '/' &&
-      match_glob_chars(text, pat, i, next + 1, slash_special, memo)
-    ) ||
-    match_glob_chars(text, pat, i, next, slash_special, memo) ||
-    (
-      i < text.length() &&
-      (!slash_special || double || text[i] != '/') &&
-      match_glob_chars(text, pat, i + 1, j, slash_special, memo)
-    )
+    let is_double_star = slash_special &&
+      j + 1 < pat.length() &&
+      pat[j + 1] == '*'
+    // Globstar `**` only crosses '/' when bounded by start/end or '/' in the pattern.
+    let globstar_valid = is_double_star &&
+      (j == 0 || pat[j - 1] == '/') &&
+      (j + 2 == pat.length() || pat[j + 2] == '/')
+    let next = j + (if is_double_star { 2 } else { 1 })
+    if globstar_valid {
+      let at_seg_boundary = i == 0 || text[i - 1] == '/'
+      (
+        at_seg_boundary &&
+        next < pat.length() &&
+        pat[next] == '/' &&
+        match_glob_chars(text, pat, i, next + 1, slash_special, memo)
+      ) ||
+      match_glob_chars(text, pat, i, next, slash_special, memo) ||
+      (
+        i < text.length() &&
+        match_glob_chars(text, pat, i + 1, j, slash_special, memo)
+      )
+    } else {
+      match_glob_chars(text, pat, i, next, slash_special, memo) ||
+      (
+        i < text.length() &&
+        (!slash_special || text[i] != '/') &&
+        match_glob_chars(text, pat, i + 1, j, slash_special, memo)
+      )
+    }
   } else if pat[j] == '[' {
     if i < text.length() {
       match match_char_class(text[i], pat, j, slash_special) {
@@ -411,8 +468,6 @@ fn match_extglob(
   slash_special : Bool,
   memo : Map[String, Bool],
 ) -> Bool {
-  // Determine maximum span end without crossing '/' when slash_special is true,
-  // unless an alternative itself contains '/' or '**'.
   let allow_slash = !slash_special ||
     alts.any(a => a.contains("/") || a.contains("**"))
   let mut max_end = i
@@ -450,7 +505,6 @@ fn match_extglob(
     }
     false
   } else if kind == '*' || kind == '+' {
-    // Match 0+ (for '*') or 1+ (for '+') consecutive occurrences of any alt.
     let reachable : Array[Bool] = Array::make(max_end - i + 1, false)
     reachable[0] = true
     let mut step = 0
@@ -469,7 +523,6 @@ fn match_extglob(
       step += 1
     }
     let min_offset = if kind == '+' {
-      // Check whether empty string matches any alt
       if alts.any(alt => match_subpattern([], alt, slash_special)) {
         0
       } else {
@@ -491,7 +544,7 @@ fn match_extglob(
 }
 
 ///|
-/// Match a relative file path against a glob pattern (`*`, `**`, `?`, `[...]`, `{...}`, `(...)` / extglob).
+/// Match a relative file path against a glob pattern (`*`, `**`, `?`, `[...]`, `{...}`, extglob).
 pub fn matches_pattern(path : String, pattern : String) -> Bool {
   let text = path.to_array()
   for expanded in expand_braces_bounded(pattern, 256) {
@@ -511,10 +564,12 @@ pub fn matches_changed_patterns(
   if patterns.is_empty() {
     return false
   }
-  let has_positive = patterns.any(p => !p.has_prefix("!"))
+  let has_positive = patterns.any(p => {
+    !(p.has_prefix("!") && !p.has_prefix("!("))
+  })
   let mut matched = !has_positive
   for pattern in patterns {
-    if pattern.has_prefix("!") {
+    if pattern.has_prefix("!") && !pattern.has_prefix("!(") {
       let inner = pattern[1:].to_owned()
       if inner != "" && matches_pattern(path, inner) {
         matched = false
@@ -527,9 +582,24 @@ pub fn matches_changed_patterns(
 }
 
 ///|
-/// Match a canonical UnitId against an exact UnitId or glob pattern (`*`, `?`, `[...]`, `{...}`, `(...)`).
+fn unit_pattern_key(pattern : String) -> String {
+  if pattern.contains(":") ||
+    pattern.has_prefix("*") ||
+    pattern.has_prefix("{") ||
+    pattern.has_prefix("?") ||
+    pattern.has_prefix("[") ||
+    pattern.has_prefix("@(") ||
+    pattern.has_prefix("!(") {
+    pattern
+  } else {
+    canonical_id(pattern)
+  }
+}
+
+///|
+/// Match a canonical UnitId against an exact UnitId or glob pattern.
 pub fn matches_unit_pattern(unit_id : String, pattern : String) -> Bool {
-  let canonical_pat = canonical_id(pattern)
+  let canonical_pat = unit_pattern_key(pattern)
   if !has_glob_meta(canonical_pat) {
     return unit_id == canonical_pat
   }
@@ -543,43 +613,48 @@ pub fn matches_unit_pattern(unit_id : String, pattern : String) -> Bool {
 }
 
 ///|
-/// Return true when a unit matches any entry (exact or glob) in `config.ignore`.
+/// Return true when a unit matches `config.ignore` (supporting ordered `!negation`).
 pub fn is_unit_ignored(config : @model.Config, unit_id : String) -> Bool {
-  config.ignore.any(pattern => matches_unit_pattern(unit_id, pattern))
+  let mut ignored = false
+  for entry in config.ignore {
+    if entry.has_prefix("!") && !entry.has_prefix("!(") {
+      let inner = entry[1:].to_owned()
+      if inner != "" && matches_unit_pattern(unit_id, inner) {
+        ignored = false
+      }
+    } else if matches_unit_pattern(unit_id, entry) {
+      ignored = true
+    }
+  }
+  ignored
 }
 
 ///|
-/// Resolve configured `ignore` entries (exact UnitIds + globs) against discovered units.
+/// Resolve configured `ignore` entries (exact UnitIds + globs + `!negations`) against discovered units.
 pub fn resolve_ignored_units(
   config : @model.Config,
   units : Array[@model.ReleaseUnit],
 ) -> Array[String] raise @model.MoonsetError {
   let ids = units.map(u => u.id)
   ids.sort()
-  let resolved : Array[String] = []
   for entry in config.ignore {
-    let pattern = canonical_id(entry)
-    if !has_glob_meta(pattern) {
-      if !ids.contains(pattern) {
-        invalid("Unknown configured unit: " + pattern)
-      }
-      if !resolved.contains(pattern) {
-        resolved.push(pattern)
-      }
+    let raw = if entry.has_prefix("!") && !entry.has_prefix("!(") {
+      entry[1:].to_owned()
     } else {
-      for id in ids {
-        if matches_unit_pattern(id, pattern) && !resolved.contains(id) {
-          resolved.push(id)
-        }
-      }
+      entry
+    }
+    let pattern = unit_pattern_key(raw)
+    if !has_glob_meta(pattern) && !ids.contains(pattern) {
+      invalid("Unknown configured unit: " + pattern)
     }
   }
+  let resolved = ids.filter(id => is_unit_ignored(config, id))
   resolved.sort()
   resolved
 }
 
 ///|
-/// Resolve configured `fixed` or `linked` groups (exact UnitIds + globs) against discovered units.
+/// Resolve configured `fixed` or `linked` groups (exact UnitIds + globs + `!negations`) against discovered units.
 pub fn resolve_unit_groups(
   groups : Array[Array[String]],
   units : Array[@model.ReleaseUnit],
@@ -590,7 +665,23 @@ pub fn resolve_unit_groups(
   for group in groups {
     let members : Array[String] = []
     for entry in group {
-      let pattern = canonical_id(entry)
+      if entry.has_prefix("!") && !entry.has_prefix("!(") {
+        let inner = entry[1:].to_owned()
+        if inner != "" {
+          let keep : Array[String] = []
+          for m in members {
+            if !matches_unit_pattern(m, inner) {
+              keep.push(m)
+            }
+          }
+          members.clear()
+          for m in keep {
+            members.push(m)
+          }
+        }
+        continue
+      }
+      let pattern = unit_pattern_key(entry)
       if !has_glob_meta(pattern) {
         if !ids.contains(pattern) {
           invalid("Unknown configured unit: " + pattern)

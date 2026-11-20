@@ -10,13 +10,9 @@ import {
 }
 
 // Values
-pub fn absolute_path(String, String) -> String
-
 pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResult
 
 pub async fn[H : ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
-
-pub fn bytes_fingerprint(Bytes) -> String
 
 pub async fn commit_changes(String, Array[String], String) -> Bool
 
@@ -26,39 +22,27 @@ pub async fn create_tags(@workspace.LoadedWorkspace, TagOptions) -> TagResult
 
 pub async fn[H : ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, TagOptions) -> TagResult
 
-pub fn error_message(Error) -> String
+pub fn default_changeset_readme() -> String
+
+pub fn default_config_template() -> String
+
+pub fn default_moonset_gitignore() -> String
+
+pub async fn[H : ExecutionHost] ensure_init_files_with(H, String, String?) -> Array[String]
 
 pub async fn format_files(String, @model.Config, Array[String], no_format? : Bool) -> FormatResult
 
 pub async fn[H : ExecutionHost] format_files_with(H, String, @model.Config, Array[String], no_format? : Bool) -> FormatResult
 
-pub fn manager_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
-
 pub fn native_host() -> NativeHost
 
 pub async fn pack_artifacts(@workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
 
-pub async fn pack_artifacts_for_target(@workspace.LoadedWorkspace, PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
-
-pub async fn[H : ExecutionHost] pack_artifacts_for_target_with(H, @workspace.LoadedWorkspace, PackOptions, target? : String, manifest_out? : String) -> Array[@model.PackResult]
-
 pub async fn[H : ExecutionHost] pack_artifacts_with(H, @workspace.LoadedWorkspace, PackOptions) -> Array[@model.PackResult]
-
-pub fn[H : ExecutionHost] package_manager_program(H, String) -> String
-
-pub fn parent_dir(String) -> String
 
 pub async fn publish_release(@workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
 
 pub async fn[H : ExecutionHost] publish_release_with(H, @workspace.LoadedWorkspace, PublishOptions) -> @model.PublishResult
-
-pub async fn publish_release_with_api(@workspace.LoadedWorkspace, PublishOptions, ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
-
-pub async fn[H : ExecutionHost] publish_release_with_api_with(H, @workspace.LoadedWorkspace, PublishOptions, ApiPublisherRegistry, artifacts_dir? : String) -> @model.PublishResult
-
-pub async fn publish_release_with_artifacts(@workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
-
-pub async fn[H : ExecutionHost] publish_release_with_artifacts_with(H, @workspace.LoadedWorkspace, PublishOptions, artifacts_dir? : String) -> @model.PublishResult
 
 pub async fn recover_version(String) -> Array[String]
 
@@ -79,8 +63,6 @@ pub fn utc_datetime(UInt64) -> String
 pub async fn verify_artifacts(@workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
 
 pub async fn[H : ExecutionHost] verify_artifacts_with(H, @workspace.LoadedWorkspace, artifacts_dir? : String) -> @engine.ArtifactVerificationReport
-
-pub fn workspace_root_for_unit(@model.WorkspaceSnapshot, @model.ReleaseUnit) -> String
 
 // Errors
 
@@ -133,6 +115,8 @@ pub async fn NativeHost::remove(Self, String) -> Unit
 pub async fn NativeHost::rename(Self, String, String) -> Unit
 pub async fn NativeHost::rmdir(Self, String) -> Unit
 pub async fn NativeHost::run(Self, String, Array[String], String?) -> @adapters.ProcessResult
+pub async fn NativeHost::run_with_env(Self, String, Array[String], String?, Map[String, String], String?, Int32?) -> @adapters.ProcessResult
+pub async fn NativeHost::sleep_ms(Self, Int32) -> Unit
 pub async fn NativeHost::tmpdir(Self, String) -> String
 pub async fn NativeHost::write_binary(Self, String, Bytes) -> Unit
 pub async fn NativeHost::write_text(Self, String, String) -> Unit
@@ -142,18 +126,26 @@ pub(all) struct PackOptions {
   dry_run : Bool
   frozen : Bool
   packages : Array[String]
+  target : String
+  manifest_out : String?
 }
+pub fn PackOptions::new(dry_run? : Bool, frozen? : Bool, packages? : Array[String], target? : String, manifest_out? : String) -> Self
 
 pub(all) struct PublishOptions {
   dry_run : Bool
   only : Array[String]
   registry : String?
   tag : String?
+  otp : String?
   yes : Bool
   allow_uncommitted : Bool
   retry : Int32
   no_tag : Bool
+  reconcile : Bool
+  artifacts_dir : String?
+  api_publishers : ApiPublisherRegistry?
 }
+pub fn PublishOptions::new(dry_run? : Bool, only? : Array[String], registry? : String, tag? : String, otp? : String, yes? : Bool, allow_uncommitted? : Bool, retry? : Int32, no_tag? : Bool, reconcile? : Bool, artifacts_dir? : String, api_publishers? : ApiPublisherRegistry) -> Self
 
 pub(all) struct TagOptions {
   dry_run : Bool
@@ -161,7 +153,9 @@ pub(all) struct TagOptions {
   force : Bool
   yes : Bool
   format : String
+  only_units : Array[String]
 }
+pub fn TagOptions::new(dry_run? : Bool, push? : Bool, force? : Bool, yes? : Bool, format? : String, only_units? : Array[String]) -> Self
 
 pub(all) struct TagResult {
   head : String
@@ -190,6 +184,8 @@ pub(open) trait ExecutionHost {
   async fn tmpdir(Self, String) -> String
   async fn rmdir(Self, String) -> Unit
   async fn run(Self, String, Array[String], String?) -> @adapters.ProcessResult
+  async fn run_with_env(Self, String, Array[String], String?, Map[String, String], String?, Int32?) -> @adapters.ProcessResult
+  async fn sleep_ms(Self, Int32) -> Unit
   fn getenv(Self, String) -> String?
   fn now(Self) -> UInt64
 }

@@ -10,57 +10,11 @@ fn pr_unit_display_name(unit_id : String, mixed : Bool) -> String {
 }
 
 ///|
-fn extract_aggregated_unit_notes(
-  markdown : String,
-  unit_id : String,
-  version : String,
-) -> String? {
-  let heading_prefix = "## " + unit_id + " - " + version
-  let lines = markdown
-    .replace_all(old="\r\n", new="\n")
-    .split("\n")
-    .map(x => x.to_owned())
-    .collect()
-  let mut found = false
-  let collected : Array[String] = []
-  for line in lines {
-    if line.has_prefix("## ") {
-      if found {
-        break
-      }
-      if line == heading_prefix || line.has_prefix(heading_prefix + " ") {
-        found = true
-      }
-      continue
-    }
-    if found {
-      collected.push(line)
-    }
-  }
-  if !found {
-    return None
-  }
-  let mut start = 0
-  while start < collected.length() && collected[start].trim() == "" {
-    start += 1
-  }
-  let mut end = collected.length()
-  while end > start && collected[end - 1].trim() == "" {
-    end -= 1
-  }
-  if start >= end {
-    None
-  } else {
-    Some(collected[start:end].to_owned().join("\n"))
-  }
-}
-
-///|
 /// Compute the Release PR title, appending `(<tag>)` when pre-release mode is active.
 pub fn release_pr_title(base_title : String, pre? : @model.PreState) -> String {
   let trimmed = base_title.trim().to_owned()
   match pre {
-    Some(state) if state.mode == "active" && state.tag != "" => {
+    Some(state) if state.mode == @model.Pre && state.tag != "" => {
       let suffix = " (" + state.tag + ")"
       if trimmed.has_suffix(suffix) {
         trimmed
@@ -70,6 +24,11 @@ pub fn release_pr_title(base_title : String, pre? : @model.PreState) -> String {
     }
     _ => trimmed
   }
+}
+
+///|
+fn escape_table_code(text : String) -> String {
+  sanitize_code_text(text).replace_all(old="|", new="\\|")
 }
 
 ///|
@@ -85,7 +44,7 @@ pub fn render_release_pr_body(
   } else {
     snapshot.config.base_branch
   }
-  let mixed = snapshot.units.any(u => u.ecosystem != "moonbit")
+  let mixed = snapshot.units.any(u => u.ecosystem != @model.MoonBit)
   let sections : Array[String] = []
   sections.push(
     "This PR was opened by the [moonset release](https://github.com/unmbt/moonset) GitHub Action. When you're ready to do a release, merge this PR to publish and tag automatically (or run `moonset publish` locally). If you're not ready to do a release yet, whenever you add more changesets to `" +
@@ -93,7 +52,7 @@ pub fn render_release_pr_body(
     "`, this PR will be updated.",
   )
   match pre {
-    Some(state) if state.mode == "active" && state.tag != "" =>
+    Some(state) if state.mode == @model.Pre && state.tag != "" =>
       sections.push(
         "⚠️⚠️⚠️⚠️⚠️⚠️\n\n`" +
         base_branch +
@@ -124,11 +83,11 @@ pub fn render_release_pr_body(
         .unwrap_or(release.new_version)
       table_rows.push(
         "| `" +
-        release.unit_id +
+        escape_table_code(release.unit_id) +
         "` | `" +
-        release.old_version +
+        escape_table_code(release.old_version) +
         "` → `" +
-        target_ver +
+        escape_table_code(target_ver) +
         "` | `" +
         release.level.text() +
         "` |",
@@ -149,15 +108,11 @@ pub fn render_release_pr_body(
       let heading = "## " + display_name + "@" + target_ver
       let extracted : String? = match changelog_by_unit.get(release.unit_id) {
         Some(entry) =>
-          match @changelog.extract_release_notes(entry.text, entry.version) {
-            Some(body) => Some(body)
-            None =>
-              extract_aggregated_unit_notes(
-                entry.text,
-                entry.unit_id,
-                entry.version,
-              )
-          }
+          @changelog.extract_unit_release_notes(
+            entry.text,
+            entry.unit_id,
+            entry.version,
+          )
         None => None
       }
       let body = match extracted {
@@ -174,21 +129,17 @@ pub fn render_release_pr_body(
     sections.push(release_blocks.join("\n\n"))
   }
   let full = sections.join("\n\n") + "\n"
-  if full.length() <= max_chars {
+  let limit = if max_chars < 160 { 160 } else { max_chars }
+  if full.to_array().length() <= limit {
     return full
   }
   let notice = "\n\n> _Release notes truncated to fit GitHub PR limits; see each package's `CHANGELOG.md` for full details._\n"
-  let budget = if max_chars > notice.length() {
-    max_chars - notice.length()
-  } else {
-    0
+  let notice_len = notice.to_array().length()
+  let budget = if limit > notice_len { limit - notice_len } else { 0 }
+  let cut_raw = truncate_chars(full, budget)
+  let cut = match cut_raw.rev_find("\n") {
+    Some(idx) if idx > 0 => cut_raw[:idx].to_owned()
+    _ => cut_raw
   }
-  let mut cut = budget
-  while cut > 0 && full[cut - 1] != '\n' {
-    cut -= 1
-  }
-  if cut == 0 {
-    cut = budget
-  }
-  full[:cut].to_owned() + notice
+  cut + notice
 }

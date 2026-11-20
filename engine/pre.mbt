@@ -1,4 +1,7 @@
 ///|
+/// Parse Changesets v3 minimal `pre.json` (`{ "mode": "pre" | "exit", "tag": "..." }`),
+/// transparently accepting legacy v2 fields (`"mode": "active"`, `initialVersions`,
+/// `nextNumbers`, `consumed`) for smooth migration.
 pub fn parse_pre_state(
   source : String,
   path~ : String = ".changeset/pre.json",
@@ -6,26 +9,27 @@ pub fn parse_pre_state(
   let json = parse_json(source, path)
   guard json is Object(fields) else {
     invalid("Expected pre state object", path~)
-    return {
-      mode: "",
-      tag: "",
-      initial_versions: Map([]),
-      next_numbers: Map([]),
-      consumed: [],
-    }
+    return @model.PreState::new(@model.Pre, "")
   }
   for key in fields.keys() {
-    if !["mode", "tag", "initialVersions", "nextNumbers", "consumed"].contains(
-        key,
-      ) {
+    if ![
+        "mode", "tag", "initialVersions", "nextNumbers", "consumed", "changesets",
+      ].contains(key) {
       invalid("Unknown pre state key: " + key, path~)
     }
   }
   let mode = match property(json, "mode") {
-    String("active" | "exit" as s) => s
+    String(s) =>
+      match @model.PreMode::parse(s) {
+        Some(m) => m
+        None => {
+          invalid("Invalid pre mode: " + s, path~)
+          @model.Pre
+        }
+      }
     _ => {
       invalid("Invalid pre mode", path~)
-      ""
+      @model.Pre
     }
   }
   let tag = match property(json, "tag") {
@@ -35,121 +39,133 @@ pub fn parse_pre_state(
       ""
     }
   }
+  validate_pre_tag(tag, path~)
+  let legacy_consumed : Array[String] = []
+  match property(json, "consumed") {
+    Array(items) =>
+      for item in items {
+        guard item is String(cs_id) else {
+          invalid("Invalid consumed changeset ID", path~)
+          continue
+        }
+        if !legacy_consumed.contains(cs_id) {
+          legacy_consumed.push(cs_id)
+        }
+      }
+    Null => ()
+    _ => invalid("Invalid consumed changeset IDs", path~)
+  }
+  match property(json, "changesets") {
+    Array(items) =>
+      for item in items {
+        if item is String(cs_id) && !legacy_consumed.contains(cs_id) {
+          legacy_consumed.push(cs_id)
+        }
+      }
+    _ => ()
+  }
+  { mode, tag, legacy_consumed, }
+}
+
+///|
+pub fn validate_pre_tag(
+  tag : String,
+  path~ : String = ".changeset/pre.json",
+) -> Unit raise @model.MoonsetError {
   if tag == "" || tag.contains(".") || tag.contains("+") {
     invalid("Pre tag must be one nonnumeric SemVer identifier", path~)
   }
   let tag_version = parse_version("0.0.0-" + tag + ".0")
-  if !(tag_version.pre[0] is @semver.Str(_)) {
+  if tag_version.pre.is_empty() || is_all_ascii_digits(tag_version.pre[0]) {
     invalid("Pre tag must be nonnumeric", path~)
-  }
-  let initial_versions : Map[String, String] = Map([])
-  let next_numbers : Map[String, Int32] = Map([])
-  match property(json, "initialVersions") {
-    Object(entries) =>
-      for id, value in entries {
-        guard value is String(version) else {
-          invalid("Invalid initialVersions value", path~)
-          continue
-        }
-        ignore(parse_version(version))
-        if canonical_id(id) != id {
-          invalid("Pre state requires canonical UnitId", path~)
-        }
-        initial_versions[id] = version
-      }
-    _ => invalid("Missing initialVersions", path~)
-  }
-  match property(json, "nextNumbers") {
-    Object(entries) =>
-      for id, value in entries {
-        guard value is Number(number, ..) &&
-          number >= 0 &&
-          number <= 2147483646.0 &&
-          number == number.to_int().to_double() else {
-          invalid("Invalid nextNumbers counter", path~)
-          continue
-        }
-        next_numbers[id] = number.to_int()
-      }
-    _ => invalid("Missing nextNumbers", path~)
-  }
-  guard property(json, "consumed") is Array(items) &&
-    items.all(x => x is String(_)) else {
-    invalid("Missing consumed changeset IDs", path~)
-    return { mode, tag, initial_versions, next_numbers, consumed: [], }
-  }
-  {
-    mode,
-    tag,
-    initial_versions,
-    next_numbers,
-    consumed: strings(property(json, "consumed")),
   }
 }
 
 ///|
-fn strip_prerelease(version : @semver.SemVer) -> String {
+fn strip_prerelease(version : SemVerParts) -> String {
   "\{version.major}.\{version.minor}.\{version.patch}"
 }
 
 ///|
-/// Compute the next version from baseline(s) and current manifest version(s)
-/// so single units and fixed/linked groups share identical prerelease rules.
+/// Changesets v3 pre-release counter derivation:
+/// - Stable version (`1.0.0`) -> next pre counter is `0` (`-tag.0`)
+/// - Matching prerelease (`1.0.1-next.2`) -> next pre counter is `3` (`-next.3`)
+/// - Prerelease with another tag (`1.0.1-alpha.2` entering `beta`) -> counter resets to `0` (`-beta.0`)
+fn next_pre_number(
+  current : SemVerParts,
+  tag : String,
+) -> Int32 raise @model.MoonsetError {
+  if !current.is_prerelease() {
+    return 0
+  }
+  if current.pre.length() >= 2 && current.pre[0] == tag {
+    match parse_uint32_checked(current.pre[1]) {
+      Some(n) => return safe_inc_int(n)
+      None =>
+        invalid(
+          "Prerelease numeric counter is invalid for tag '" + tag + "'",
+          code="invalid-version",
+        )
+    }
+  }
+  0
+}
+
+///|
+/// Return true when `version` is a prerelease carrying `tag` (or any prerelease if `tag == ""`).
+fn has_prerelease_tag(version : SemVerParts, tag : String) -> Bool {
+  if !version.is_prerelease() {
+    return false
+  }
+  if tag == "" {
+    true
+  } else {
+    version.pre.length() >= 1 && version.pre[0] == tag
+  }
+}
+
+///|
+/// Compute the next version from current manifest version(s) using Changesets v3
+/// prerelease rules (no `initialVersions` / `nextNumbers` needed; no `"0.0.0"` sentinel bug).
 fn compute_group_target_version(
   units : Array[@model.ReleaseUnit],
   level : @model.Bump,
   pre : @model.PreState?,
 ) -> String raise @model.MoonsetError {
-  let mut highest_current = "0.0.0"
-  let mut highest_baseline = "0.0.0"
-  let mut counter = 0
+  if units.is_empty() {
+    invalid("Version group cannot be empty")
+  }
+  let mut highest_current_opt : (String, SemVerParts)? = None
+  let mut max_counter : Int32 = 0
   for unit in units {
     guard unit.version is Some(old) else {
       invalid("Release unit has no version: " + unit.id, path=unit.manifest)
       return ""
     }
-    if parse_version(old).compare(parse_version(highest_current)) > 0 {
-      highest_current = old
+    let parsed = parse_version(old)
+    match highest_current_opt {
+      None => highest_current_opt = Some((old, parsed))
+      Some((_, cur_best)) =>
+        if parsed.compare(cur_best) > 0 {
+          highest_current_opt = Some((old, parsed))
+        }
     }
-    if pre is Some(state) && state.mode == "active" {
-      let current = parse_version(old)
-      if current.is_prerelease() &&
-        (
-          current.pre.length() != 2 ||
-          !(current.pre[0] is @semver.Str(tag) && tag == state.tag)
-        ) {
-        invalid(
-          "Existing prerelease does not match pre state: " + unit.id,
-          path=unit.manifest,
-        )
+    if pre is Some(state) && state.mode == @model.Pre {
+      let c = next_pre_number(parsed, state.tag)
+      if c > max_counter {
+        max_counter = c
       }
-      let baseline = state.initial_versions.get(unit.id).unwrap_or(old)
-      if parse_version(baseline).compare(parse_version(highest_baseline)) > 0 {
-        highest_baseline = baseline
-      }
-      counter = counter.max(state.next_numbers.get(unit.id).unwrap_or(0))
     }
   }
+  let (highest_current, _) = highest_current_opt.unwrap()
   if level == @model.None {
     return highest_current
   }
+  let bumped = increment(highest_current, level)
   match pre {
-    Some(state) if state.mode == "active" => {
-      let bumped = parse_version(increment(highest_baseline, level))
-      let current_parsed = parse_version(highest_current)
-      let base_ver = if current_parsed.is_prerelease() {
-        let current_core = parse_version(strip_prerelease(current_parsed))
-        if current_core.compare(bumped) > 0 {
-          strip_prerelease(current_core)
-        } else {
-          strip_prerelease(bumped)
-        }
-      } else {
-        strip_prerelease(bumped)
-      }
-      base_ver + "-" + state.tag + ".\{counter}"
-    }
-    _ => increment(highest_current, level)
+    Some(state) if state.mode == @model.Pre =>
+      bumped + "-" + state.tag + ".\{max_counter}"
+    _ => bumped
   }
 }
 

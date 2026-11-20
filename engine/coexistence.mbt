@@ -1,15 +1,4 @@
 ///|
-fn extract_mixed_mode(config : @model.Config) -> String? {
-  match config.raw {
-    {
-      "experimental": { "mixedWorkspaces": { "mode": String(mode), .. }, .. },
-      ..
-    } => Some(mode)
-    _ => None
-  }
-}
-
-///|
 fn foreign_changeset_dir(entry : String) -> String? {
   let prefix = "changeset-config:"
   if !entry.has_prefix(prefix) {
@@ -27,10 +16,14 @@ fn foreign_changeset_dir(entry : String) -> String? {
 
 ///|
 fn changed_file_in_dir(path : String, dir : String) -> Bool {
-  if dir == "" || dir == "." {
-    true
+  let norm_path = path.replace_all(old="\\", new="/")
+  let norm_dir = normalize_rel_dir(dir)
+  if norm_dir == "" {
+    // Only files directly at the repo root belong to a root manifest,
+    // not files nested inside managed subdirectories or `.changeset/`.
+    !norm_path.contains("/")
   } else {
-    path == dir || path.has_prefix(dir + "/")
+    norm_path == norm_dir || norm_path.has_prefix(norm_dir + "/")
   }
 }
 
@@ -41,7 +34,10 @@ pub fn coexistence_json(
   snapshot : @model.WorkspaceSnapshot,
   changeset_directory~ : String = ".changeset",
 ) -> Json? {
-  let mode = extract_mixed_mode(snapshot.config)
+  let mode : @model.MixedMode? = match snapshot.config.mixed {
+    Some(m) => Some(m.mode)
+    None => None
+  }
   let unmanaged_manifests : Array[String] = []
   let foreign_dirs : Array[String] = []
   for entry in snapshot.unmanaged {
@@ -53,7 +49,7 @@ pub fn coexistence_json(
         }
     }
   }
-  if mode != Some("coexist") &&
+  if mode != Some(@model.Coexist) &&
     unmanaged_manifests.is_empty() &&
     foreign_dirs.is_empty() {
     return None
@@ -70,15 +66,21 @@ pub fn coexistence_json(
       None => ()
     }
   }
+  let clean_cs_dir = normalize_rel_dir(changeset_directory)
   let changed_unowned : Array[String] = []
   let advice : Array[Json] = []
-  for path in snapshot.changed_files {
+  for raw_path in snapshot.changed_files {
+    let path = raw_path.replace_all(old="\\", new="/")
     if is_excluded_path(path) ||
-      path == "moon.work" ||
-      path.has_prefix(changeset_directory + "/") {
+      path == ".moonset" ||
+      path.has_prefix(".moonset/") ||
+      (
+        clean_cs_dir != "" &&
+        (path == clean_cs_dir || path.has_prefix(clean_cs_dir + "/"))
+      ) {
       continue
     }
-    if snapshot.units.any(unit => unit_owns_path(path, unit)) {
+    if !owning_units_for_path(path, snapshot.units).is_empty() {
       continue
     }
     if unmanaged_manifests.contains(path) ||
@@ -95,8 +97,13 @@ pub fn coexistence_json(
       Some(idx) => manifest[:idx].to_owned()
       None => ""
     }
-    let has_change = snapshot.changed_files.any(path => {
-      changed_file_in_dir(path, dir)
+    let has_change = snapshot.changed_files.any(raw_path => {
+      let path = raw_path.replace_all(old="\\", new="/")
+      if dir == "" {
+        path == manifest
+      } else {
+        changed_file_in_dir(path, dir)
+      }
     })
     if has_change {
       advice.push({
@@ -109,8 +116,14 @@ pub fn coexistence_json(
     }
   }
   for dir in foreign_dirs {
-    let has_change = snapshot.changed_files.any(path => {
-      changed_file_in_dir(path, dir)
+    let has_change = snapshot.changed_files.any(raw_path => {
+      let path = raw_path.replace_all(old="\\", new="/")
+      let norm_dir = normalize_rel_dir(dir)
+      if norm_dir == "" {
+        false
+      } else {
+        path == norm_dir || path.has_prefix(norm_dir + "/")
+      }
     })
     if has_change {
       advice.push({
@@ -132,7 +145,7 @@ pub fn coexistence_json(
     })
   }
   let resolved_mode = match mode {
-    Some(value) => value
+    Some(value) => value.text()
     None => "coexist"
   }
   Some({

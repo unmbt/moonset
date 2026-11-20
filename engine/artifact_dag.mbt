@@ -1,13 +1,4 @@
 ///|
-/// Per-target artifact declaration parsed from `experimental.mixedWorkspaces.units.<id>.artifacts`.
-pub(all) struct ArtifactTargetSpec {
-  target : String
-  package_unit_id : String?
-  required : Bool
-  path : String?
-}
-
-///|
 /// One build or publish node in the separated execution DAG.
 pub(all) struct ExecutionNode {
   id : String
@@ -99,41 +90,14 @@ pub fn ArtifactVerificationReport::to_json(
 }
 
 ///|
-/// Parse per-unit `artifacts` declarations from `Config.raw`.
+/// Extract per-unit `artifacts` declarations from structured `Config`.
 pub fn parse_artifact_specs(
   config : @model.Config,
-) -> Map[String, Array[ArtifactTargetSpec]] {
-  let out : Map[String, Array[ArtifactTargetSpec]] = Map([])
-  guard config.raw
-    is {
-      "experimental": { "mixedWorkspaces": { "units": Object(units), .. }, .. },
-      ..
-    } else {
-    return out
-  }
-  for unit_id, override_json in units {
-    if override_json is { "artifacts": Array(items), .. } {
-      let specs : Array[ArtifactTargetSpec] = []
-      for item in items {
-        if item is { "target": String(target), .. } {
-          let package_unit_id = match item {
-            { "package": String(pkg), .. } => Some(canonical_id(pkg))
-            _ => None
-          }
-          let required = match item {
-            { "required": False, .. } => false
-            _ => true
-          }
-          let path = match item {
-            { "path": String(p), .. } => Some(p)
-            _ => None
-          }
-          specs.push({ target, package_unit_id, required, path, })
-        }
-      }
-      if !specs.is_empty() {
-        out[canonical_id(unit_id)] = specs
-      }
+) -> Map[String, Array[@model.ArtifactTargetSpec]] {
+  let out : Map[String, Array[@model.ArtifactTargetSpec]] = Map([])
+  for unit_id, ov in config.unit_overrides() {
+    if !ov.artifacts.is_empty() {
+      out[canonical_id(unit_id)] = ov.artifacts
     }
   }
   out
@@ -223,7 +187,7 @@ pub fn build_execution_dag(
         )
       }
       seen_targets[spec.target] = true
-      if spec.package_unit_id is Some(pkg) {
+      if spec.linked_package is Some(pkg) {
         if pkg == owner_id {
           raise @model.Invalid(
             @model.diagnostic(
@@ -264,7 +228,7 @@ pub fn build_execution_dag(
   for release in plan.releases {
     if release.publish {
       for spec in specs_by_unit.get(release.unit_id).unwrap_or([]) {
-        if spec.package_unit_id is Some(pkg) && pkg != release.unit_id {
+        if spec.linked_package is Some(pkg) && pkg != release.unit_id {
           linked_packages[pkg] = true
         }
       }
@@ -306,13 +270,13 @@ pub fn build_execution_dag(
     if !release.publish {
       continue
     }
-    let version = versions[release.unit_id]
+    let version = versions.get(release.unit_id).unwrap_or(release.new_version)
     let specs = specs_by_unit.get(release.unit_id).unwrap_or([])
     let self_specs = specs.filter(s => {
-      s.package_unit_id is None || s.package_unit_id == Some(release.unit_id)
+      s.linked_package is None || s.linked_package == Some(release.unit_id)
     })
     let linked_specs = specs.filter(s => {
-      s.package_unit_id is Some(pkg) && pkg != release.unit_id
+      s.linked_package is Some(pkg) && pkg != release.unit_id
     })
     if self_specs.is_empty() {
       if !linked_packages.contains(release.unit_id) {
@@ -330,19 +294,21 @@ pub fn build_execution_dag(
       }
     }
     for spec in linked_specs {
-      let pkg = spec.package_unit_id.unwrap()
-      let pkg_ver = match versions.get(pkg) {
-        Some(v) => v
-        None => unit_map.get(pkg).bind(u => u.version).unwrap_or(version)
+      guard spec.linked_package is Some(pkg) else { continue }
+      // Only emit artifact intents for linked packages that are actually being published.
+      guard release_by_unit.get(pkg) is Some(pkg_rel) && pkg_rel.publish else {
+        continue
       }
+      let pkg_ver = versions.get(pkg).unwrap_or(pkg_rel.new_version)
       emit_intent(pkg, pkg_ver, spec.target, spec.required, spec.path)
     }
   }
 
+  let bridges = snapshot.config.bridges()
   let raw_build_nodes : Array[ExecutionNode] = []
   let raw_publish_nodes : Array[ExecutionNode] = []
   for release in plan.releases {
-    let version = versions[release.unit_id]
+    let version = versions.get(release.unit_id).unwrap_or(release.new_version)
     let build_deps : Array[String] = []
     if unit_map.get(release.unit_id) is Some(unit) {
       for dep in unit.dependencies {
@@ -352,7 +318,7 @@ pub fn build_execution_dag(
         }
       }
     }
-    for bridge in snapshot.config.bridges {
+    for bridge in bridges {
       if bridge.consumer == release.unit_id &&
         release_by_unit.contains(bridge.producer) {
         push_unique(build_deps, "build:" + bridge.producer)
@@ -372,7 +338,7 @@ pub fn build_execution_dag(
       let pub_deps : Array[String] = []
       if unit_map.get(release.unit_id) is Some(unit) {
         for dep in unit.dependencies {
-          if dep.kind == @model.Runtime &&
+          if (dep.kind == @model.Runtime || dep.kind == @model.Build) &&
             release_by_unit
             .get(dep.producer)
             .map(r => r.publish)
@@ -381,9 +347,9 @@ pub fn build_execution_dag(
           }
         }
       }
-      for bridge in snapshot.config.bridges {
+      for bridge in bridges {
         if bridge.consumer == release.unit_id &&
-          bridge.wait_for == "publish" &&
+          bridge.wait_for == @model.Publish &&
           release_by_unit
           .get(bridge.producer)
           .map(r => r.publish)
@@ -392,8 +358,7 @@ pub fn build_execution_dag(
         }
       }
       for spec in specs_by_unit.get(release.unit_id).unwrap_or([]) {
-        if spec.required &&
-          spec.package_unit_id is Some(pkg) &&
+        if spec.linked_package is Some(pkg) &&
           pkg != release.unit_id &&
           release_by_unit.get(pkg).map(r => r.publish).unwrap_or(false) {
           push_unique(pub_deps, "publish:" + pkg)
@@ -424,6 +389,16 @@ pub fn build_execution_dag(
 }
 
 ///|
+fn normalize_artifact_path(path : String) -> String {
+  let slash = path.replace_all(old="\\", new="/").trim().to_owned()
+  if slash.has_prefix("./") {
+    slash[2:].to_owned()
+  } else {
+    slash
+  }
+}
+
+///|
 /// Verify packed results against declared ArtifactIntents.
 pub fn verify_artifact_matrix(
   intents : Array[@model.ArtifactIntent],
@@ -432,13 +407,13 @@ pub fn verify_artifact_matrix(
   owners_by_package? : Map[String, Array[String]],
 ) -> ArtifactVerificationReport {
   let by_key : Map[String, @model.PackResult] = Map([])
+  let duplicate_keys : Map[String, Bool] = Map([])
   for result in packed {
-    by_key[result.unit_id + "\u0000" + result.target] = result
-  }
-  let source_claimed : Map[String, Bool] = Map([])
-  for intent in intents {
-    if intent.target == "source" {
-      source_claimed[intent.unit_id] = true
+    let key = result.unit_id + "\u0000" + result.target
+    if by_key.contains(key) {
+      duplicate_keys[key] = true
+    } else {
+      by_key[key] = result
     }
   }
   let issues : Array[ArtifactIssue] = []
@@ -455,19 +430,25 @@ pub fn verify_artifact_matrix(
   }
 
   for intent in intents {
-    let exact = by_key.get(intent.unit_id + "\u0000" + intent.target)
-    let matched = match exact {
-      Some(hit) => Some(hit)
-      None =>
-        if intent.target != "source" &&
-          !source_claimed.contains(intent.unit_id) &&
-          intent.path is None {
-          by_key.get(intent.unit_id + "\u0000source")
-        } else {
-          None
-        }
+    let key = intent.unit_id + "\u0000" + intent.target
+    if duplicate_keys.contains(key) {
+      issues.push({
+        unit_id: intent.unit_id,
+        target: intent.target,
+        artifact_id: intent.id,
+        code: "duplicate-artifact",
+        message: "Multiple packed artifacts found for " +
+        intent.unit_id +
+        " (" +
+        intent.target +
+        ")",
+        blocking: intent.required,
+      })
+      if intent.required {
+        block_unit(intent.unit_id)
+      }
     }
-    match matched {
+    match by_key.get(key) {
       None => {
         issues.push({
           unit_id: intent.unit_id,
@@ -501,7 +482,8 @@ pub fn verify_artifact_matrix(
             blocking: intent.required,
           })
           issue_added = true
-        } else if pack.version != intent.version {
+        }
+        if pack.version != intent.version {
           issues.push({
             unit_id: intent.unit_id,
             target: intent.target,
@@ -516,24 +498,43 @@ pub fn verify_artifact_matrix(
             blocking: intent.required,
           })
           issue_added = true
-        } else if expected_head is Some(head) &&
-          pack.source_commit is Some(pc) &&
-          pc != head {
-          issues.push({
-            unit_id: intent.unit_id,
-            target: intent.target,
-            artifact_id: intent.id,
-            code: "stale-artifact",
-            message: "Packed artifact commit " +
-            pc +
-            " does not match HEAD " +
-            head +
-            " for " +
-            intent.unit_id,
-            blocking: intent.required,
-          })
-          issue_added = true
-        } else if pack.content_hash == "" {
+        }
+        if expected_head is Some(head) {
+          match pack.source_commit {
+            Some(pc) if pc != head => {
+              issues.push({
+                unit_id: intent.unit_id,
+                target: intent.target,
+                artifact_id: intent.id,
+                code: "stale-artifact",
+                message: "Packed artifact commit " +
+                pc +
+                " does not match HEAD " +
+                head +
+                " for " +
+                intent.unit_id,
+                blocking: intent.required,
+              })
+              issue_added = true
+            }
+            None => {
+              issues.push({
+                unit_id: intent.unit_id,
+                target: intent.target,
+                artifact_id: intent.id,
+                code: "stale-artifact",
+                message: "Packed artifact is missing sourceCommit metadata (expected HEAD " +
+                head +
+                ") for " +
+                intent.unit_id,
+                blocking: intent.required,
+              })
+              issue_added = true
+            }
+            _ => ()
+          }
+        }
+        if pack.content_hash == "" {
           issues.push({
             unit_id: intent.unit_id,
             target: intent.target,
@@ -547,7 +548,8 @@ pub fn verify_artifact_matrix(
             blocking: intent.required,
           })
           issue_added = true
-        } else if intent.expected_hash is Some(exp) && pack.content_hash != exp {
+        }
+        if intent.expected_hash is Some(exp) && pack.content_hash != exp {
           issues.push({
             unit_id: intent.unit_id,
             target: intent.target,
@@ -561,11 +563,15 @@ pub fn verify_artifact_matrix(
             blocking: intent.required,
           })
           issue_added = true
-        } else if intent.path is Some(exp_path) && pack.archive_path != "" {
-          let actual_norm = pack.archive_path.replace_all(old="\\", new="/")
-          let expected_norm = exp_path.replace_all(old="\\", new="/")
-          if actual_norm != expected_norm &&
-            !actual_norm.has_suffix("/" + expected_norm) {
+        }
+        if intent.path is Some(exp_path) {
+          let actual_norm = normalize_artifact_path(pack.archive_path)
+          let expected_norm = normalize_artifact_path(exp_path)
+          if actual_norm == "" ||
+            (
+              actual_norm != expected_norm &&
+              !actual_norm.has_suffix("/" + expected_norm)
+            ) {
             issues.push({
               unit_id: intent.unit_id,
               target: intent.target,

@@ -129,3 +129,13 @@ MoonBit workspace 可以包含多个 `moon.mod`、`moon.pkg` 和 `moon.work`，�
 
 
 Phase 5 supports experimental operational adapter ports, JSONL external changelog generators, npm/pnpm routing, and Cargo workspace discovery/pack/publish for crates.io. External plugins are trusted processes; the protocol limits executable selection, environment variables, elapsed time, and output size, but does not provide OS-level file or network isolation.
+
+## v0.3.0 收敛增量需求（ADR-008 / ADR-009）
+
+| ID | 领域 | 验收条件 | 状态 | 测试映射 |
+|---|---|---|---|---|
+| `FR-032` | Changesets v3 `pre` 与统一 `snapshot` | `.changeset/pre.json` 收敛为 `{ "mode": "pre" \| "exit", "tag": "<tag>" }`（兼容读取旧 `"active"`），`snapshot` 合入 `build_plan`，支持无 tag `--snapshot` 并写入 `isSnapshot: true` 的 `release-state.json` | Implemented | `engine/v030_regression_test.mbt`、`scripts/cli-integration.mbtx` |
+| `FR-033` | 内置跨平台 UTF-8 原生 TUI | 通过 `cli/tty_native.c` 替代 `mizchi/tui`；Windows 使用 `WriteConsoleW` + `ReadConsoleInputW` 解决中文乱码与 IME 阻塞输入；支持空格、UTF-8 光标编辑、全选、`0.x` major 确认与外部 `$EDITOR` | Implemented | `cli/cli_wbtest.mbt`（纯状态机与视图单测）+ 本地 `tty_native.c` 编译链接 |
+| `FR-034` | `api_version = "2.0.0"` 与生态驱动收敛 | 移除 10 个未接入的同步 stub trait；强枚举化领域模型与嵌套 `Config`；`publish --dry-run` 严格只读；支持 `--otp`、`--reconcile`、`--ignore`、`--flag=value`、`publishConfig` 与 `config.access` 透传 | Implemented | `adapters/protocol_test.mbt`、`executor/executor_test.mbt`、`moonset_test.mbt` |
+| `FR-035` | 完整 TOML Span 解析与工作区发现加固 | `workspace/toml.mbt` 支持多行字符串、内联表复合版本范围、`[dependencies.foo]` 子表、`publish.workspace = true`、单 crate 仓库与 npm `includeRoot`/`pnpm-workspace.yaml` 优先级 | Implemented | `workspace/cargo_test.mbt`、`workspace/integration_test.mbt` |
+| `OPS-004` | GitHub Actions / Workflows / 安装脚本加固 | `action.yml` 精确 `awk` tag 匹配与 EXIT 凭据清理；Fork PR `refs/pull/<n>/head` 检出；`lint-workflows.mbtx` 动态扫描 + 文档死链校验；修复 macOS/Windows 安装脚本缺陷 | Implemented | `scripts/lint-workflows.mbtx` |

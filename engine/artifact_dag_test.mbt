@@ -1,7 +1,7 @@
 ///|
 fn artifact_unit(
   id : String,
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   publish~ : Bool = true,
 ) -> @model.ReleaseUnit {
   let parts = id.split(":").map(x => x.to_owned()).collect()
@@ -10,14 +10,16 @@ fn artifact_unit(
     id,
     native_name,
     ecosystem,
-    workspace_id: ecosystem,
+    workspace_id: ecosystem.text(),
     root: native_name.replace_all(old="/", new="_"),
     manifest: native_name + "/manifest",
     version_path: native_name + "/manifest",
     version_field: "version",
     version: Some("0.1.0"),
-    visibility: "public",
+    version_span: None,
+    visibility: @model.Public,
     publish,
+    publish_config: None,
     dependencies: [],
   }
 }
@@ -56,10 +58,10 @@ test "build_execution_dag separates build and publish graphs and detects cycles"
     #|  }
     #|}
   let units = [
-    artifact_unit("moonbit:acme/engine", "moonbit", publish=false),
-    artifact_unit("npm:@acme/engine-linux-x64", "npm"),
-    artifact_unit("npm:@acme/engine-darwin-arm64", "npm"),
-    artifact_unit("npm:@acme/engine", "npm"),
+    artifact_unit("moonbit:acme/engine", @model.MoonBit, publish=false),
+    artifact_unit("npm:@acme/engine-linux-x64", @model.Npm),
+    artifact_unit("npm:@acme/engine-darwin-arm64", @model.Npm),
+    artifact_unit("npm:@acme/engine", @model.Npm),
   ]
   let ws : @model.WorkspaceSnapshot = {
     ..snapshot(units, config=config_json),
@@ -225,7 +227,7 @@ test "build_execution_dag rejects cyclic platform package references and duplica
     #|    }
     #|  }
     #|}
-  let units = [artifact_unit("npm:@acme/engine", "npm")]
+  let units = [artifact_unit("npm:@acme/engine", @model.Npm)]
   let ws = snapshot(units, config=self_ref_cfg)
   let cs = @engine.parse_changeset(
     "---\n\"npm:@acme/engine\": patch\n---\nSelf ref\n",

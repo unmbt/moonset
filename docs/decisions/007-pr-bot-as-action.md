@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-11-18
-- 关联：FR-014、FR-015、SEC-003、SEC-005、OPS-001；替代 [自动化设计](automation.md) §5 的 GitHub App 服务端设计（不影响 ADR-005、ADR-006）
+- 关联：FR-014、FR-015、SEC-003、SEC-005、OPS-001；替代 [自动化设计](../automation.md) §5 的 GitHub App 服务端设计（不影响 ADR-005、ADR-006）
 
 ## 背景
 

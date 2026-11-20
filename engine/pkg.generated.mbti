@@ -10,17 +10,17 @@ import {
 // Values
 pub fn build_execution_dag(@model.WorkspaceSnapshot, @model.ReleasePlan, release_versions_override? : Map[String, String]) -> ExecutionDag raise @model.MoonsetError
 
-pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String) -> @model.ReleasePlan raise @model.MoonsetError
+pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String, snapshot_mode? : Bool, snapshot_tag? : String, timestamp_ms? : String) -> @model.ReleasePlan raise @model.MoonsetError
 
 pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String]) -> @model.VersionPlan raise @model.MoonsetError
 
-pub fn build_version_plan_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)]) -> @model.VersionPlan raise @model.MoonsetError
+pub fn build_version_plan_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)], server_url? : String) -> @model.VersionPlan raise @model.MoonsetError
 
 pub fn canonical_id(String) -> String
 
 pub fn changelog_contexts(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String]) -> Array[@changelog.ChangelogContext]
 
-pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)]) -> Array[@changelog.ChangelogContext]
+pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)], server_url? : String) -> Array[@changelog.ChangelogContext]
 
 pub fn coexistence_json(@model.WorkspaceSnapshot, changeset_directory? : String) -> @json.Json?
 
@@ -28,7 +28,7 @@ pub fn comment_state(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_dir
 
 pub fn error_markdown(@model.Diagnostic, max_length? : Int32) -> String
 
-pub fn format_changeset(@model.ChangesetDraft) -> String raise @model.MoonsetError
+pub fn format_changeset(@model.ChangesetDraft, allow_empty? : Bool) -> String raise @model.MoonsetError
 
 pub fn format_tag_name(String, String, String, String) -> String
 
@@ -40,19 +40,23 @@ pub fn has_artifact_specs(@model.Config) -> Bool
 
 pub fn has_glob_meta(String) -> Bool
 
+pub fn is_npm_external_protocol(String) -> Bool
+
 pub fn is_unit_ignored(@model.Config, String) -> Bool
+
+pub fn is_workspace_protocol(String) -> Bool
 
 pub fn matches_changed_patterns(String, Array[String]) -> Bool
 
-pub fn matches_ecosystem_range(String, String, String) -> Bool raise @model.MoonsetError
+pub fn matches_ecosystem_range(@model.Ecosystem, String, String, producer_current_version? : String) -> Bool raise @model.MoonsetError
 
 pub fn matches_pattern(String, String) -> Bool
 
 pub fn matches_unit_pattern(String, String) -> Bool
 
-pub fn parse_artifact_specs(@model.Config) -> Map[String, Array[ArtifactTargetSpec]]
+pub fn parse_artifact_specs(@model.Config) -> Map[String, Array[@model.ArtifactTargetSpec]]
 
-pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool) -> @model.Changeset raise @model.MoonsetError
+pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool, in_pre_dir? : Bool) -> @model.Changeset raise @model.MoonsetError
 
 pub fn parse_config(String, path? : String) -> @model.Config raise @model.MoonsetError
 
@@ -60,7 +64,7 @@ pub fn parse_json(String, String) -> @json.Json raise @model.MoonsetError
 
 pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
 
-pub fn parse_snapshot_config(@model.Config) -> SnapshotConfig
+pub fn parse_snapshot_config(@model.Config) -> @model.SnapshotConfig
 
 pub fn parse_target_mapping(String?) -> PublishTargetOverride raise @model.MoonsetError
 
@@ -72,29 +76,31 @@ pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset],
 
 pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre? : @model.PreState, max_chars? : Int32) -> String
 
-pub fn render_snapshot_version(String, String, SnapshotConfig, generated_at? : String, git_head? : String) -> String raise @model.MoonsetError
+pub fn render_snapshot_version(String, String, @model.SnapshotConfig, generated_at? : String, timestamp_ms? : String, git_head? : String) -> String raise @model.MoonsetError
 
 pub fn resolve_formatter(@model.Config, no_format? : Bool) -> String
 
 pub fn resolve_ignored_units(@model.Config, Array[@model.ReleaseUnit]) -> Array[String] raise @model.MoonsetError
 
-pub fn resolve_target_override(PublishTargetOverride, String, String) -> String?
+pub fn resolve_target_override(PublishTargetOverride, String, @model.Ecosystem) -> String?
 
 pub fn resolve_unit_groups(Array[Array[String]], Array[@model.ReleaseUnit]) -> Array[Array[String]] raise @model.MoonsetError
 
-pub fn rewrite_ecosystem_range(String, String, String) -> String raise @model.MoonsetError
+pub fn rewrite_ecosystem_range(@model.Ecosystem, String, String, exact_pin? : Bool) -> String raise @model.MoonsetError
 
 pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
 
 pub fn status_markdown(@model.WorkspaceSnapshot, @model.ReleasePlan, options? : CommentOptions) -> String
 
-pub fn validate_changeset_draft(@model.ChangesetDraft) -> Unit raise @model.MoonsetError
+pub fn validate_changeset_draft(@model.ChangesetDraft, allow_empty? : Bool) -> Unit raise @model.MoonsetError
 
-pub fn validate_ecosystem_range(String, String) -> Unit raise @model.MoonsetError
+pub fn validate_ecosystem_range(@model.Ecosystem, String) -> Unit raise @model.MoonsetError
 
 pub fn validate_git_tag_name(String) -> Unit raise @model.MoonsetError
 
 pub fn validate_glob_pattern(String, allow_negation? : Bool, path? : String) -> Unit raise @model.MoonsetError
+
+pub fn validate_pre_tag(String, path? : String) -> Unit raise @model.MoonsetError
 
 pub fn validate_snapshot_template(String, path? : String) -> Unit raise @model.MoonsetError
 
@@ -114,13 +120,6 @@ pub(all) struct ArtifactIssue {
   blocking : Bool
 }
 pub fn ArtifactIssue::to_json(Self) -> @json.Json
-
-pub(all) struct ArtifactTargetSpec {
-  target : String
-  package_unit_id : String?
-  required : Bool
-  path : String?
-}
 
 pub(all) struct ArtifactVerificationReport {
   ok : Bool
@@ -162,12 +161,6 @@ pub(all) struct PublishTargetOverride {
   global : String?
   by_ecosystem : Map[String, String]
   by_unit : Map[String, String]
-}
-
-pub(all) struct SnapshotConfig {
-  enabled : Bool
-  use_calculated_version : Bool
-  prerelease_template : String
 }
 
 // Type aliases

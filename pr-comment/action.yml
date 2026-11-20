@@ -65,14 +65,17 @@ runs:
           local raw
           raw="$(date +%s%3N 2>/dev/null || true)"
           case "$raw" in
-            *[0-9]*)
+            ''|*[!0-9]*)
+              printf '%s000' "$(date +%s)"
+              ;;
+            *)
               if [ "${#raw}" -ge 13 ]; then
                 printf '%s' "$raw"
-                return
+              else
+                printf '%s000' "$(date +%s)"
               fi
               ;;
           esac
-          printf '%s000' "$(date +%s)"
         }
         start_ms="$(now_ms)"
         pr_num="${INPUT_PR_NUMBER:-$EVENT_PR_NUMBER}"
@@ -87,16 +90,17 @@ runs:
 
         existing_id="$(
           gh api --paginate "repos/${REPO}/issues/${pr_num}/comments" \
-            | jq -s -r '[.[][] | select(.user.login == env.BOT_LOGIN and (.body | contains("<!-- moonset-bot:changeset-check -->")))][0].id // empty'
+            | jq -s -r '[.[][] | select(.user.login == env.BOT_LOGIN and ((.body // "") | contains("<!-- moonset-bot:changeset-check -->")))][0].id // empty' \
+            | tr -d '\r'
         )"
 
         comment_id=""
         op="skipped"
         if [ -n "$existing_id" ]; then
-          comment_id="$(gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" -F "body=@${tmp_dir}/comment.md" --jq '.id')"
+          comment_id="$(gh api -X PATCH "repos/${REPO}/issues/comments/${existing_id}" -F "body=@${tmp_dir}/comment.md" --jq '.id' | tr -d '\r')"
           op="updated"
         elif [ "$SHOULD_COMMENT" = "true" ]; then
-          comment_id="$(gh api -X POST "repos/${REPO}/issues/${pr_num}/comments" -F "body=@${tmp_dir}/comment.md" --jq '.id')"
+          comment_id="$(gh api -X POST "repos/${REPO}/issues/${pr_num}/comments" -F "body=@${tmp_dir}/comment.md" --jq '.id' | tr -d '\r')"
           op="created"
         fi
 
@@ -124,7 +128,7 @@ runs:
           --arg res "$op" \
           --argjson duration "$duration" \
           --arg err "$err_code" \
-          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:null,result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}')"
+          '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:null,result:$res,durationMs:$duration,errorCode:(if $err == "" then null else $err end)}' | tr -d '\r')"
 
         echo "comment-id=$comment_id" >> "$GITHUB_OUTPUT"
         echo "action=$op" >> "$GITHUB_OUTPUT"

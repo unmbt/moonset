@@ -39,16 +39,16 @@ test "changeset rejects duplicates nesting and aliases" {
 test "config defaults split declaration updates from dependents" {
   let config = @engine.parse_config("{}")
   assert_eq(config.update_dependencies, @model.Patch)
-  assert_eq(config.update_dependents, "out-of-range")
+  assert_eq(config.update_dependents, @model.OutOfRange)
   assert_eq(
     @engine.parse_config("\uFEFF{\r\n\"schemaVersion\": 1\r\n}").update_dependents,
-    "out-of-range",
+    @model.OutOfRange,
   )
   let config = @engine.parse_config(
     "{\"updateInternalDependents\":\"always\",\"updateInternalDependencies\":\"minor\"}",
   )
   assert_eq(config.update_dependencies, @model.Minor)
-  assert_eq(config.update_dependents, "always")
+  assert_eq(config.update_dependents, @model.Always)
 }
 
 ///|
@@ -115,11 +115,11 @@ test "SemVer rejects malformed versions and compares prerelease ordering" {
 }
 
 ///|
-test "pre states reject corrupt modes tags and counters" {
+test "pre states reject corrupt modes tags and unknown keys" {
   for
     text in [
-      "{}", "{\"mode\":\"active\",\"tag\":\"123\",\"initialVersions\":{},\"nextNumbers\":{},\"consumed\":[]}",
-      "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{},\"nextNumbers\":{\"moonbit:a/b\":-1},\"consumed\":[]}",
+      "{}", "{\"mode\":\"pre\",\"tag\":\"123\"}", "{\"mode\":\"bad\",\"tag\":\"alpha\"}",
+      "{\"mode\":\"pre\",\"tag\":\"alpha\",\"unexpected\":true}",
     ] {
     let rejected = try {
       ignore(@engine.parse_pre_state(text))
@@ -129,6 +129,10 @@ test "pre states reject corrupt modes tags and counters" {
     }
     assert_true(rejected)
   }
+  // v3 minimal format parses cleanly
+  let v3 = @engine.parse_pre_state("{\"mode\":\"pre\",\"tag\":\"next\"}")
+  assert_eq(v3.mode, @model.Pre)
+  assert_eq(v3.tag, "next")
 }
 
 ///|
@@ -158,11 +162,11 @@ test "schema validates propertyNames pattern and config reads changelog disabled
   assert_true(bad_bridge)
 
   let disabled = @engine.parse_config("{\"changelog\":false}")
-  assert_true(!disabled.changelog_enabled)
+  assert_true(!disabled.changelog.enabled)
 
   let with_repo = @engine.parse_config(
     "{\"changelog\":{\"generator\":\"github\",\"options\":{\"repo\":\"unmbt/moonset\",\"disableThanks\":true}}}",
   )
-  assert_eq(with_repo.github, Some("unmbt/moonset"))
-  assert_true(!with_repo.github_thanks)
+  assert_eq(with_repo.github.repo, Some("unmbt/moonset"))
+  assert_true(!with_repo.github.thanks)
 }

@@ -2,10 +2,18 @@
 import {
   "moonbitlang/core/async",
   "moonbitlang/core/async/fs",
+  "moonbitlang/core/path",
 }
 ----
 fn fail_lint(path : String, message : String) -> Unit raise {
   fail(path + ": " + message)
+}
+
+fn contains_unsafe_interpolation(line : String) -> Bool {
+  line.contains("${{ github.event.") ||
+  line.contains("${{ inputs.") ||
+  line.contains("${{ github.head_ref") ||
+  line.contains("${{ steps.")
 }
 
 fn check_run_blocks(path : String, lines : Array[String]) -> Unit raise {
@@ -19,7 +27,7 @@ fn check_run_blocks(path : String, lines : Array[String]) -> Unit raise {
       if trimmed != "" && indent <= run_indent {
         in_run = false
       } else {
-        if line.contains("${{ github.event.") || line.contains("${{ inputs.") {
+        if contains_unsafe_interpolation(line) {
           fail_lint(path, "line " + (i + 1).to_string() + ": unsafe template interpolation in run block; bind via env: first")
         }
         continue
@@ -33,7 +41,7 @@ fn check_run_blocks(path : String, lines : Array[String]) -> Unit raise {
       if after == "|" || after == "|-" || after == ">" || after == ">-" || after == "" {
         in_run = true
         run_indent = indent
-      } else if after.contains("${{ github.event.") || after.contains("${{ inputs.") {
+      } else if contains_unsafe_interpolation(after) {
         fail_lint(path, "line " + (i + 1).to_string() + ": unsafe inline run interpolation; bind via env: first")
       }
     }
@@ -45,19 +53,47 @@ fn check_composite_action(path : String, text : String) -> Unit raise {
   if !text.contains("using: composite") {
     fail_lint(path, "composite action must declare `using: composite`")
   }
-  let mut run_count = 0
-  let mut shell_count = 0
+  // Per-step check: every `run:` step inside `steps:` must have a `shell:` key
+  let mut in_steps = false
+  let mut step_indent = -1
+  let mut step_has_run = false
+  let mut step_has_shell = false
   for raw in lines {
     let trimmed = raw.trim().to_owned()
-    if trimmed.has_prefix("run:") || trimmed.has_prefix("- run:") {
-      run_count += 1
+    let indent = raw.length() - raw.trim_start().length()
+    if trimmed == "" || trimmed.has_prefix("#") {
+      continue
     }
-    if trimmed.has_prefix("shell:") || trimmed.has_prefix("- shell:") {
-      shell_count += 1
+    if trimmed == "steps:" {
+      in_steps = true
+      step_indent = -1
+      step_has_run = false
+      step_has_shell = false
+      continue
+    }
+    if !in_steps {
+      continue
+    }
+    if trimmed.has_prefix("- ") && (step_indent == -1 || indent == step_indent) {
+      if step_has_run && !step_has_shell {
+        fail_lint(path, "composite step with `run:` is missing `shell:`")
+      }
+      step_indent = indent
+      step_has_run = trimmed.has_prefix("- run:")
+      step_has_shell = trimmed.has_prefix("- shell:")
+      continue
+    }
+    if step_indent != -1 && indent > step_indent {
+      if trimmed.has_prefix("run:") {
+        step_has_run = true
+      }
+      if trimmed.has_prefix("shell:") {
+        step_has_shell = true
+      }
     }
   }
-  if run_count > 0 && shell_count < run_count {
-    fail_lint(path, "every composite `run:` step must specify `shell:`")
+  if step_has_run && !step_has_shell {
+    fail_lint(path, "composite step with `run:` is missing `shell:`")
   }
   if path != "setup/action.yml" && !text.contains("audit-event:") {
     fail_lint(path, "composite action must declare `audit-event` output")
@@ -71,7 +107,6 @@ fn check_workflow(path : String, text : String) -> Unit raise {
   if !text.contains("pull_request_target") {
     return
   }
-  // Split into job sections after `jobs:`
   let mut in_jobs = false
   let mut job_name = ""
   let mut job_lines : Array[String] = []
@@ -101,14 +136,15 @@ fn check_workflow(path : String, text : String) -> Unit raise {
   for pair in jobs {
     let (name, jlines) = pair
     let body = jlines.join("\n")
-    if body.contains("pull_request.head") {
+    let checks_out_pr = body.contains("pull_request.head") ||
+      body.contains("refs/pull/")
+    if checks_out_pr {
       if !body.contains("persist-credentials: false") {
         fail_lint(path, "job `" + name + "` checks out PR head under pull_request_target without `persist-credentials: false`")
       }
       if body.contains(": write") {
         fail_lint(path, "job `" + name + "` checks out PR head under pull_request_target and must not request write permissions")
       }
-      // Verify any build command is strictly confined to a `working-directory: trusted` step
       let mut in_trusted_step = false
       for jline in jlines {
         let jt = jline.trim().to_owned()
@@ -133,6 +169,90 @@ fn check_workflow(path : String, text : String) -> Unit raise {
   }
 }
 
+async fn collect_yaml_files(dir : String, out : Array[String]) -> Unit {
+  if !@fs.exists(dir) {
+    return
+  }
+  let entries = @fs.readdir(dir)
+  entries.sort()
+  for name in entries {
+    if name.has_suffix(".yml") || name.has_suffix(".yaml") {
+      out.push(dir + "/" + name)
+    }
+  }
+}
+
+async fn collect_markdown_files(dir : String, out : Array[String]) -> Unit {
+  if !@fs.exists(dir) {
+    return
+  }
+  let entries = @fs.readdir(dir)
+  entries.sort()
+  for name in entries {
+    if name == "audit_report.md" {
+      continue
+    }
+    let full = dir + "/" + name
+    if @fs.kind(full) == @fs.Directory {
+      collect_markdown_files(full, out)
+    } else if name.has_suffix(".md") {
+      out.push(full)
+    }
+  }
+}
+
+async fn check_markdown_links(path : String) -> Unit {
+  let text = @fs.read_text(path).replace_all(old="\r\n", new="\n")
+  let base_dir = @path.Path(path).dirname().to_string()
+  let mut in_fence = false
+  for raw in text.split("\n") {
+    let line = raw.to_owned()
+    if line.trim().has_prefix("```") {
+      in_fence = !in_fence
+      continue
+    }
+    if in_fence {
+      continue
+    }
+    let chars = line.to_array()
+    let mut i = 0
+    while i < chars.length() {
+      if chars[i] == ']' && i + 1 < chars.length() && chars[i + 1] == '(' {
+        let start = i + 2
+        let mut j = start
+        while j < chars.length() && chars[j] != ')' {
+          j += 1
+        }
+        if j < chars.length() {
+          let raw_target = String::from_array(chars[start:j].to_owned()).trim().to_owned()
+          let target = match raw_target.find("#") {
+            Some(idx) => raw_target[:idx].to_owned()
+            None => raw_target
+          }
+          if target != "" &&
+            !target.has_prefix("http://") &&
+            !target.has_prefix("https://") &&
+            !target.has_prefix("mailto:") &&
+            !target.has_prefix("file://") &&
+            !target.contains("{") {
+            let resolved = if base_dir == "" || base_dir == "." {
+              target
+            } else {
+              @path.Path(base_dir).join(@path.Path(target)).normalize().to_string()
+            }
+            if !@fs.exists(resolved) {
+              fail_lint(path, "broken relative link target: " + raw_target + " (resolved: " + resolved + ")")
+            }
+          }
+          i = j + 1
+          continue
+        }
+      }
+      i += 1
+    }
+  }
+}
+
 async fn main {
   let actions = [
     "action.yml",
@@ -147,19 +267,21 @@ async fn main {
     check_composite_action(path, @fs.read_text(path))
   }
 
-  let workflows = [
-    ".github/workflows/ci.yml",
-    ".github/workflows/moonset-release.yml",
-    ".github/workflows/release-binaries.yml",
-    ".github/workflows/moonset-pr-bot.yml",
-    "docs/examples/workflows/moonset-pr-bot.yml",
-    "docs/examples/workflows/moonset-release.yml",
-  ]
+  let workflows : Array[String] = []
+  collect_yaml_files(".github/workflows", workflows)
+  collect_yaml_files("docs/examples/workflows", workflows)
+  if workflows.is_empty() {
+    fail_lint(".github/workflows", "no workflow YAML files discovered")
+  }
   for path in workflows {
-    if !@fs.exists(path) {
-      fail_lint(path, "missing workflow file")
-    }
     check_workflow(path, @fs.read_text(path))
   }
-  println("Workflow & Action security lint passed (" + actions.length().to_string() + " actions, " + workflows.length().to_string() + " workflows)")
+
+  let docs : Array[String] = ["AGENTS.md"]
+  collect_markdown_files("docs", docs)
+  for doc in docs {
+    check_markdown_links(doc)
+  }
+
+  println("Workflow, Action & Docs lint passed (" + actions.length().to_string() + " actions, " + workflows.length().to_string() + " workflows, " + docs.length().to_string() + " docs)")
 }

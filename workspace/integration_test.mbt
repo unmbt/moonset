@@ -35,7 +35,7 @@ async test "discover explicit workspace members and same-directory JS without wr
   write(root, ".changeset/change.md", "---\nacme/a: patch\n---\nSummary")
   let loaded = @workspace.discover(root)
   assert_eq(loaded.snapshot.units.length(), 2)
-  assert_eq(loaded.snapshot.units[0].visibility, "restricted")
+  assert_eq(loaded.snapshot.units[0].visibility, @model.Restricted)
   assert_true(loaded.snapshot.units[0].publish)
   assert_eq(loaded.snapshot.unmanaged, ["a/package.json"])
   let plan = @engine.build_plan(loaded.snapshot, loaded.changesets)
@@ -276,6 +276,19 @@ async test "SDD minimal fixtures discover and validate expected plans" {
   let two_plan = @engine.build_plan(two.snapshot, two.changesets)
   assert_eq(two_plan.releases.length(), 2)
 
+  let fixed_linked = @workspace.discover("fixtures/fixed-and-linked")
+  let fl_plan = @engine.build_plan(
+    fixed_linked.snapshot,
+    fixed_linked.changesets,
+  )
+  assert_eq(fl_plan.releases.length(), 3)
+
+  let priv_ign = @workspace.discover("fixtures/private-and-ignore")
+  let pi_plan = @engine.build_plan(priv_ign.snapshot, priv_ign.changesets)
+  assert_eq(pi_plan.releases.map(r => r.unit_id), [
+    "moonbit:acme/pub", "moonbit:acme/priv",
+  ])
+
   let pre_fx = @workspace.discover("fixtures/prerelease")
   let pre_plan = @engine.build_plan(
     pre_fx.snapshot,
@@ -342,7 +355,7 @@ async test "FR-029 workspace discovery loads pre.directory changesets across act
   let vp_exit = @engine.build_version_plan(
     loaded_exit.snapshot,
     plan_exit,
-    { dry_run: true, no_changelog: false, snapshot_tag: None, },
+    { dry_run: true, no_changelog: false, snapshot: false, snapshot_tag: None, },
     generated_at="2026-11-19",
   )
   assert_eq(vp_exit.tags[0].version, "0.2.0")
@@ -354,4 +367,42 @@ async test "FR-029 workspace discovery loads pre.directory changesets across act
   assert_true(
     vp_exit.edits.any(e => e.path == ".changeset/c2.md" && e.after_text == ""),
   )
+}
+
+///|
+async test "v0.3.0 npm includeRoot, pnpm precedence, publishConfig, packages/build, AGENTS.md ignore" {
+  let root = @fs.tmpdir(prefix="moonset-npm-v030-")
+  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  write(
+    root, ".changeset/config.json", "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":true}]}}}",
+  )
+  // Should be ignored by changeset discovery
+  write(root, ".changeset/AGENTS.md", "# Agent instructions")
+  write(root, ".changeset/readme.md", "# Readme")
+  write(
+    root, "js/package.json", "{\"name\":\"@acme/js-root\",\"version\":\"1.0.0\",\"workspaces\":[\"ignored-by-pnpm/*\"]}",
+  )
+  write(
+    root, "js/pnpm-workspace.yaml", "packages: ['packages/*', '!packages/skip']\n",
+  )
+  write(
+    root, "js/packages/build/package.json", "{\"name\":\"@acme/build\",\"version\":\"0.4.0\",\"publishConfig\":{\"access\":\"restricted\",\"registry\":\"https://npm.example.test\",\"directory\":\"dist\"}}",
+  )
+  write(
+    root, "js/packages/skip/package.json", "{\"name\":\"@acme/skip\",\"version\":\"0.1.0\"}",
+  )
+  let loaded = @workspace.discover(root, include_commits=false)
+  assert_eq(loaded.changesets.length(), 0)
+  assert_eq(loaded.snapshot.units.map(u => u.id), [
+    "npm:@acme/build", "npm:@acme/js-root",
+  ])
+  let build_pkg = loaded.snapshot.units[0]
+  assert_true(build_pkg.publish_config is Some(_))
+  let pc = build_pkg.publish_config.unwrap()
+  assert_eq(pc.access, Some(@model.Access::Restricted))
+  assert_eq(pc.registry, Some("https://npm.example.test"))
+  assert_eq(pc.directory, Some("dist"))
+  assert_true(build_pkg.version_span is Some(_))
+  // Managed root manifest must NOT be reported as unmanaged
+  assert_false(loaded.snapshot.unmanaged.contains("js/package.json"))
 }

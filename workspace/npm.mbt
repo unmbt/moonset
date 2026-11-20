@@ -15,6 +15,22 @@ fn json_string(value : Json, key : String) -> String? {
 }
 
 ///|
+fn normalize_ws_root(raw : String) -> String {
+  let mut clean = slash(raw).trim().to_owned()
+  while clean.has_prefix("./") {
+    clean = clean[2:].to_owned()
+  }
+  while clean.has_suffix("/") {
+    clean = clean[:clean.length() - 1].to_owned()
+  }
+  if clean == "." {
+    ""
+  } else {
+    clean
+  }
+}
+
+///|
 fn npm_members_from_json(value : Json) -> Array[String] {
   match property(value, "workspaces") {
     Array(items) =>
@@ -71,29 +87,61 @@ fn strip_yaml_comment(line : String) -> String {
 }
 
 ///|
+fn unquote_yaml_scalar(raw : String) -> String {
+  let value = raw.trim().to_owned()
+  if value.length() >= 2 &&
+    (
+      (value.has_prefix("\"") && value.has_suffix("\"")) ||
+      (value.has_prefix("'") && value.has_suffix("'"))
+    ) {
+    value[1:value.length() - 1].to_owned()
+  } else {
+    value
+  }
+}
+
+///|
 fn pnpm_members(source : String) -> Array[String] {
   let result : Array[String] = []
   let mut active = false
   for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
     let line = strip_yaml_comment(raw.to_owned())
     let trimmed = line.trim().to_owned()
-    if trimmed == "packages:" {
-      active = true
+    if trimmed == "" {
       continue
     }
+    let is_top_level = !line.has_prefix(" ") && !line.has_prefix("\t")
+    if is_top_level && trimmed.has_prefix("packages") {
+      let rest = trimmed[8:].trim().to_owned()
+      if rest == ":" {
+        active = true
+        continue
+      }
+      if rest.has_prefix(":") {
+        let after = rest[1:].trim().to_owned()
+        if after.has_prefix("[") && after.has_suffix("]") && after.length() >= 2 {
+          let inner = after[1:after.length() - 1].to_owned()
+          for item in inner.split(",") {
+            let v = unquote_yaml_scalar(item.to_owned())
+            if v != "" {
+              result.push(v)
+            }
+          }
+          active = false
+          continue
+        }
+        if after == "" {
+          active = true
+          continue
+        }
+      }
+    }
     if active && trimmed.has_prefix("-") {
-      let value = trimmed[1:].trim().to_owned()
-      if value.has_prefix("\"") && value.has_suffix("\"") {
-        result.push(value[1:value.length() - 1].to_owned())
-      } else if value.has_prefix("'") && value.has_suffix("'") {
-        result.push(value[1:value.length() - 1].to_owned())
-      } else if value != "" {
+      let value = unquote_yaml_scalar(trimmed[1:].to_owned())
+      if value != "" {
         result.push(value)
       }
-    } else if active &&
-      trimmed != "" &&
-      !line.has_prefix(" ") &&
-      !line.has_prefix("\t") {
+    } else if active && is_top_level {
       active = false
     }
   }
@@ -132,11 +180,11 @@ fn scan_json_string_end(bytes : Bytes, start_quote : Int32) -> Int32? {
 }
 
 ///|
-fn find_npm_dep_span(
+fn find_json_string_span(
   source : String,
-  section : String,
+  section : String?,
   key : String,
-) -> (Int32, Int32) {
+) -> @model.TextSpan? {
   let bytes = @utf8.encode(source)
   let mut depth = 0
   let mut active_section = ""
@@ -161,28 +209,35 @@ fn find_npm_dep_span(
       continue
     }
     if b == 0x22 {
-      guard scan_json_string_end(bytes, i) is Some(str_end) else {
-        return (0, 0)
-      }
+      guard scan_json_string_end(bytes, i) is Some(str_end) else { return None }
       let raw_lit = @utf8.decode_lossy(bytes[i:str_end])
       let parsed_key = @json.parse(raw_lit) catch { _ => Json::null() }
       let after_ws = skip_json_ws(bytes, str_end)
       if after_ws < bytes.length() && bytes[after_ws].to_int() == 0x3A {
         let val_start = skip_json_ws(bytes, after_ws + 1)
         if parsed_key is String(field_name) {
-          if depth == 1 &&
-            val_start < bytes.length() &&
-            bytes[val_start].to_int() == 0x7B {
-            active_section = field_name
-          } else if depth == 2 &&
-            active_section == section &&
-            field_name == key &&
-            val_start < bytes.length() &&
-            bytes[val_start].to_int() == 0x22 {
-            guard scan_json_string_end(bytes, val_start) is Some(val_end) else {
-              return (0, 0)
+          if section is None && depth == 1 && field_name == key {
+            if val_start < bytes.length() && bytes[val_start].to_int() == 0x22 {
+              guard scan_json_string_end(bytes, val_start) is Some(val_end) else {
+                return None
+              }
+              return Some({ start: val_start, end: val_end, })
             }
-            return (val_start, val_end)
+          } else if section is Some(sec) {
+            if depth == 1 &&
+              val_start < bytes.length() &&
+              bytes[val_start].to_int() == 0x7B {
+              active_section = field_name
+            } else if depth == 2 &&
+              active_section == sec &&
+              field_name == key &&
+              val_start < bytes.length() &&
+              bytes[val_start].to_int() == 0x22 {
+              guard scan_json_string_end(bytes, val_start) is Some(val_end) else {
+                return None
+              }
+              return Some({ start: val_start, end: val_end, })
+            }
           }
         }
       }
@@ -191,7 +246,21 @@ fn find_npm_dep_span(
     }
     i += 1
   }
-  (0, 0)
+  None
+}
+
+///|
+fn parse_npm_publish_config(json : Json) -> @model.PublishConfig? {
+  let pc = property(json, "publishConfig")
+  guard pc is Object(_) else { return None }
+  let access = json_string(pc, "access").bind(@model.Access::parse)
+  let registry = json_string(pc, "registry")
+  let directory = json_string(pc, "directory")
+  if access is None && registry is None && directory is None {
+    None
+  } else {
+    Some({ access, registry, directory, })
+  }
 }
 
 ///|
@@ -231,7 +300,7 @@ async fn expand_glob_parts(
     }
     return
   }
-  if !part.contains("*") && !part.contains("?") {
+  if !@engine.has_glob_meta(part) {
     let next = if current == "" { part } else { current + "/" + part }
     expand_glob_parts(reader, next, parts, index + 1, result)
     return
@@ -251,14 +320,17 @@ async fn expand_glob_parts(
 
 ///|
 async fn package_candidates(reader : Reader, pattern : String) -> Array[String] {
-  let mut clean = pattern.trim().to_owned()
+  let mut clean = slash(pattern).trim().to_owned()
   while clean.has_prefix("./") {
     clean = clean[2:].to_owned()
+  }
+  while clean.has_suffix("/") {
+    clean = clean[:clean.length() - 1].to_owned()
   }
   if clean == "" || clean == "." {
     return [""]
   }
-  if !clean.contains("*") && !clean.contains("?") {
+  if !@engine.has_glob_meta(clean) {
     return [clean]
   }
   let parts = clean
@@ -280,15 +352,20 @@ async fn discover_npm_workspace(
   units : Array[@model.ReleaseUnit],
   workspaces : Array[@model.EcosystemWorkspace],
   ownership : Array[@model.Ownership],
-  _unmanaged : Array[String],
   seen : Map[String, Bool],
   overrides : Map[String, @model.UnitOverride],
+  managed_root_manifests : Array[String],
 ) -> Unit {
-  let workspace_root = slash(spec.root)
+  let workspace_root = normalize_ws_root(spec.root)
   let package_path = if workspace_root == "" {
     "package.json"
   } else {
     workspace_root + "/package.json"
+  }
+  let pnpm_ws_path = if workspace_root == "" {
+    "pnpm-workspace.yaml"
+  } else {
+    workspace_root + "/pnpm-workspace.yaml"
   }
   let root_source = reader.read(package_path)
   guard root_source is Some(source) else {
@@ -300,41 +377,48 @@ async fn discover_npm_workspace(
       ),
     )
   }
-  let root_json = @engine.parse_json(source, package_path)
-  let mut patterns = npm_members_from_json(root_json)
-  if spec.manager == "pnpm" && patterns.is_empty() {
-    if reader.read(
-        if workspace_root == "" {
-          "pnpm-workspace.yaml"
-        } else {
-          workspace_root + "/pnpm-workspace.yaml"
-        },
-      )
-      is Some(pnpm) {
-      patterns = pnpm_members(pnpm)
-    }
+  if !managed_root_manifests.contains(package_path) {
+    managed_root_manifests.push(package_path)
   }
-  if spec.include_root && reader.read(package_path) is Some(_) {
-    patterns.push(if workspace_root == "" { "" } else { workspace_root })
+  let root_json = @engine.parse_json(source, package_path)
+  // Real pnpm gives `pnpm-workspace.yaml` precedence over `package.json#workspaces`.
+  let patterns : Array[String] = if spec.manager == @model.Pnpm {
+    match reader.read(pnpm_ws_path) {
+      Some(pnpm) => {
+        if !managed_root_manifests.contains(pnpm_ws_path) {
+          managed_root_manifests.push(pnpm_ws_path)
+        }
+        pnpm_members(pnpm)
+      }
+      None => npm_members_from_json(root_json)
+    }
+  } else {
+    npm_members_from_json(root_json)
+  }
+  if spec.include_root && !patterns.contains(".") && !patterns.contains("") {
+    patterns.push("")
   }
   workspaces.push({
     id: spec.id,
     root: workspace_root,
-    ecosystem: "npm",
+    ecosystem: @model.Npm,
     manager: spec.manager,
   })
   let members : Array[String] = []
   let excludes : Array[String] = []
   for raw_pattern in patterns {
-    let trimmed = raw_pattern.trim().to_owned()
+    let mut trimmed = slash(raw_pattern).trim().to_owned()
     if trimmed.has_prefix("!") {
       let mut ex = trimmed[1:].trim().to_owned()
       while ex.has_prefix("./") {
         ex = ex[2:].to_owned()
       }
+      while ex.has_suffix("/") {
+        ex = ex[:ex.length() - 1].to_owned()
+      }
       let full_ex = if workspace_root == "" {
         ex
-      } else if ex == "" {
+      } else if ex == "" || ex == "." {
         workspace_root
       } else {
         workspace_root + "/" + ex
@@ -342,17 +426,24 @@ async fn discover_npm_workspace(
       excludes.push(full_ex)
       continue
     }
-    for
-      candidate in package_candidates(
-        reader,
-        if workspace_root == "" {
-          trimmed
-        } else if trimmed == "" {
-          workspace_root
-        } else {
-          workspace_root + "/" + trimmed
-        },
-      ) {
+    while trimmed.has_prefix("./") {
+      trimmed = trimmed[2:].to_owned()
+    }
+    while trimmed.has_suffix("/") {
+      trimmed = trimmed[:trimmed.length() - 1].to_owned()
+    }
+    let full_pat = if workspace_root == "" {
+      if trimmed == "." {
+        ""
+      } else {
+        trimmed
+      }
+    } else if trimmed == "" || trimmed == "." {
+      workspace_root
+    } else {
+      workspace_root + "/" + trimmed
+    }
+    for candidate in package_candidates(reader, full_pat) {
       let path = if candidate == "" {
         "package.json"
       } else {
@@ -370,7 +461,9 @@ async fn discover_npm_workspace(
     if member_path
       .split("/")
       .any(x => {
-        ["node_modules", "dist", "build", "target"].contains(x.to_owned())
+        ["node_modules", ".git", ".mooncakes", "_build", "target"].contains(
+          x.to_owned(),
+        )
       }) {
       continue
     }
@@ -393,16 +486,13 @@ async fn discover_npm_workspace(
         ),
       )
     }
-    guard json_string(json, "version") is Some(version) else {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "invalid-package",
-          "package.json requires version",
-          path=manifest,
-        ),
-      )
+    let version = json_string(json, "version")
+    let version_span = if version is Some(_) {
+      find_json_string_span(source, None, "version")
+    } else {
+      None
     }
-    let canonical = if reader.head is None {
+    let canonical = if !reader.use_git_tree {
       @fs.realpath(@path.Path(root).join(@path.Path(manifest)).to_string())
     } else {
       manifest
@@ -417,7 +507,7 @@ async fn discover_npm_workspace(
       )
     }
     seen[canonical] = true
-    let private = property(json, "private") == Json::boolean(true)
+    let is_private = property(json, "private") == Json::boolean(true)
     let id = "npm:" + name
     if units.any(unit => unit.id == id) {
       raise @model.Invalid(
@@ -443,7 +533,11 @@ async fn discover_npm_workspace(
                 "peerDependencies" => @model.Peer
                 _ => @model.Runtime
               }
-              let (start, end) = find_npm_dep_span(source, field, dependency)
+              let (start, end) = match
+                find_json_string_span(source, Some(field), dependency) {
+                Some(sp) => (sp.start, sp.end)
+                None => (0, 0)
+              }
               dependencies.push({
                 producer: "npm:" + dependency,
                 requirement: value,
@@ -459,7 +553,7 @@ async fn discover_npm_workspace(
       }
     }
     // npm's native private=true prohibition cannot be overridden by moonset policy.
-    let publish = if private {
+    let publish = if is_private || version is None {
       false
     } else {
       match overrides.get(id) {
@@ -467,24 +561,29 @@ async fn discover_npm_workspace(
         _ => true
       }
     }
+    let publish_config = parse_npm_publish_config(json)
     units.push({
       id,
       native_name: name,
-      ecosystem: "npm",
+      ecosystem: @model.Npm,
       workspace_id: spec.id,
       root: member_path,
       manifest,
       version_path: manifest,
       version_field: "version",
-      version: Some(version),
-      visibility: if private {
-        "private"
+      version,
+      version_span,
+      visibility: if is_private {
+        @model.Private
       } else {
-        "public"
+        @model.Public
       },
       publish,
+      publish_config,
       dependencies,
     })
-    ownership.push({ path: manifest, field: "version", owner: id, })
+    if version is Some(_) {
+      ownership.push({ path: manifest, field: "version", owner: id, })
+    }
   }
 }

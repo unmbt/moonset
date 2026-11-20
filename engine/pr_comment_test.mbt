@@ -7,7 +7,7 @@ fn comment_snapshot(
   {
     root: "/repo",
     workspaces: [
-      { id: "main", root: "", ecosystem: "moonbit", manager: "moon", },
+      { id: "main", root: "", ecosystem: @model.MoonBit, manager: @model.Moon, },
     ],
     units,
     ownership: [],
@@ -63,6 +63,8 @@ test "status_markdown renders all states, escapes untrusted summary content, and
       "https://github.com/contrib/moonset/new/feat/fix%2B1?filename=.changeset%2F",
     ),
   )
+  // Verify deterministic_changeset_slug strips "fnv1a64:" prefix (no colon / zero-entropy constant)
+  assert_false(miss_md.contains("fnv1a64"))
   assert_true(miss_md.contains("moonset add --empty"))
 
   let miss_no_link = @engine.status_markdown(snap_rel, miss_plan, options={

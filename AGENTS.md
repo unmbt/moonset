@@ -18,7 +18,7 @@
 | 包边界、I/O 分层与架构决策 | [docs/architecture.md](docs/architecture.md)、[docs/decisions/README.md](docs/decisions/README.md) |
 | 混合生态（MoonBit / npm / pnpm / Cargo） | [docs/mixed-workspaces.md](docs/mixed-workspaces.md) |
 | GitHub Actions、PR Bot 与权限隔离 | [docs/automation.md](docs/automation.md) |
-| 扩展 API 与 JSONL 插件契约 | [docs/api.md](docs/api.md)、[docs/phase-5-api.md](docs/phase-5-api.md) |
+| 扩展 API 与 JSONL 插件契约 | [docs/api.md](docs/api.md)、[docs/decisions/008-v030-api-and-adapter-convergence.md](docs/decisions/008-v030-api-and-adapter-convergence.md) |
 | 测试分层、fixture 与交付检查 | [docs/test-strategy.md](docs/test-strategy.md) |
 
 ## 2. SDD 五步交付流程

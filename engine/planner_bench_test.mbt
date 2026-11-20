@@ -43,15 +43,17 @@ fn synthetic_scale_fixture(
     units.push({
       id,
       native_name: name,
-      ecosystem: "moonbit",
+      ecosystem: @model.MoonBit,
       workspace_id: "main",
       root,
       manifest,
       version_path: manifest,
       version_field: "version",
       version: Some("1.0.0"),
-      visibility: "public",
+      version_span: None,
+      visibility: @model.Public,
       publish: true,
+      publish_config: None,
       dependencies: deps,
     })
     changed_files.push(root + "/lib.mbt")
@@ -66,7 +68,7 @@ fn synthetic_scale_fixture(
   let snapshot : @model.WorkspaceSnapshot = {
     root: "/bench-repo",
     workspaces: [
-      { id: "main", root: "", ecosystem: "moonbit", manager: "moon", },
+      { id: "main", root: "", ecosystem: @model.MoonBit, manager: @model.Moon, },
     ],
     units,
     ownership: [],

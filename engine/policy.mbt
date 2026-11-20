@@ -1,23 +1,7 @@
 ///|
-/// Parsed configuration for `snapshot` releases from `.changeset/config.json`.
-pub(all) struct SnapshotConfig {
-  enabled : Bool
-  use_calculated_version : Bool
-  prerelease_template : String
-}
-
-///|
-/// Parse `snapshot` settings from `Config.raw` with specification defaults.
-pub fn parse_snapshot_config(config : @model.Config) -> SnapshotConfig {
-  let snap = property(config.raw, "snapshot")
-  let enabled = property(snap, "enabled") == Json::boolean(true)
-  let use_calculated_version = property(snap, "useCalculatedVersion") ==
-    Json::boolean(true)
-  let prerelease_template = match property(snap, "prereleaseTemplate") {
-    String(s) if s.trim() != "" => s
-    _ => "{tag}-{datetime}"
-  }
-  { enabled, use_calculated_version, prerelease_template, }
+/// Return the structured `SnapshotConfig` from `Config`.
+pub fn parse_snapshot_config(config : @model.Config) -> @model.SnapshotConfig {
+  config.snapshot
 }
 
 ///|
@@ -56,7 +40,9 @@ pub fn validate_snapshot_template(
         )
       }
       let name = String::from_array(chars[i + 1:j].to_owned())
-      if !["tag", "datetime", "commit", "version"].contains(name) {
+      if !["tag", "datetime", "timestamp", "commit", "commit-short", "version"].contains(
+          name,
+        ) {
         invalid(
           "Unsupported placeholder '{" +
           name +
@@ -80,10 +66,22 @@ pub fn validate_snapshot_template(
 
 ///|
 fn extract_datetime_digits(generated_at : String) -> String {
+  // Normalize ISO-8601 `YYYY-MM-DDTHH:MM:SS[.sss][Z]` to 14-digit `YYYYMMDDHHmmss`.
+  let base = match generated_at.find(".") {
+    Some(idx) => generated_at[:idx].to_owned()
+    None =>
+      match generated_at.find("Z") {
+        Some(idx) => generated_at[:idx].to_owned()
+        None => generated_at
+      }
+  }
   let out : Array[Char] = []
-  for ch in generated_at.to_array() {
+  for ch in base.to_array() {
     if ch >= '0' && ch <= '9' {
       out.push(ch)
+      if out.length() == 14 {
+        break
+      }
     }
   }
   if out.is_empty() {
@@ -94,19 +92,35 @@ fn extract_datetime_digits(generated_at : String) -> String {
 }
 
 ///|
-fn short_commit_sha(git_head : String?) -> String {
+fn full_commit_sha(git_head : String?) -> String? {
   match git_head {
     Some(sha) => {
       let clean = sha.trim().to_owned()
       if clean == "" {
-        "0000000"
-      } else if clean.length() > 7 {
-        clean[:7].to_owned()
+        None
       } else {
-        clean
+        Some(clean)
       }
     }
-    None => "0000000"
+    None => None
+  }
+}
+
+///|
+fn short_commit_sha(git_head : String?) -> String? {
+  match full_commit_sha(git_head) {
+    Some(clean) =>
+      Some(if clean.length() > 7 { clean[:7].to_owned() } else { clean })
+    None => None
+  }
+}
+
+///|
+fn sanitize_numeric_prerelease_id(id : String) -> String {
+  if is_all_ascii_digits(id) && id.length() > 1 && id[0] == '0' {
+    "g" + id
+  } else {
+    id
   }
 }
 
@@ -150,11 +164,14 @@ fn validate_semver_prerelease(
 
 ///|
 /// Render and SemVer-validate a snapshot version according to `SnapshotConfig`.
+/// Supports tagless snapshots (`snapshot_tag = ""`) and single-pass placeholder
+/// expansion for `{tag}`, `{datetime}`, `{timestamp}`, `{commit}`, `{commit-short}`, `{version}`.
 pub fn render_snapshot_version(
   calculated_version : String,
   snapshot_tag : String,
-  snapshot_config : SnapshotConfig,
+  snapshot_config : @model.SnapshotConfig,
   generated_at~ : String = "",
+  timestamp_ms~ : String = "",
   git_head? : String,
 ) -> String raise @model.MoonsetError {
   if !snapshot_config.enabled {
@@ -164,22 +181,68 @@ pub fn render_snapshot_version(
     )
   }
   let clean_tag = snapshot_tag.trim().to_owned()
-  if clean_tag == "" {
-    invalid("Snapshot tag cannot be empty", code="invalid-input")
-  }
-  validate_snapshot_template(snapshot_config.prerelease_template)
   let base = if snapshot_config.use_calculated_version {
     strip_prerelease(parse_version(calculated_version))
   } else {
     "0.0.0"
   }
   let datetime = extract_datetime_digits(generated_at)
-  let commit = short_commit_sha(git_head)
-  let rendered_suffix = snapshot_config.prerelease_template
-    .replace_all(old="{tag}", new=clean_tag)
-    .replace_all(old="{datetime}", new=datetime)
-    .replace_all(old="{commit}", new=commit)
-    .replace_all(old="{version}", new=calculated_version)
+  let timestamp = if timestamp_ms.trim() != "" {
+    timestamp_ms.trim().to_owned()
+  } else {
+    datetime
+  }
+  let commit_full = full_commit_sha(git_head).unwrap_or("0000000")
+  let commit_short = short_commit_sha(git_head).unwrap_or("0000000")
+  let template = snapshot_config.prerelease_template
+  validate_snapshot_template(template)
+  // Default template `{tag}-{datetime}` gracefully supports tagless `--snapshot` -> `{datetime}`.
+  if clean_tag == "" && template == "{tag}-{datetime}" {
+    validate_semver_prerelease(datetime)
+    return base + "-" + datetime
+  }
+  if clean_tag != "" && !template.contains("{tag}") {
+    invalid(
+      "snapshot.prereleaseTemplate is missing '{tag}' placeholder while a snapshot tag was provided: " +
+      clean_tag,
+      code="invalid-input",
+    )
+  }
+  if clean_tag == "" && template.contains("{tag}") {
+    invalid(
+      "snapshot.prereleaseTemplate requires a snapshot tag for '{tag}'",
+      code="invalid-input",
+    )
+  }
+  // Single-pass substitution prevents double-interpolation when tag contains `{...}`.
+  let chars = template.to_array()
+  let out = StringBuilder()
+  let mut i = 0
+  while i < chars.length() {
+    if chars[i] == '{' {
+      let mut j = i + 1
+      while j < chars.length() && chars[j] != '}' {
+        j += 1
+      }
+      let key = String::from_array(chars[i + 1:j].to_owned())
+      match key {
+        "tag" => out.write_string(clean_tag)
+        "datetime" => out.write_string(datetime)
+        "timestamp" => out.write_string(timestamp)
+        "commit" =>
+          out.write_string(sanitize_numeric_prerelease_id(commit_full))
+        "commit-short" =>
+          out.write_string(sanitize_numeric_prerelease_id(commit_short))
+        "version" => out.write_string(calculated_version)
+        _ => ()
+      }
+      i = j + 1
+    } else {
+      out.write_char(chars[i])
+      i += 1
+    }
+  }
+  let rendered_suffix = out.to_string()
   validate_semver_prerelease(rendered_suffix)
   base + "-" + rendered_suffix
 }
@@ -238,10 +301,10 @@ pub fn formatter_command(
     return None
   }
   match formatter {
-    "prettier" => Some(("prettier", ["--write"] + paths))
-    "oxfmt" => Some(("oxfmt", ["--write"] + paths))
-    "biome" => Some(("biome", ["format", "--write"] + paths))
-    "dprint" => Some(("dprint", ["fmt"] + paths))
+    "prettier" => Some(("prettier", ["--write", "--"] + paths))
+    "oxfmt" => Some(("oxfmt", ["--write", "--"] + paths))
+    "biome" => Some(("biome", ["format", "--write", "--"] + paths))
+    "dprint" => Some(("dprint", ["fmt", "--"] + paths))
     _ => None
   }
 }
@@ -329,7 +392,19 @@ pub fn parse_target_mapping(
               by_unit[key] = rhs
             }
           }
-          None => any_unscoped = true
+          None =>
+            // Allow URLs with query strings (`https://reg.example?a=b`) as global,
+            // but reject obvious unknown scope prefixes like `npn=https://...`.
+            if !lhs.contains("://") && !lhs.contains("?") {
+              invalid(
+                "Unknown publish override scope '" +
+                lhs +
+                "' (expected moonbit, npm, cargo, or UnitId)",
+                code="invalid-input",
+              )
+            } else {
+              any_unscoped = true
+            }
         }
       }
       None => any_unscoped = true
@@ -338,6 +413,13 @@ pub fn parse_target_mapping(
   if any_scoped && any_unscoped {
     invalid(
       "Cannot mix global and scoped entries in publish override: " + trimmed,
+      code="invalid-input",
+    )
+  }
+  if !any_scoped && entries.length() > 1 {
+    invalid(
+      "Comma-separated publish overrides must use scoped 'ecosystem=value' or 'unitId=value' syntax: " +
+      trimmed,
       code="invalid-input",
     )
   }
@@ -353,12 +435,12 @@ pub fn parse_target_mapping(
 pub fn resolve_target_override(
   mapping : PublishTargetOverride,
   unit_id : String,
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
 ) -> String? {
   match mapping.by_unit.get(unit_id) {
     Some(value) => Some(value)
     None =>
-      match mapping.by_ecosystem.get(ecosystem) {
+      match mapping.by_ecosystem.get(ecosystem.text()) {
         Some(value) => Some(value)
         None => mapping.global
       }

@@ -12,6 +12,7 @@ permissions: {}
 
 jobs:
   check:
+    if: ${{ !startsWith(github.event.pull_request.head.ref, 'moonset-release/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,10 +27,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
           persist-credentials: false
-      - name: Checkout PR head for read-only inspection
+      - name: Checkout PR head for read-only inspection (Fork-safe)
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
           path: pr
           persist-credentials: false

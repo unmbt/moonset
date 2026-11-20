@@ -17,7 +17,9 @@ graph TD
   WS --> MODEL
   EXEC --> ADAPTERS[adapters]
   EXEC --> MODEL
-  CHANGELOG --> API[compiled API or JSONL plugin]
+  API[api facade] --> ENGINE
+  API --> EXEC
+  API --> CHANGELOG
   ADAPTERS --> MODEL
 ```
 

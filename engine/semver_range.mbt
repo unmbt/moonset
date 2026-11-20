@@ -4,6 +4,7 @@ priv struct PartialSemVer {
   minor : Int32?
   patch : Int32?
   pre : String?
+  has_wildcard : Bool
 }
 
 ///|
@@ -21,51 +22,134 @@ priv struct SemVerBranch {
 }
 
 ///|
-fn parse_semver_uint(text : String) -> Int32? {
-  if text == "" {
-    return None
-  }
-  if text.length() > 1 && text[0] == '0' {
-    return None
-  }
-  let mut acc : Int32 = 0
-  for ch in text.to_array() {
-    if ch < '0' || ch > '9' {
-      return None
-    }
-    if acc > 214748364 {
-      return None
-    }
-    acc = acc * 10 + (ch.to_int() - '0'.to_int())
-  }
-  Some(acc)
-}
-
-///|
 fn is_wildcard_part(part : String) -> Bool {
   part == "*" || part == "x" || part == "X"
 }
 
 ///|
+/// Return true when an npm dependency string uses a non-SemVer external/local
+/// protocol (e.g. `catalog:`, `npm:`, `github:`, `git+`, `file:`, `link:`, `latest`, `""`).
+pub fn is_npm_external_protocol(requirement : String) -> Bool {
+  let t = requirement.trim().to_owned()
+  t == "" ||
+  t == "latest" ||
+  t == "next" ||
+  t.has_prefix("catalog:") ||
+  t.has_prefix("npm:") ||
+  t.has_prefix("file:") ||
+  t.has_prefix("link:") ||
+  t.has_prefix("portal:") ||
+  t.has_prefix("patch:") ||
+  t.has_prefix("jsr:") ||
+  t.has_prefix("github:") ||
+  t.has_prefix("gitlab:") ||
+  t.has_prefix("bitbucket:") ||
+  t.has_prefix("git+") ||
+  t.has_prefix("git://") ||
+  t.has_prefix("http://") ||
+  t.has_prefix("https://")
+}
+
+///|
+/// Return true when an npm requirement uses the pnpm/yarn `workspace:` protocol.
+pub fn is_workspace_protocol(requirement : String) -> Bool {
+  requirement.trim().has_prefix("workspace:")
+}
+
+///|
+/// Resolve a `workspace:` requirement into an effective SemVer range given the
+/// producer's current version, returning `(effective_range, is_shorthand)`.
+/// - `workspace:*` -> `(current_version, true)`
+/// - `workspace:^` -> `("^" + current_version, true)`
+/// - `workspace:~` -> `("~" + current_version, true)`
+/// - `workspace:<range>` -> `(<range>, false)`
+fn resolve_workspace_protocol(
+  requirement : String,
+  producer_current_version : String?,
+) -> (String, Bool) raise @model.MoonsetError {
+  let trimmed = requirement.trim().to_owned()
+  let inner = trimmed[10:].trim().to_owned()
+  if inner == "" {
+    invalid("Empty workspace: protocol range", code="invalid-version")
+  }
+  if inner == "*" {
+    return (producer_current_version.unwrap_or("*"), true)
+  }
+  if inner == "^" {
+    return (
+      match producer_current_version {
+        Some(v) => "^" + v
+        None => "*"
+      },
+      true,
+    )
+  }
+  if inner == "~" {
+    return (
+      match producer_current_version {
+        Some(v) => "~" + v
+        None => "*"
+      },
+      true,
+    )
+  }
+  // Relative path form `workspace:../pkg`
+  if inner.has_prefix(".") || inner.has_prefix("/") {
+    return (producer_current_version.unwrap_or("*"), true)
+  }
+  // Explicit range like `workspace:^1.0.0`
+  ignore(parse_ecosystem_branches(@model.Npm, inner))
+  (inner, false)
+}
+
+///|
 fn parse_partial_semver(
   raw : String,
+  allow_v_prefix~ : Bool = true,
 ) -> PartialSemVer raise @model.MoonsetError {
   let mut text = raw.trim().to_owned()
-  if text.has_prefix("v") || text.has_prefix("V") {
+  if allow_v_prefix && (text.has_prefix("v") || text.has_prefix("V")) {
     text = text[1:].to_owned()
   }
   if text == "" {
     invalid("Empty version in range: " + raw, code="invalid-version")
   }
   if is_wildcard_part(text) {
-    return { major: None, minor: None, patch: None, pre: None, }
+    return {
+      major: None,
+      minor: None,
+      patch: None,
+      pre: None,
+      has_wildcard: true,
+    }
   }
-  // Strip build metadata (+...)
+  // Validate and strip build metadata (+...)
   let without_build = match text.find("+") {
     Some(idx) => {
       let build = text[idx + 1:].to_owned()
       if build == "" {
         invalid("Empty build metadata in range: " + raw, code="invalid-version")
+      }
+      for seg_view in build.split(".") {
+        let seg = seg_view.to_owned()
+        if seg == "" {
+          invalid(
+            "Invalid build metadata in range: " + raw,
+            code="invalid-version",
+          )
+        }
+        for ch in seg.to_array() {
+          let ok = (ch >= '0' && ch <= '9') ||
+            (ch >= 'a' && ch <= 'z') ||
+            (ch >= 'A' && ch <= 'Z') ||
+            ch == '-'
+          if !ok {
+            invalid(
+              "Invalid build metadata in range: " + raw,
+              code="invalid-version",
+            )
+          }
+        }
       }
       text[:idx].to_owned()
     }
@@ -87,10 +171,12 @@ fn parse_partial_semver(
   if parts.is_empty() || parts.length() > 3 {
     invalid("Invalid SemVer range token: " + raw, code="invalid-version")
   }
+  let mut has_wildcard = false
   let major : Int32? = if is_wildcard_part(parts[0]) {
+    has_wildcard = true
     None
   } else {
-    match parse_semver_uint(parts[0]) {
+    match parse_uint32_checked(parts[0]) {
       Some(v) => Some(v)
       None => {
         invalid(
@@ -104,9 +190,10 @@ fn parse_partial_semver(
   let minor : Int32? = if parts.length() < 2 {
     None
   } else if is_wildcard_part(parts[1]) {
+    has_wildcard = true
     None
   } else {
-    match parse_semver_uint(parts[1]) {
+    match parse_uint32_checked(parts[1]) {
       Some(v) => Some(v)
       None => {
         invalid(
@@ -120,9 +207,10 @@ fn parse_partial_semver(
   let patch : Int32? = if parts.length() < 3 {
     None
   } else if is_wildcard_part(parts[2]) {
+    has_wildcard = true
     None
   } else {
-    match parse_semver_uint(parts[2]) {
+    match parse_uint32_checked(parts[2]) {
       Some(v) => Some(v)
       None => {
         invalid(
@@ -145,7 +233,15 @@ fn parse_partial_semver(
       code="invalid-version",
     )
   }
-  { major, minor, patch, pre, }
+  { major, minor, patch, pre, has_wildcard, }
+}
+
+///|
+fn safe_inc_int(n : Int32) -> Int32 raise @model.MoonsetError {
+  if n >= 2147483647 {
+    invalid("SemVer component overflow", code="invalid-version")
+  }
+  n + 1
 }
 
 ///|
@@ -154,7 +250,7 @@ fn semver_from_parts(
   minor : Int32,
   patch : Int32,
   pre? : String,
-) -> @semver.SemVer raise @model.MoonsetError {
+) -> SemVerParts raise @model.MoonsetError {
   let base = "\{major}.\{minor}.\{patch}"
   let full = match pre {
     Some(p) if p != "" => base + "-" + p
@@ -167,8 +263,13 @@ fn semver_from_parts(
 fn partial_to_string(v : PartialSemVer) -> String {
   match (v.major, v.minor, v.patch) {
     (None, _, _) => "*"
-    (Some(ma), None, _) => "\{ma}"
-    (Some(ma), Some(mi), None) => "\{ma}.\{mi}"
+    (Some(ma), None, _) => if v.has_wildcard { "\{ma}.*" } else { "\{ma}" }
+    (Some(ma), Some(mi), None) =>
+      if v.has_wildcard {
+        "\{ma}.\{mi}.*"
+      } else {
+        "\{ma}.\{mi}"
+      }
     (Some(ma), Some(mi), Some(pa)) =>
       match v.pre {
         Some(p) => "\{ma}.\{mi}.\{pa}-\{p}"
@@ -246,16 +347,23 @@ fn tokenize_npm_branch(
   branch : String,
 ) -> Array[String] raise @model.MoonsetError {
   let raw_tokens : Array[String] = []
-  for part in branch.split(" ") {
-    let t = part.trim().to_owned()
-    if t != "" {
-      raw_tokens.push(t)
+  let current : Array[Char] = []
+  for ch in branch.to_array() {
+    if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+      if !current.is_empty() {
+        raw_tokens.push(String::from_array(current))
+        current.clear()
+      }
+    } else {
+      current.push(ch)
     }
+  }
+  if !current.is_empty() {
+    raw_tokens.push(String::from_array(current))
   }
   if raw_tokens.is_empty() {
     invalid("Empty npm comparator set", code="invalid-version")
   }
-  // Merge standalone operators like ">=" followed by "1.0.0"
   let merged : Array[String] = []
   let mut i = 0
   while i < raw_tokens.length() {
@@ -281,8 +389,8 @@ fn tokenize_npm_branch(
 fn parse_npm_branch(branch : String) -> SemVerBranch raise @model.MoonsetError {
   let tokens = tokenize_npm_branch(branch)
   if tokens.length() == 3 && tokens[1] == "-" {
-    let left = parse_partial_semver(tokens[0])
-    let right = parse_partial_semver(tokens[2])
+    let left = parse_partial_semver(tokens[0], allow_v_prefix=true)
+    let right = parse_partial_semver(tokens[2], allow_v_prefix=true)
     return {
       is_hyphen: true,
       hyphen_left: Some(left),
@@ -302,7 +410,7 @@ fn parse_npm_branch(branch : String) -> SemVerBranch raise @model.MoonsetError {
         code="invalid-version",
       )
     }
-    let ver = parse_partial_semver(rest)
+    let ver = parse_partial_semver(rest, allow_v_prefix=true)
     comparators.push({ op, ver, })
   }
   { is_hyphen: false, hyphen_left: None, hyphen_right: None, comparators, }
@@ -312,6 +420,12 @@ fn parse_npm_branch(branch : String) -> SemVerBranch raise @model.MoonsetError {
 fn parse_cargo_branch(
   branch : String,
 ) -> SemVerBranch raise @model.MoonsetError {
+  if branch.contains("|") {
+    invalid(
+      "Cargo version requirements do not support '||' disjunctions: " + branch,
+      code="invalid-version",
+    )
+  }
   let parts = branch.split(",").map(x => x.trim().to_owned()).collect()
   if parts.is_empty() {
     invalid("Empty Cargo version requirement", code="invalid-version")
@@ -325,13 +439,13 @@ fn parse_cargo_branch(
       )
     }
     let (op, rest) = extract_operator(part)
-    if rest == "" || rest.contains(" ") {
+    if rest == "" || rest.contains(" ") || rest.contains("\t") {
       invalid(
         "Invalid Cargo version comparator: " + part,
         code="invalid-version",
       )
     }
-    let ver = parse_partial_semver(rest)
+    let ver = parse_partial_semver(rest, allow_v_prefix=false)
     comparators.push({ op, ver, })
   }
   { is_hyphen: false, hyphen_left: None, hyphen_right: None, comparators, }
@@ -340,31 +454,31 @@ fn parse_cargo_branch(
 ///|
 fn caret_bounds(
   v : PartialSemVer,
-) -> (@semver.SemVer, @semver.SemVer?) raise @model.MoonsetError {
+) -> (SemVerParts, SemVerParts?) raise @model.MoonsetError {
   match (v.major, v.minor, v.patch) {
     (None, _, _) => (semver_from_parts(0, 0, 0), None)
     (Some(ma), None, _) =>
       (
         semver_from_parts(ma, 0, 0),
-        Some(semver_from_parts(ma + 1, 0, 0, pre="0")),
+        Some(semver_from_parts(safe_inc_int(ma), 0, 0, pre="0")),
       )
     (Some(ma), Some(mi), None) => {
       let lower = semver_from_parts(ma, mi, 0)
       let upper = if ma == 0 {
-        semver_from_parts(0, mi + 1, 0, pre="0")
+        semver_from_parts(0, safe_inc_int(mi), 0, pre="0")
       } else {
-        semver_from_parts(ma + 1, 0, 0, pre="0")
+        semver_from_parts(safe_inc_int(ma), 0, 0, pre="0")
       }
       (lower, Some(upper))
     }
     (Some(ma), Some(mi), Some(pa)) => {
       let lower = semver_from_parts(ma, mi, pa, pre?=v.pre)
       let upper = if ma > 0 {
-        semver_from_parts(ma + 1, 0, 0, pre="0")
+        semver_from_parts(safe_inc_int(ma), 0, 0, pre="0")
       } else if mi > 0 {
-        semver_from_parts(0, mi + 1, 0, pre="0")
+        semver_from_parts(0, safe_inc_int(mi), 0, pre="0")
       } else {
-        semver_from_parts(0, 0, pa + 1, pre="0")
+        semver_from_parts(0, 0, safe_inc_int(pa), pre="0")
       }
       (lower, Some(upper))
     }
@@ -374,36 +488,43 @@ fn caret_bounds(
 ///|
 fn tilde_bounds(
   v : PartialSemVer,
-) -> (@semver.SemVer, @semver.SemVer?) raise @model.MoonsetError {
+) -> (SemVerParts, SemVerParts?) raise @model.MoonsetError {
   match (v.major, v.minor, v.patch) {
     (None, _, _) => (semver_from_parts(0, 0, 0), None)
     (Some(ma), None, _) =>
       (
         semver_from_parts(ma, 0, 0),
-        Some(semver_from_parts(ma + 1, 0, 0, pre="0")),
+        Some(semver_from_parts(safe_inc_int(ma), 0, 0, pre="0")),
       )
     (Some(ma), Some(mi), None) =>
       (
         semver_from_parts(ma, mi, 0),
-        Some(semver_from_parts(ma, mi + 1, 0, pre="0")),
+        Some(semver_from_parts(ma, safe_inc_int(mi), 0, pre="0")),
       )
     (Some(ma), Some(mi), Some(pa)) =>
       (
         semver_from_parts(ma, mi, pa, pre?=v.pre),
-        Some(semver_from_parts(ma, mi + 1, 0, pre="0")),
+        Some(semver_from_parts(ma, safe_inc_int(mi), 0, pre="0")),
       )
   }
 }
 
 ///|
 fn comparator_matches(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   comp : SemVerComparator,
-  actual : @semver.SemVer,
+  actual : SemVerParts,
 ) -> Bool raise @model.MoonsetError {
   let v = comp.ver
   let op = comp.op
-  if op == "^" || (ecosystem == "cargo" && op == "" && v.major is Some(_)) {
+  // In Cargo, bare `1.2` is caret `^1.2`, whereas wildcard `1.2.*` is `>=1.2.0, <1.3.0`.
+  if op == "^" ||
+    (
+      ecosystem == @model.Cargo &&
+      op == "" &&
+      v.major is Some(_) &&
+      !v.has_wildcard
+    ) {
     let (lower, upper) = caret_bounds(v)
     let low_ok = actual.compare(lower) >= 0
     let high_ok = match upper {
@@ -426,12 +547,12 @@ fn comparator_matches(
       (None, _, _) => return true
       (Some(ma), None, _) => {
         let low = semver_from_parts(ma, 0, 0)
-        let high = semver_from_parts(ma + 1, 0, 0, pre="0")
+        let high = semver_from_parts(safe_inc_int(ma), 0, 0, pre="0")
         return actual.compare(low) >= 0 && actual.compare(high) < 0
       }
       (Some(ma), Some(mi), None) => {
         let low = semver_from_parts(ma, mi, 0)
-        let high = semver_from_parts(ma, mi + 1, 0, pre="0")
+        let high = semver_from_parts(ma, safe_inc_int(mi), 0, pre="0")
         return actual.compare(low) >= 0 && actual.compare(high) < 0
       }
       (Some(ma), Some(mi), Some(pa)) => {
@@ -454,9 +575,9 @@ fn comparator_matches(
     match (v.major, v.minor, v.patch) {
       (None, _, _) => return false
       (Some(ma), None, _) =>
-        return actual.compare(semver_from_parts(ma + 1, 0, 0)) >= 0
+        return actual.compare(semver_from_parts(safe_inc_int(ma), 0, 0)) >= 0
       (Some(ma), Some(mi), None) =>
-        return actual.compare(semver_from_parts(ma, mi + 1, 0)) >= 0
+        return actual.compare(semver_from_parts(ma, safe_inc_int(mi), 0)) >= 0
       (Some(ma), Some(mi), Some(pa)) =>
         return actual.compare(semver_from_parts(ma, mi, pa, pre?=v.pre)) > 0
     }
@@ -465,9 +586,15 @@ fn comparator_matches(
     match (v.major, v.minor, v.patch) {
       (None, _, _) => return true
       (Some(ma), None, _) =>
-        return actual.compare(semver_from_parts(ma + 1, 0, 0, pre="0")) < 0
+        return actual.compare(
+            semver_from_parts(safe_inc_int(ma), 0, 0, pre="0"),
+          ) <
+          0
       (Some(ma), Some(mi), None) =>
-        return actual.compare(semver_from_parts(ma, mi + 1, 0, pre="0")) < 0
+        return actual.compare(
+            semver_from_parts(ma, safe_inc_int(mi), 0, pre="0"),
+          ) <
+          0
       (Some(ma), Some(mi), Some(pa)) =>
         return actual.compare(semver_from_parts(ma, mi, pa, pre?=v.pre)) <= 0
     }
@@ -489,7 +616,7 @@ fn comparator_matches(
 ///|
 fn partial_matches_prerelease_tuple(
   v : PartialSemVer,
-  actual : @semver.SemVer,
+  actual : SemVerParts,
 ) -> Bool {
   match (v.major, v.minor, v.patch, v.pre) {
     (Some(ma), Some(mi), Some(pa), Some(_)) =>
@@ -500,9 +627,9 @@ fn partial_matches_prerelease_tuple(
 
 ///|
 fn branch_matches(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   branch : SemVerBranch,
-  actual : @semver.SemVer,
+  actual : SemVerParts,
 ) -> Bool raise @model.MoonsetError {
   if branch.is_hyphen {
     guard (branch.hyphen_left, branch.hyphen_right) is (Some(left), Some(right)) else {
@@ -516,10 +643,8 @@ fn branch_matches(
     return comparator_matches(ecosystem, { op: ">=", ver: left, }, actual) &&
       comparator_matches(ecosystem, { op: "<=", ver: right, }, actual)
   }
-  let all_wild = branch.comparators.all(c => {
-    (c.op == "" || c.op == "=") && c.ver.major is None
-  })
-  if !all_wild && actual.is_prerelease() {
+  // Neither npm node-semver nor Cargo semver allows `*`/`x` to match prereleases.
+  if actual.is_prerelease() {
     let allows_pre = branch.comparators.any(c => {
       partial_matches_prerelease_tuple(c.ver, actual)
     })
@@ -537,17 +662,16 @@ fn branch_matches(
 
 ///|
 fn parse_ecosystem_branches(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   requirement : String,
 ) -> Array[SemVerBranch] raise @model.MoonsetError {
+  if ecosystem == @model.Cargo {
+    return [parse_cargo_branch(requirement.trim().to_owned())]
+  }
   let raw_branches = split_disjunction(requirement)
   let parsed : Array[SemVerBranch] = []
   for b in raw_branches {
-    if ecosystem == "npm" {
-      parsed.push(parse_npm_branch(b))
-    } else {
-      parsed.push(parse_cargo_branch(b))
-    }
+    parsed.push(parse_npm_branch(b))
   }
   parsed
 }
@@ -555,93 +679,109 @@ fn parse_ecosystem_branches(
 ///|
 /// Validate that a dependency requirement string is syntactically valid for the ecosystem.
 pub fn validate_ecosystem_range(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   requirement : String,
 ) -> Unit raise @model.MoonsetError {
   let trimmed = requirement.trim().to_owned()
-  if ecosystem == "moonbit" {
-    ignore(parse_version(trimmed))
-    return
-  }
-  if ecosystem == "npm" {
-    if is_npm_protocol(trimmed) {
-      return
+  match ecosystem {
+    @model.MoonBit => ignore(parse_version(trimmed))
+    @model.Npm => {
+      if is_npm_external_protocol(trimmed) {
+        return
+      }
+      if is_workspace_protocol(trimmed) {
+        ignore(resolve_workspace_protocol(trimmed, None))
+        return
+      }
+      ignore(parse_ecosystem_branches(@model.Npm, trimmed))
     }
-    ignore(parse_ecosystem_branches("npm", trimmed))
-    return
+    @model.Cargo => {
+      if trimmed == "*" {
+        return
+      }
+      ignore(parse_ecosystem_branches(@model.Cargo, trimmed))
+    }
   }
-  if trimmed == "*" {
-    return
-  }
-  ignore(parse_ecosystem_branches("cargo", trimmed))
 }
 
 ///|
 /// Return true when `target` satisfies `requirement` under the given ecosystem's SemVer range semantics.
 pub fn matches_ecosystem_range(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   requirement : String,
   target : String,
+  producer_current_version? : String,
 ) -> Bool raise @model.MoonsetError {
   let trimmed = requirement.trim().to_owned()
-  if ecosystem == "moonbit" {
-    return version_matches(trimmed, target)
-  }
-  if ecosystem == "npm" {
-    if is_npm_protocol(trimmed) {
-      return true
-    }
-    let actual = parse_version(target)
-    let branches = parse_ecosystem_branches("npm", trimmed)
-    for branch in branches {
-      if branch_matches("npm", branch, actual) {
+  match ecosystem {
+    @model.MoonBit => version_matches(trimmed, target)
+    @model.Npm => {
+      if is_npm_external_protocol(trimmed) {
         return true
       }
+      let effective = if is_workspace_protocol(trimmed) {
+        let (resolved, _) = resolve_workspace_protocol(
+          trimmed, producer_current_version,
+        )
+        resolved
+      } else {
+        trimmed
+      }
+      let actual = parse_version(target)
+      let branches = parse_ecosystem_branches(@model.Npm, effective)
+      for branch in branches {
+        if branch_matches(@model.Npm, branch, actual) {
+          return true
+        }
+      }
+      false
     }
-    return false
-  }
-  if trimmed == "*" {
-    ignore(parse_version(target))
-    return true
-  }
-  let actual = parse_version(target)
-  let branches = parse_ecosystem_branches("cargo", trimmed)
-  for branch in branches {
-    if branch_matches("cargo", branch, actual) {
-      return true
+    @model.Cargo => {
+      let actual = parse_version(target)
+      if trimmed == "*" {
+        return !actual.is_prerelease()
+      }
+      let branches = parse_ecosystem_branches(@model.Cargo, trimmed)
+      for branch in branches {
+        if branch_matches(@model.Cargo, branch, actual) {
+          return true
+        }
+      }
+      false
     }
   }
-  false
 }
 
 ///|
-fn next_exclusive_upper(target : @semver.SemVer) -> String {
+fn next_exclusive_upper(
+  target : SemVerParts,
+) -> String raise @model.MoonsetError {
   if target.major > 0 {
-    "\{target.major + 1}.0.0"
+    "\{safe_inc_int(target.major)}.0.0"
   } else if target.minor > 0 {
-    "0.\{target.minor + 1}.0"
+    "0.\{safe_inc_int(target.minor)}.0"
   } else {
-    "0.0.\{target.patch + 1}"
+    "0.0.\{safe_inc_int(target.patch)}"
   }
 }
 
 ///|
-fn render_branch(ecosystem : String, branch : SemVerBranch) -> String {
+fn render_branch(ecosystem : @model.Ecosystem, branch : SemVerBranch) -> String {
   if branch.is_hyphen {
     let l = branch.hyphen_left.map(partial_to_string).unwrap_or("0.0.0")
     let r = branch.hyphen_right.map(partial_to_string).unwrap_or("0.0.0")
     return l + " - " + r
   }
-  let sep = if ecosystem == "cargo" { ", " } else { " " }
+  let sep = if ecosystem == @model.Cargo { ", " } else { " " }
   branch.comparators.map(c => c.op + partial_to_string(c.ver)).join(sep)
 }
 
 ///|
 fn rewrite_branch_for_target(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   branch : SemVerBranch,
   target : String,
-  parsed_target : @semver.SemVer,
+  parsed_target : SemVerParts,
 ) -> String raise @model.MoonsetError {
   if branch.is_hyphen {
     guard (branch.hyphen_left, branch.hyphen_right) is (Some(left), Some(right)) else {
@@ -660,7 +800,7 @@ fn rewrite_branch_for_target(
   }
   if branch.comparators.length() == 1 {
     let comp = branch.comparators[0]
-    let rewritten = match comp.op {
+    return match comp.op {
       "^" => "^" + target
       "~" => "~" + target
       "=" => "=" + target
@@ -668,13 +808,20 @@ fn rewrite_branch_for_target(
       ">" => ">=" + target
       "<=" => "<=" + target
       "<" => "<" + next_exclusive_upper(parsed_target)
-      "" => if comp.ver.major is None { "*" } else { target }
+      "" =>
+        if comp.ver.major is None {
+          if parsed_target.is_prerelease() {
+            target
+          } else {
+            "*"
+          }
+        } else {
+          target
+        }
       _ => target
     }
-    return rewritten
   }
-  // Multi-comparator conjunction (e.g. ">=1.0.0 <2.0.0" or ">=1.0.0, <2.0.0")
-  let sep = if ecosystem == "cargo" { ", " } else { " " }
+  let sep = if ecosystem == @model.Cargo { ", " } else { " " }
   let parts : Array[String] = []
   let mut updated_lower = false
   for comp in branch.comparators {
@@ -710,20 +857,40 @@ fn rewrite_branch_for_target(
 
 ///|
 /// Rewrite a dependency range so that it targets and satisfies `target` while
-/// preserving operator style and compound bounds whenever possible.
+/// preserving operator style, `workspace:` protocol prefixes, and compound bounds.
+/// When `exact_pin` is true (used for snapshot releases), pins to exact `target`.
 pub fn rewrite_ecosystem_range(
-  ecosystem : String,
+  ecosystem : @model.Ecosystem,
   requirement : String,
   target : String,
+  exact_pin~ : Bool = false,
 ) -> String raise @model.MoonsetError {
-  if ecosystem == "moonbit" {
+  if ecosystem == @model.MoonBit {
     return target
   }
   let trimmed = requirement.trim().to_owned()
-  if trimmed == "*" || (ecosystem == "npm" && is_npm_protocol(trimmed)) {
+  if ecosystem == @model.Npm && is_npm_external_protocol(trimmed) {
     return trimmed
   }
+  if ecosystem == @model.Npm && is_workspace_protocol(trimmed) {
+    let (inner, is_shorthand) = resolve_workspace_protocol(trimmed, None)
+    if is_shorthand {
+      // Shorthand `workspace:*`, `workspace:^`, `workspace:~` stay untouched in package.json
+      // (pnpm resolves them at pack/publish time).
+      return trimmed
+    }
+    if exact_pin {
+      return "workspace:" + target
+    }
+    return "workspace:" + rewrite_ecosystem_range(@model.Npm, inner, target)
+  }
+  if exact_pin {
+    return target
+  }
   let parsed_target = parse_version(target)
+  if trimmed == "*" {
+    return if parsed_target.is_prerelease() { target } else { "*" }
+  }
   let branches = parse_ecosystem_branches(ecosystem, trimmed)
   if branches.length() == 1 {
     let candidate = rewrite_branch_for_target(
@@ -737,8 +904,6 @@ pub fn rewrite_ecosystem_range(
     }
     return "^" + target
   }
-  // Disjunction (`||`): if any branch already matches `target`, update that branch;
-  // otherwise append a compatible caret branch for `target`.
   let mut matched_idx : Int32? = None
   for idx, branch in branches {
     if branch_matches(ecosystem, branch, parsed_target) {

@@ -5,10 +5,17 @@
 
 $ErrorActionPreference = "Stop"
 
+# Ensure TLS 1.2 is enabled on Windows PowerShell 5.1
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+}
+
 $Repo = "unmbt/moonset"
 $InstallDir = "$env:USERPROFILE\.unmbt"
 $BinName = "moonset.exe"
 $BinPath = Join-Path $InstallDir $BinName
+$Headers = @{ "User-Agent" = "moonset-installer" }
 
 if ($Uninstall) {
     Write-Host "Uninstalling $BinName..." -ForegroundColor Cyan
@@ -21,7 +28,7 @@ if ($Uninstall) {
     return
 }
 
-$Arch = $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant()
+$Arch = if ($env:PROCESSOR_ARCHITECTURE) { $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() } else { "" }
 if ($Arch -eq "amd64") {
     $AssetName = "moonset-win32-x64.exe"
 } else {
@@ -38,7 +45,7 @@ if ($Version) {
 
 Write-Host "Fetching release info from GitHub..." -ForegroundColor Cyan
 try {
-    $Release = Invoke-RestMethod -Uri $ReleaseUri
+    $Release = Invoke-RestMethod -Uri $ReleaseUri -Headers $Headers
     $TargetVersion = $Release.tag_name.TrimStart('v')
     $DownloadUrl = ($Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1).browser_download_url
     $ChecksumUrl = ($Release.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1).browser_download_url
@@ -79,18 +86,25 @@ $TempBin = Join-Path $TempDir $AssetName
 $TempSum = Join-Path $TempDir "SHA256SUMS"
 
 try {
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempBin -ErrorAction Stop
-    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $TempSum -ErrorAction Stop
+    Invoke-WebRequest -Uri $DownloadUrl -Headers $Headers -OutFile $TempBin -ErrorAction Stop
+    Invoke-WebRequest -Uri $ChecksumUrl -Headers $Headers -OutFile $TempSum -ErrorAction Stop
 
     if (-not (Test-Path $TempBin) -or (Get-Item $TempBin).Length -eq 0) {
         throw "The downloaded file is empty."
     }
 
-    $ExpectedLine = Get-Content -Path $TempSum | Where-Object { $_ -match ("^\s*([0-9a-fA-F]{64})\s+\*?" + [regex]::Escape($AssetName) + "\s*$") } | Select-Object -First 1
-    if (-not $ExpectedLine) {
+    $Pattern = "^\s*([0-9a-fA-F]{64})\s+\*?" + [regex]::Escape($AssetName) + "\s*$"
+    $ExpectedHash = $null
+    foreach ($Line in (Get-Content -Path $TempSum)) {
+        $Match = [regex]::Match($Line, $Pattern)
+        if ($Match.Success) {
+            $ExpectedHash = $Match.Groups[1].Value.ToLowerInvariant()
+            break
+        }
+    }
+    if (-not $ExpectedHash) {
         throw "Asset $AssetName not found in SHA256SUMS."
     }
-    $ExpectedHash = $Matches[1].ToLowerInvariant()
     $ActualHash = (Get-FileHash -Path $TempBin -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ActualHash -ne $ExpectedHash) {
         throw "SHA-256 checksum mismatch for ${AssetName}: expected $ExpectedHash, got $ActualHash"

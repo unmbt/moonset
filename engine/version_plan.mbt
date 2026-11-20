@@ -10,28 +10,6 @@ fn version_date(value : String) -> String {
 }
 
 ///|
-fn planned_version(
-  snapshot : @model.WorkspaceSnapshot,
-  base : String,
-  options : @model.VersionOptions,
-  generated_at : String,
-) -> String raise @model.MoonsetError {
-  match options.snapshot_tag {
-    None => base
-    Some(tag) => {
-      let snap_cfg = parse_snapshot_config(snapshot.config)
-      render_snapshot_version(
-        base,
-        tag,
-        snap_cfg,
-        generated_at~,
-        git_head?=snapshot.git_head,
-      )
-    }
-  }
-}
-
-///|
 fn normalize_pre_directory(dir : String) -> String {
   let clean = dir.replace_all(old="\\", new="/").trim().to_owned()
   let stripped = if clean.has_suffix("/") {
@@ -96,204 +74,6 @@ fn dependency_literal(
 }
 
 ///|
-fn skip_json_ws(bytes : Bytes, index : Int32) -> Int32 {
-  let mut i = index
-  while i < bytes.length() {
-    let b = bytes[i].to_int()
-    if b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D {
-      i += 1
-    } else {
-      break
-    }
-  }
-  i
-}
-
-///|
-fn scan_json_string_end(bytes : Bytes, start_quote : Int32) -> Int32? {
-  let mut i = start_quote + 1
-  while i < bytes.length() {
-    let b = bytes[i].to_int()
-    if b == 0x5C {
-      i += 2
-      continue
-    }
-    if b == 0x22 {
-      return Some(i + 1)
-    }
-    i += 1
-  }
-  None
-}
-
-///|
-/// Find the UTF-8 byte span (including quotes) of a JSON string field at depth 1
-/// or inside a named depth-1 object section (e.g. "dependencies").
-fn find_json_string_span(
-  source : String,
-  section : String?,
-  key : String,
-) -> (Int32, Int32)? {
-  let bytes = @utf8.encode(source)
-  let mut depth = 0
-  let mut active_section = ""
-  let mut i : Int32 = 0
-  while i < bytes.length() {
-    let b = bytes[i].to_int()
-    if b == 0x20 || b == 0x09 || b == 0x0A || b == 0x0D {
-      i += 1
-      continue
-    }
-    if b == 0x7B || b == 0x5B {
-      depth += 1
-      i += 1
-      continue
-    }
-    if b == 0x7D || b == 0x5D {
-      if depth == 2 {
-        active_section = ""
-      }
-      depth -= 1
-      i += 1
-      continue
-    }
-    if b == 0x22 {
-      guard scan_json_string_end(bytes, i) is Some(str_end) else { return None }
-      let raw_lit = @utf8.decode_lossy(bytes[i:str_end])
-      let parsed_key = @json.parse(raw_lit) catch { _ => Json::null() }
-      let after_ws = skip_json_ws(bytes, str_end)
-      if after_ws < bytes.length() && bytes[after_ws].to_int() == 0x3A {
-        let val_start = skip_json_ws(bytes, after_ws + 1)
-        if parsed_key is String(field_name) {
-          if section is None && depth == 1 && field_name == key {
-            if val_start < bytes.length() && bytes[val_start].to_int() == 0x22 {
-              guard scan_json_string_end(bytes, val_start) is Some(val_end) else {
-                return None
-              }
-              return Some((val_start, val_end))
-            }
-          } else if section is Some(sec) {
-            if depth == 1 &&
-              val_start < bytes.length() &&
-              bytes[val_start].to_int() == 0x7B {
-              active_section = field_name
-            } else if depth == 2 &&
-              active_section == sec &&
-              field_name == key &&
-              val_start < bytes.length() &&
-              bytes[val_start].to_int() == 0x22 {
-              guard scan_json_string_end(bytes, val_start) is Some(val_end) else {
-                return None
-              }
-              return Some((val_start, val_end))
-            }
-          }
-        }
-      }
-      i = str_end
-      continue
-    }
-    i += 1
-  }
-  None
-}
-
-///|
-fn strip_toml_comment(line : String) -> String {
-  let mut in_double = false
-  let mut in_single = false
-  let mut escaped = false
-  let chars = line.to_array()
-  let out : Array[Char] = []
-  for ch in chars {
-    if escaped {
-      out.push(ch)
-      escaped = false
-      continue
-    }
-    if in_double && ch == '\\' {
-      out.push(ch)
-      escaped = true
-      continue
-    }
-    if !in_single && ch == '"' {
-      in_double = !in_double
-      out.push(ch)
-      continue
-    }
-    if !in_double && ch == '\'' {
-      in_single = !in_single
-      out.push(ch)
-      continue
-    }
-    if !in_double && !in_single && ch == '#' {
-      break
-    }
-    out.push(ch)
-  }
-  String::from_array(out)
-}
-
-///|
-fn find_toml_version_span(source : String, section : String) -> (Int32, Int32)? {
-  let bytes = @utf8.encode(source)
-  let mut active = ""
-  let mut pos : Int32 = 0
-  while pos <= bytes.length() {
-    let mut nl = pos
-    while nl < bytes.length() && bytes[nl].to_int() != 0x0A {
-      nl += 1
-    }
-    let line_end = if nl > pos && bytes[nl - 1].to_int() == 0x0D {
-      nl - 1
-    } else {
-      nl
-    }
-    let line_text = @utf8.decode_lossy(bytes[pos:line_end])
-    let clean = strip_toml_comment(line_text).trim().to_owned()
-    if clean.has_prefix("[") && clean.has_suffix("]") {
-      active = clean[1:clean.length() - 1].trim().to_owned()
-    } else if active == section && clean.has_prefix("version") {
-      let rest = clean[7:].trim().to_owned()
-      if rest.has_prefix("=") {
-        let mut idx = pos
-        while idx < line_end && bytes[idx].to_int() != 0x3D {
-          idx += 1
-        }
-        if idx < line_end {
-          let mut q_idx = idx + 1
-          while q_idx < line_end &&
-                (bytes[q_idx].to_int() == 0x20 || bytes[q_idx].to_int() == 0x09) {
-            q_idx += 1
-          }
-          if q_idx < line_end &&
-            (bytes[q_idx].to_int() == 0x22 || bytes[q_idx].to_int() == 0x27) {
-            let quote = bytes[q_idx].to_int()
-            let val_start = q_idx + 1
-            let mut val_end = val_start
-            while val_end < line_end && bytes[val_end].to_int() != quote {
-              if quote == 0x22 && bytes[val_end].to_int() == 0x5C {
-                val_end += 2
-              } else {
-                val_end += 1
-              }
-            }
-            if val_end < line_end {
-              return Some((val_start, val_end))
-            }
-          }
-        }
-      }
-    }
-    if nl >= bytes.length() {
-      break
-    }
-    pos = nl + 1
-  }
-  None
-}
-
-///|
 /// Format a Git tag name from a template (`{ecosystem}`, `{name}`, `{version}`),
 /// falling back to `default_name` when template is empty or `"auto"`.
 pub fn format_tag_name(
@@ -325,11 +105,23 @@ pub fn format_tag_name(
 ///|
 /// Validate a rendered Git tag name against git-check-ref-format rules.
 pub fn validate_git_tag_name(name : String) -> Unit raise @model.MoonsetError {
+  let invalid_ctrl = name
+    .to_array()
+    .any(ch => {
+      let code = ch.to_int()
+      code < 0x20 || code == 0x7F
+    })
+  let bad_component = name
+    .split("/")
+    .any(seg => {
+      let s = seg.to_owned()
+      s == "" || s.has_prefix(".") || s.has_suffix(".lock")
+    })
   if name == "" ||
+    name == "@" ||
+    invalid_ctrl ||
+    bad_component ||
     name.contains(" ") ||
-    name.contains("\t") ||
-    name.contains("\n") ||
-    name.contains("\r") ||
     name.contains("..") ||
     name.contains(":") ||
     name.contains("@{") ||
@@ -353,53 +145,102 @@ pub fn validate_git_tag_name(name : String) -> Unit raise @model.MoonsetError {
 }
 
 ///|
-/// Extract optional `pr:` / `commit:` / `author:` hint lines from a changeset
-/// summary while keeping non-metadata Markdown lines intact.
+fn is_hex_sha(text : String) -> Bool {
+  if text.length() < 7 || text.length() > 40 {
+    return false
+  }
+  for ch in text.to_array() {
+    let ok = (ch >= '0' && ch <= '9') ||
+      (ch >= 'a' && ch <= 'f') ||
+      (ch >= 'A' && ch <= 'F')
+    if !ok {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn is_valid_github_user(text : String) -> Bool {
+  if text == "" ||
+    text.length() > 39 ||
+    text.has_prefix("-") ||
+    text.has_suffix("-") {
+    return false
+  }
+  for ch in text.to_array() {
+    let ok = (ch >= 'a' && ch <= 'z') ||
+      (ch >= 'A' && ch <= 'Z') ||
+      (ch >= '0' && ch <= '9') ||
+      ch == '-' ||
+      ch == '_'
+    if !ok {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// Extract strict `pr: #123` / `commit: <hex>` / `author: @user` metadata lines
+/// from a changeset summary (aligned with @changesets/changelog-github).
+/// Only strips lines whose values strictly match PR numbers, hex SHAs, or GitHub usernames,
+/// leaving ordinary prose (e.g. `User: can now configure retries`) untouched.
 fn extract_summary_metadata(
   summary : String,
-) -> (String, String?, String?, String?) {
+) -> (String, String?, String?, Array[String]) {
   let mut pr : String? = None
   let mut commit : String? = None
-  let mut author : String? = None
+  let authors : Array[String] = []
   let body : Array[String] = []
+  let mut in_fence = false
   for raw_line in summary.replace_all(old="\r\n", new="\n").split("\n") {
     let trimmed = raw_line.trim().to_owned()
-    let lower = trimmed.to_lower()
-    if (
-        lower.has_prefix("pr:") ||
-        lower.has_prefix("pull:") ||
-        lower.has_prefix("pull request:")
-      ) &&
-      trimmed.find(":") is Some(colon) {
-      let mut value = trimmed[colon + 1:].trim().to_owned()
-      if value.has_prefix("#") {
-        value = value[1:].trim().to_owned()
-      }
-      if value != "" {
-        pr = Some(value)
-        continue
-      }
-    } else if lower.has_prefix("commit:") && trimmed.find(":") is Some(colon) {
-      let value = trimmed[colon + 1:].trim().to_owned()
-      if value != "" {
-        commit = Some(value)
-        continue
-      }
-    } else if (lower.has_prefix("author:") || lower.has_prefix("user:")) &&
-      trimmed.find(":") is Some(colon) {
-      let mut value = trimmed[colon + 1:].trim().to_owned()
-      if value.has_prefix("@") {
-        value = value[1:].trim().to_owned()
-      }
-      if value != "" {
-        author = Some(value)
-        continue
+    if trimmed.has_prefix("```") || trimmed.has_prefix("~~~") {
+      in_fence = !in_fence
+      body.push(raw_line.to_owned())
+      continue
+    }
+    if !in_fence {
+      let lower = trimmed.to_lower()
+      if (
+          lower.has_prefix("pr:") ||
+          lower.has_prefix("pull:") ||
+          lower.has_prefix("pull request:")
+        ) &&
+        trimmed.find(":") is Some(colon) {
+        let mut value = trimmed[colon + 1:].trim().to_owned()
+        if value.has_prefix("#") {
+          value = value[1:].trim().to_owned()
+        }
+        if is_all_ascii_digits(value) && value != "0" {
+          pr = Some(value)
+          continue
+        }
+      } else if lower.has_prefix("commit:") && trimmed.find(":") is Some(colon) {
+        let value = trimmed[colon + 1:].trim().to_owned()
+        if is_hex_sha(value) {
+          commit = Some(value)
+          continue
+        }
+      } else if (lower.has_prefix("author:") || lower.has_prefix("user:")) &&
+        trimmed.find(":") is Some(colon) {
+        let mut value = trimmed[colon + 1:].trim().to_owned()
+        if value.has_prefix("@") {
+          value = value[1:].trim().to_owned()
+        }
+        if is_valid_github_user(value) {
+          if !authors.contains(value) {
+            authors.push(value)
+          }
+          continue
+        }
       }
     }
     body.push(raw_line.to_owned())
   }
   let cleaned = body.join("\n").trim().to_owned()
-  (if cleaned == "" { summary } else { cleaned }, commit, pr, author)
+  (if cleaned == "" { summary } else { cleaned }, commit, pr, authors)
 }
 
 ///|
@@ -412,23 +253,31 @@ fn build_changelog_context(
   direct_ids : Array[String],
   dependency_updates : Array[@model.DependencyIntent],
   existing : String,
+  generator_name : String,
   repository : String?,
+  links : Bool,
   thanks : Bool,
+  server_url : String,
   changeset_commits : Map[String, String],
   commit_metadata~ : Map[String, (String?, String?)] = Map([]),
 ) -> @changelog.ChangelogContext {
   let lines : Array[@changelog.ReleaseLineContext] = []
+  let parse_hints = generator_name == "git" || generator_name == "github"
+  // Only include direct changesets recorded for this release (if `direct_ids` is empty,
+  // this unit was bumped purely via dependency propagation, fixed group, or pre:exit).
   for changeset in changesets {
-    if !direct_ids.is_empty() && !direct_ids.contains(changeset.id) {
+    if !direct_ids.contains(changeset.id) {
       continue
     }
     for change in changeset.releases {
       if change.unit_id == unit_id &&
         change.bump != @model.None &&
         changeset.summary != "" {
-        let (clean_summary, commit_hint, pr_hint, author_hint) = extract_summary_metadata(
-          changeset.summary,
-        )
+        let (clean_summary, commit_hint, pr_hint, author_hints) = if parse_hints {
+          extract_summary_metadata(changeset.summary)
+        } else {
+          (changeset.summary, None, None, [])
+        }
         let commit = match commit_hint {
           Some(c) => Some(c)
           None => changeset_commits.get(changeset.id)
@@ -441,9 +290,11 @@ fn build_changelog_context(
           Some(_) => pr_hint
           None => meta_pr
         }
-        let author = match author_hint {
-          Some(_) => author_hint
-          None => meta_author
+        let authors = author_hints.copy()
+        if authors.is_empty() {
+          if meta_author is Some(a) && a != "" {
+            authors.push(a)
+          }
         }
         lines.push({
           changeset_id: changeset.id,
@@ -454,7 +305,7 @@ fn build_changelog_context(
           new_version: release_version,
           commit,
           pull_request,
-          author,
+          authors,
         })
       }
     }
@@ -467,14 +318,7 @@ fn build_changelog_context(
         Some(idx) => update.producer[idx + 1:].to_owned()
         None => update.producer
       }
-      let ver_display = if update.new_requirement.has_prefix("^") ||
-        update.new_requirement.has_prefix("~") ||
-        update.new_requirement.has_prefix("=") {
-        update.new_requirement[1:].to_owned()
-      } else {
-        update.new_requirement
-      }
-      let item = display_name + "@" + ver_display
+      let item = display_name + "@" + update.producer_version
       if !dep_items.contains(item) {
         dep_items.push(item)
       }
@@ -487,27 +331,40 @@ fn build_changelog_context(
   if !dep_items.is_empty() {
     let dep_commit_links : Array[String] = []
     let seen_commits : Array[String] = []
-    for cs in changesets {
-      if cs.releases.any(c => {
-          c.bump != @model.None && dep_producers.contains(c.unit_id)
-        }) {
-        if changeset_commits.get(cs.id) is Some(sha) &&
-          sha != "" &&
-          !seen_commits.contains(sha) {
-          seen_commits.push(sha)
-          let short = if sha.length() > 7 { sha[:7].to_owned() } else { sha }
-          let link = match repository {
-            Some(repo) if repo != "" =>
-              "[`" +
-              short +
-              "`](https://github.com/" +
-              repo +
-              "/commit/" +
-              sha +
-              ")"
-            _ => "`" + short + "`"
+    if generator_name == "git" || generator_name == "github" {
+      let base_url = if server_url.has_suffix("/") {
+        server_url[:server_url.length() - 1].to_owned()
+      } else {
+        server_url
+      }
+      for cs in changesets {
+        if cs.releases.any(c => {
+            c.bump != @model.None && dep_producers.contains(c.unit_id)
+          }) {
+          if changeset_commits.get(cs.id) is Some(sha) &&
+            sha != "" &&
+            !seen_commits.contains(sha) {
+            seen_commits.push(sha)
+            let short = if sha.length() > 7 { sha[:7].to_owned() } else { sha }
+            let link = if links {
+              match repository {
+                Some(repo) if repo != "" =>
+                  "[`" +
+                  short +
+                  "`](" +
+                  base_url +
+                  "/" +
+                  repo +
+                  "/commit/" +
+                  sha +
+                  ")"
+                _ => "`" + short + "`"
+              }
+            } else {
+              "`" + short + "`"
+            }
+            dep_commit_links.push(link)
           }
-          dep_commit_links.push(link)
         }
       }
     }
@@ -526,7 +383,9 @@ fn build_changelog_context(
     dependency_lines: dependencies,
     existing,
     repository,
+    links,
     thanks,
+    server_url,
   }
 }
 
@@ -540,17 +399,21 @@ pub fn render_builtin_changelog(
   dependency_updates : Array[@model.DependencyIntent],
   existing : String,
 ) -> String {
+  let direct_ids = changesets.map(c => c.id)
   let context = build_changelog_context(
     unit_id,
     "",
     version,
     date,
     changesets,
-    [],
+    direct_ids,
     dependency_updates,
     existing,
+    "builtin",
     None,
     false,
+    false,
+    "https://github.com",
     Map([]),
   )
   @changelog.render(@changelog.Builtin, context)
@@ -561,45 +424,40 @@ pub fn render_builtin_changelog(
 pub fn changelog_contexts_with_metadata(
   snapshot : @model.WorkspaceSnapshot,
   analysis : @model.ReleasePlan,
-  options : @model.VersionOptions,
+  _options : @model.VersionOptions,
   generated_at~ : String = "",
   changeset_commits~ : Map[String, String] = Map([]),
   commit_metadata~ : Map[String, (String?, String?)] = Map([]),
+  server_url~ : String = "https://github.com",
 ) -> Array[@changelog.ChangelogContext] {
   let contexts : Array[@changelog.ChangelogContext] = []
+  let units_by_id : Map[String, @model.ReleaseUnit] = Map([])
+  for u in snapshot.units {
+    units_by_id[u.id] = u
+  }
   for release in analysis.releases {
-    let release_version = planned_version(
-      snapshot,
-      release.new_version,
-      options,
-      generated_at,
-    ) catch {
-      _ => release.new_version
-    }
-    let mut selected : @model.ReleaseUnit? = None
-    for candidate in snapshot.units {
-      if candidate.id == release.unit_id {
-        selected = Some(candidate)
-      }
-    }
-    let unit = selected.unwrap()
+    guard units_by_id.get(release.unit_id) is Some(unit) else { continue }
     let path = if unit.root == "" {
-      snapshot.config.changelog_file
+      snapshot.config.changelog.file
     } else {
-      unit.root + "/" + snapshot.config.changelog_file
+      unit.root + "/" + snapshot.config.changelog.file
     }
     contexts.push(
       build_changelog_context(
         unit.id,
         release.old_version,
-        release_version,
+        release.new_version,
         generated_at,
         analysis.changesets,
         release.changesets,
         analysis.dependency_updates,
         snapshot.sources.get(path).unwrap_or(""),
-        snapshot.config.github,
-        snapshot.config.changelog == "github" && snapshot.config.github_thanks,
+        snapshot.config.changelog.generator,
+        snapshot.config.github.repo,
+        snapshot.config.github.links,
+        snapshot.config.changelog.generator == "github" &&
+        snapshot.config.github.thanks,
+        server_url,
         changeset_commits,
         commit_metadata~,
       ),
@@ -666,31 +524,6 @@ fn strip_changelog_title(document : String) -> String {
 }
 
 ///|
-fn prepend_changelog_sections(existing : String, section : String) -> String {
-  if existing == "" {
-    return "# Changelog\n\n" + section.trim().to_owned() + "\n"
-  }
-  let normalized = existing.replace_all(old="\r\n", new="\n")
-  let body = section.trim().to_owned() + "\n"
-  if normalized.has_prefix("# Changelog") {
-    match normalized.find("\n") {
-      Some(nl) => {
-        let head = normalized[:nl + 1].to_owned()
-        let tail = normalized[nl + 1:].trim_start().to_owned()
-        if tail == "" {
-          head + "\n" + body
-        } else {
-          head + "\n" + body + "\n" + tail
-        }
-      }
-      None => normalized + "\n\n" + body
-    }
-  } else {
-    "# Changelog\n\n" + body + "\n" + normalized
-  }
-}
-
-///|
 /// Build all deterministic file edits needed by `version` without touching disk.
 pub fn build_version_plan(
   snapshot : @model.WorkspaceSnapshot,
@@ -720,6 +553,7 @@ pub fn build_version_plan_with_metadata(
   generators? : @changelog.GeneratorRegistry,
   changeset_commits~ : Map[String, String] = Map([]),
   commit_metadata~ : Map[String, (String?, String?)] = Map([]),
+  server_url~ : String = "https://github.com",
 ) -> @model.VersionPlan raise @model.MoonsetError {
   let registry = generators.unwrap_or(@changelog.GeneratorRegistry::new())
   let date = version_date(generated_at)
@@ -728,70 +562,57 @@ pub fn build_version_plan_with_metadata(
   let tags : Array[@model.TagIntent] = []
   let seen_tags : Map[String, Bool] = Map([])
   let changelog_paths_order : Array[String] = []
-  let changelog_groups : Map[String, Array[(String, String, String)]] = Map([])
+  let changelog_groups : Map[String, Array[@model.Release]] = Map([])
   let manifest_spans : Map[String, Array[ByteEdit]] = Map([])
   let version_targets : Map[String, String] = Map([])
-  let mixed = snapshot.units.any(x => x.ecosystem != "moonbit")
+  let mixed = snapshot.units.any(x => x.ecosystem != @model.MoonBit)
   let generate_changelogs = !options.no_changelog &&
-    snapshot.config.changelog_enabled
-  let is_snapshot = options.snapshot_tag is Some(_)
-  if options.snapshot_tag is Some(tag) {
-    let snap_cfg = parse_snapshot_config(snapshot.config)
-    if !snap_cfg.enabled {
-      invalid(
-        "Snapshot releases are disabled by configuration; set snapshot.enabled to true",
-        code="snapshot-disabled",
-      )
-    }
-    if tag.trim() == "" {
-      invalid("Snapshot tag cannot be empty", code="invalid-input")
-    }
-    validate_snapshot_template(snap_cfg.prerelease_template)
-  }
-  let release_versions_override : Map[String, String] = Map([])
+    snapshot.config.changelog.enabled
+  let is_snapshot = analysis.is_snapshot ||
+    options.snapshot ||
+    options.snapshot_tag is Some(_)
   let units_by_id : Map[String, @model.ReleaseUnit] = Map([])
   for unit in snapshot.units {
     units_by_id[unit.id] = unit
   }
+  let overrides = snapshot.config.unit_overrides()
   for release in analysis.releases {
-    let release_version = planned_version(
-      snapshot,
-      release.new_version,
-      options,
-      generated_at,
-    )
-    release_versions_override[release.unit_id] = release_version
-    let unit = units_by_id[release.unit_id]
+    guard units_by_id.get(release.unit_id) is Some(unit) else {
+      raise @model.Invalid(
+        @model.diagnostic(
+          "unknown-unit",
+          "Unknown release unit: " + release.unit_id,
+        ),
+      )
+    }
+    let release_version = release.new_version
     let version_path = unit.version_path
     let source = snapshot.sources.get(version_path).unwrap_or("")
-    let span_and_lit : (Int32, Int32, String)? = if unit.ecosystem == "moonbit" {
-      let document = @manifest.parse(@manifest.Mod, source, path=unit.manifest)
-      match document.string_field("version") {
-        Some(field) =>
-          Some(
-            (field.span.start, field.span.end, quote_string(release_version)),
-          )
-        None => None
-      }
-    } else if unit.ecosystem == "cargo" {
-      match find_toml_version_span(source, unit.version_field) {
-        Some((start, end)) => Some((start, end, release_version))
-        None => None
-      }
-    } else {
-      match find_json_string_span(source, None, "version") {
-        Some((start, end)) => Some((start, end, quote_string(release_version)))
-        None => None
-      }
-    }
-    guard span_and_lit is Some((v_start, v_end, v_rep)) else {
+    let source_bytes = @utf8.encode(source)
+    guard unit.version_span is Some(vspan) &&
+      vspan.start >= 0 &&
+      vspan.end <= source_bytes.length() &&
+      vspan.start < vspan.end else {
       raise @model.Invalid(
         @model.diagnostic(
           "missing-version-field",
-          "Cannot locate version field",
+          "Cannot locate version field span in manifest",
           path=unit.manifest,
         ),
       )
+    }
+    let original_ver_slice = @utf8.decode_lossy(
+      source_bytes[vspan.start:vspan.end],
+    )
+    let v_rep = if unit.ecosystem == @model.Cargo {
+      if original_ver_slice.has_prefix("\"") ||
+        original_ver_slice.has_prefix("'") {
+        quote_string(release_version)
+      } else {
+        release_version
+      }
+    } else {
+      quote_string(release_version)
     }
     if version_targets.get(version_path) is Some(prev_version) {
       if prev_version != release_version {
@@ -807,145 +628,159 @@ pub fn build_version_plan_with_metadata(
       version_targets[version_path] = release_version
       let list = manifest_spans.get(version_path).unwrap_or([])
       list.push({
-        start: v_start,
-        end: v_end,
+        start: vspan.start,
+        end: vspan.end,
         replacement: v_rep,
         owner: unit.id,
       })
       manifest_spans[version_path] = list
     }
-    let default_tag_name = if mixed {
-      unit.ecosystem + "/" + unit.native_name + "@" + release_version
-    } else if snapshot.units.length() == 1 {
-      "v" + release_version
-    } else {
-      unit.native_name + "@" + release_version
-    }
-    let unit_tag_template = match snapshot.config.unit_overrides.get(unit.id) {
-      Some({ tag_format: Some(fmt), .. }) => fmt
-      _ => snapshot.config.tag_format
-    }
-    let tag_name = format_tag_name(
-      unit.id,
-      release_version,
-      default_tag_name,
-      unit_tag_template,
-    )
-    validate_git_tag_name(tag_name)
-    if seen_tags.contains(tag_name) {
-      raise @model.Invalid(
-        @model.diagnostic(
-          "duplicate-tag",
-          "Multiple release units resolve to duplicate Git tag: " + tag_name,
-        ),
+    // Emit Git tag intents only when tag.create is enabled, not a snapshot, and private policy permits tagging.
+    let allow_tag = !is_snapshot &&
+      snapshot.config.tag.create &&
+      (
+        unit.visibility != @model.Private ||
+        snapshot.config.private_packages.tag
       )
+    if allow_tag {
+      let default_tag_name = if mixed {
+        unit.ecosystem.text() + "/" + unit.native_name + "@" + release_version
+      } else if snapshot.units.length() == 1 {
+        "v" + release_version
+      } else {
+        unit.native_name + "@" + release_version
+      }
+      let unit_tag_template = match overrides.get(unit.id) {
+        Some({ tag_format: Some(fmt), .. }) => fmt
+        _ => snapshot.config.tag.format
+      }
+      let tag_name = format_tag_name(
+        unit.id,
+        release_version,
+        default_tag_name,
+        unit_tag_template,
+      )
+      validate_git_tag_name(tag_name)
+      if seen_tags.contains(tag_name) {
+        raise @model.Invalid(
+          @model.diagnostic(
+            "duplicate-tag",
+            "Multiple release units resolve to duplicate Git tag: " + tag_name,
+          ),
+        )
+      }
+      seen_tags[tag_name] = true
+      tags.push({ unit_id: unit.id, version: release_version, name: tag_name, })
     }
-    seen_tags[tag_name] = true
-    tags.push({ unit_id: unit.id, version: release_version, name: tag_name, })
     if generate_changelogs {
-      let changelog_file = snapshot.config.changelog_file
+      let changelog_file = snapshot.config.changelog.file
       let path = if unit.root == "" {
         changelog_file
       } else {
         unit.root + "/" + changelog_file
       }
-      let existing = snapshot.sources.get(path).unwrap_or("")
-      let context = build_changelog_context(
-        unit.id,
-        release.old_version,
-        release_version,
-        date,
-        analysis.changesets,
-        release.changesets,
-        analysis.dependency_updates,
-        existing,
-        snapshot.config.github,
-        snapshot.config.changelog == "github" && snapshot.config.github_thanks,
-        changeset_commits,
-        commit_metadata~,
-      )
-      let unit_doc = registry.render(snapshot.config.changelog, context)
       if !changelog_groups.contains(path) {
         changelog_paths_order.push(path)
       }
       let entries = changelog_groups.get(path).unwrap_or([])
-      entries.push((unit.id, release_version, unit_doc))
+      entries.push(release)
       changelog_groups[path] = entries
     }
   }
+
+  // Render changelogs in a single pass per unit (eliminating redundant double-rendering).
   if generate_changelogs {
     for path in changelog_paths_order {
       let group = changelog_groups[path]
       let existing = snapshot.sources.get(path).unwrap_or("")
       if group.length() == 1 {
-        let (unit_id, release_version, text) = group[0]
-        changelogs.push({
-          unit_id,
-          version: release_version,
+        let release = group[0]
+        let ctx = build_changelog_context(
+          release.unit_id,
+          release.old_version,
+          release.new_version,
           date,
-          section: snapshot.config.changelog,
+          analysis.changesets,
+          release.changesets,
+          analysis.dependency_updates,
+          existing,
+          snapshot.config.changelog.generator,
+          snapshot.config.github.repo,
+          snapshot.config.github.links,
+          snapshot.config.changelog.generator == "github" &&
+          snapshot.config.github.thanks,
+          server_url,
+          changeset_commits,
+          commit_metadata~,
+        )
+        let text = registry.render(snapshot.config.changelog.generator, ctx)
+        changelogs.push({
+          unit_id: release.unit_id,
+          version: release.new_version,
+          date,
+          section: snapshot.config.changelog.generator,
           text,
           path,
-          generator: snapshot.config.changelog,
+          generator: snapshot.config.changelog.generator,
           metadata: Json::empty_object(),
         })
-        add_edit(edits, path, "changelog", unit_id, existing, text)
+        add_edit(edits, path, "changelog", release.unit_id, existing, text)
       } else {
         let section_blocks : Array[String] = []
-        for entry in group {
-          let (unit_id, release_version, _) = entry
-          let mut selected : @model.Release? = None
-          for rel in analysis.releases {
-            if rel.unit_id == unit_id {
-              selected = Some(rel)
-            }
-          }
-          let old_ver = selected.map(r => r.old_version).unwrap_or("")
-          let direct_ids = selected.map(r => r.changesets).unwrap_or([])
+        for release in group {
           let single_ctx = build_changelog_context(
-            unit_id,
-            old_ver,
-            release_version,
+            release.unit_id,
+            release.old_version,
+            release.new_version,
             date,
             analysis.changesets,
-            direct_ids,
+            release.changesets,
             analysis.dependency_updates,
             "",
-            snapshot.config.github,
-            snapshot.config.changelog == "github" &&
-            snapshot.config.github_thanks,
+            snapshot.config.changelog.generator,
+            snapshot.config.github.repo,
+            snapshot.config.github.links,
+            snapshot.config.changelog.generator == "github" &&
+            snapshot.config.github.thanks,
+            server_url,
             changeset_commits,
             commit_metadata~,
           )
           let rendered_single = registry.render(
-            snapshot.config.changelog,
+            snapshot.config.changelog.generator,
             single_ctx,
           )
           let stripped = strip_changelog_title(rendered_single)
-          let heading_prefix = "## " + release_version
+          let heading_prefix = "## " + release.new_version
           let annotated = if stripped.has_prefix(heading_prefix) {
             "## " +
-            unit_id +
+            release.unit_id +
             " - " +
-            release_version +
+            release.new_version +
             stripped[heading_prefix.length():].to_owned()
           } else {
-            "### " + unit_id + "\n\n" + stripped
+            "## " +
+            release.unit_id +
+            " - " +
+            release.new_version +
+            "\n\n" +
+            stripped
           }
           section_blocks.push(annotated.trim().to_owned())
         }
         let combined_section = section_blocks.join("\n\n")
-        let full_text = prepend_changelog_sections(existing, combined_section)
-        for entry in group {
-          let (unit_id, release_version, _) = entry
+        let full_text = @changelog.splice_changelog_entry(
+          existing, combined_section,
+        )
+        for release in group {
           changelogs.push({
-            unit_id,
-            version: release_version,
+            unit_id: release.unit_id,
+            version: release.new_version,
             date,
-            section: snapshot.config.changelog,
+            section: snapshot.config.changelog.generator,
             text: full_text,
             path,
-            generator: snapshot.config.changelog,
+            generator: snapshot.config.changelog.generator,
             metadata: Json::empty_object(),
           })
         }
@@ -953,44 +788,12 @@ pub fn build_version_plan_with_metadata(
       }
     }
   }
-  for raw_intent in analysis.dependency_updates {
-    let intent : @model.DependencyIntent = if is_snapshot {
-      match release_versions_override.get(raw_intent.producer) {
-        Some(snap_ver) => {
-          let consumer_eco = units_by_id
-            .get(raw_intent.consumer)
-            .map(u => u.ecosystem)
-            .unwrap_or("moonbit")
-          let rewritten = rewrite_ecosystem_range(
-            consumer_eco,
-            raw_intent.old_requirement,
-            snap_ver,
-          ) catch {
-            _ => snap_ver
-          }
-          { ..raw_intent, new_requirement: rewritten, }
-        }
-        None => raw_intent
-      }
-    } else {
-      raw_intent
-    }
+
+  for intent in analysis.dependency_updates {
     let source = snapshot.sources.get(intent.path).unwrap_or("")
     let source_bytes = @utf8.encode(source)
-    let (span_start, span_end) = if intent.start == 0 &&
-      intent.end == 0 &&
-      intent.producer.has_prefix("npm:") {
-      let pkg = intent.producer[4:].to_owned()
-      let mut found : (Int32, Int32)? = None
-      for sec in ["dependencies", "peerDependencies", "optionalDependencies"] {
-        if found is None {
-          found = find_json_string_span(source, Some(sec), pkg)
-        }
-      }
-      found.unwrap_or((intent.start, intent.end))
-    } else {
-      (intent.start, intent.end)
-    }
+    let span_start = intent.start
+    let span_end = intent.end
     if span_start < 0 ||
       span_end > source_bytes.length() ||
       span_start >= span_end {
@@ -1043,6 +846,8 @@ pub fn build_version_plan_with_metadata(
     let owner = spans.last().map(x => x.owner).unwrap_or("moonset")
     add_edit(edits, path, kind, owner, source, after)
   }
+
+  // `analysis.changesets` already excludes ignored-only changesets and already-consumed pre changesets.
   let consumed = if is_snapshot {
     []
   } else {
@@ -1051,40 +856,38 @@ pub fn build_version_plan_with_metadata(
   if !is_snapshot {
     match analysis.next_pre_state {
       Some(next_pre) =>
-        if !analysis.releases.is_empty() {
+        if !analysis.releases.is_empty() || !analysis.changesets.is_empty() {
           add_edit(
             edits,
-            snapshot.config.pre_file,
+            snapshot.config.pre.file,
             "state",
             "moonset",
-            snapshot.sources.get(snapshot.config.pre_file).unwrap_or(""),
+            snapshot.sources.get(snapshot.config.pre.file).unwrap_or(""),
             next_pre.to_json().stringify(indent=2) + "\n",
           )
-          let pre_dir = normalize_pre_directory(snapshot.config.pre_directory)
+          let pre_dir = normalize_pre_directory(snapshot.config.pre.directory)
           if pre_dir != "" {
             for changeset in analysis.changesets {
-              if next_pre.consumed.contains(changeset.id) {
-                let target_path = pre_dir + "/" + changeset.id + ".md"
-                if changeset.path != target_path {
-                  if snapshot.sources.get(changeset.path) is Some(content) &&
-                    content != "" {
-                    add_edit(
-                      edits,
-                      target_path,
-                      "changeset",
-                      "moonset",
-                      snapshot.sources.get(target_path).unwrap_or(""),
-                      content,
-                    )
-                    add_edit(
-                      edits,
-                      changeset.path,
-                      "changeset",
-                      "moonset",
-                      content,
-                      "",
-                    )
-                  }
+              let target_path = pre_dir + "/" + changeset.id + ".md"
+              if changeset.path != target_path {
+                if snapshot.sources.get(changeset.path) is Some(content) &&
+                  content != "" {
+                  add_edit(
+                    edits,
+                    target_path,
+                    "changeset",
+                    "moonset",
+                    snapshot.sources.get(target_path).unwrap_or(""),
+                    content,
+                  )
+                  add_edit(
+                    edits,
+                    changeset.path,
+                    "changeset",
+                    "moonset",
+                    content,
+                    "",
+                  )
                 }
               }
             }
@@ -1101,44 +904,36 @@ pub fn build_version_plan_with_metadata(
             "",
           )
         }
-        if snapshot.sources.contains(snapshot.config.pre_file) {
+        if snapshot.sources.contains(snapshot.config.pre.file) {
           add_edit(
             edits,
-            snapshot.config.pre_file,
+            snapshot.config.pre.file,
             "state",
             "moonset",
-            snapshot.sources.get(snapshot.config.pre_file).unwrap_or(""),
+            snapshot.sources.get(snapshot.config.pre.file).unwrap_or(""),
             "",
           )
         }
       }
     }
   }
+
   let include_dag = has_artifact_specs(snapshot.config) ||
-    !snapshot.config.bridges.is_empty()
+    !snapshot.config.bridges().is_empty()
   let dag_opt = if include_dag {
-    Some(build_execution_dag(snapshot, analysis, release_versions_override~))
+    Some(build_execution_dag(snapshot, analysis))
   } else {
     None
   }
   let state : @model.ReleaseState = {
     plan_fingerprint: analysis.fingerprint,
     source_head: snapshot.git_head,
-    releases: analysis.releases.map(release => {
-      unit_id: release.unit_id,
-      old_version: release.old_version,
-      new_version: release_versions_override
-      .get(release.unit_id)
-      .unwrap_or(release.new_version),
-      level: release.level,
-      reasons: release.reasons,
-      changesets: release.changesets,
-      publish: release.publish,
-    }),
+    is_snapshot,
+    releases: analysis.releases,
     tags,
     consumed_changesets: consumed,
   }
-  if !analysis.releases.is_empty() && !is_snapshot {
+  if !analysis.releases.is_empty() {
     let state_path = ".moonset/release-state.json"
     let state_json : Json = match dag_opt {
       Some(dag) => {

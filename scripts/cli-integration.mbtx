@@ -29,9 +29,9 @@ async fn invoke(binary : String, root : String, args : Array[String], expected :
 }
 
 async fn main {
-  @shell.Cmd("moon", ["build", "--target", "native"]).run()
+  @shell.Cmd("moon", ["build", "--target", "native", "--release"]).run()
   let project = @env.current_dir().unwrap()
-  let artifact = @path.Path(project).join(@path.Path("_build/native/debug/build/cmd/moonset/moonset")).to_string()
+  let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
   let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
   let root = @fs.tmpdir(prefix="moonset-cli-")
   defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
@@ -183,8 +183,8 @@ async fn main {
   ignore(invoke(binary, workflow_root, ["add", "--package", "acme/missing", "--type", "patch", "--summary", "bad", "--json"], 2))
   let added = invoke(binary, workflow_root, ["add", "--package", "acme/flow", "--type", "minor", "--summary", "Flow feature", "--id", "flow-feat", "--json"], 0)
   assert_true(added is { "id": "flow-feat", .. })
-  let pre_enter = invoke(binary, workflow_root, ["pre", "enter", "alpha", "--initial-version", "--json"], 0)
-  assert_true(pre_enter is { "mode": "active", "tag": "alpha", .. })
+  let pre_enter = invoke(binary, workflow_root, ["pre", "enter", "alpha", "--json"], 0)
+  assert_true(pre_enter is { "mode": "pre", "tag": "alpha", .. })
   // Duplicate pre enter must fail
   ignore(invoke(binary, workflow_root, ["pre", "enter", "beta", "--json"], 2))
   let v_pre = invoke(binary, workflow_root, ["version", "--json"], 0)
@@ -192,7 +192,7 @@ async fn main {
   assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/flow-feat.md")).to_string()))
   assert_true(@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre/flow-feat.md")).to_string()))
   let pre_exit = invoke(binary, workflow_root, ["pre", "exit", "--json"], 0)
-  assert_true(pre_exit is { "mode": "exit", .. })
+  assert_true(pre_exit is { "mode": "exit", "tag": "alpha", .. })
   let v_grad = invoke(binary, workflow_root, ["version", "--json"], 0)
   assert_true(v_grad is { "analysis": { "releases": [{ "newVersion": "0.2.0", .. }], .. }, .. })
   assert_true(!@fs.exists(@path.Path(workflow_root).join(@path.Path(".changeset/pre.json")).to_string()))
@@ -284,12 +284,18 @@ async fn main {
   // snapshot.enabled=false must reject version --snapshot
   let snap_err = invoke(binary, v020_root, ["version", "--snapshot", "canary", "--dry-run", "--json"], 2)
   assert_true(snap_err is { "ok": False, "errors": [{ "code": "snapshot-disabled", .. }], .. })
-  // Enable snapshot with useCalculatedVersion=true and verify dry-run + apply keep changeset intact
+  // Enable snapshot with useCalculatedVersion=true and verify apply keeps changeset intact and marks release-state isSnapshot=true
   write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":true,\"useCalculatedVersion\":true,\"prereleaseTemplate\":\"{tag}-{datetime}\"}}")
-  let snap_plan = invoke(binary, v020_root, ["version", "--snapshot", "canary", "--no-format", "--json"], 0)
-  assert_true(snap_plan is { "consumedChangesets": [], "tags": [{ "version": String(sv), .. }], .. } && sv.has_prefix("0.2.0-canary-"))
+  let snap_plan = invoke(binary, v020_root, ["version", "--snapshot=canary", "--no-format", "--json"], 0)
+  assert_true(snap_plan is { "consumedChangesets": [], "tags": [], "analysis": { "isSnapshot": True, "releases": [{ "newVersion": String(sv), .. }], .. }, .. } && sv.has_prefix("0.2.0-canary-"))
   assert_true(@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/v020-c1.md")).to_string()))
-  assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  let snap_state = @json.parse(@fs.read_text(@path.Path(v020_root).join(@path.Path(".moonset/release-state.json")).to_string()))
+  assert_true(snap_state is { "isSnapshot": True, .. })
+  // Tagless `--snapshot` works with default config (`snapshot.enabled` defaults to true)
+  write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
+  write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1}")
+  let tagless_snap = invoke(binary, v020_root, ["version", "--snapshot", "--dry-run", "--json"], 0)
+  assert_true(tagless_snap is { "analysis": { "isSnapshot": True, "releases": [{ "newVersion": String(tv), .. }], .. }, .. } && tv.has_prefix("0.0.0-"))
   // Reset version and test pre.directory isolation end-to-end
   write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
   write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"pre\":{\"file\":\".changeset/pre.json\",\"directory\":\".changeset/pre\"}}")
@@ -303,5 +309,17 @@ async fn main {
   assert_true(!@fs.exists(@path.Path(v020_root).join(@path.Path(".changeset/pre.json")).to_string()))
   assert_true(@fs.read_text(@path.Path(v020_root).join(@path.Path("moon.mod")).to_string()).contains("0.2.0"))
 
-  println("CLI integration: Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.2.0 snapshot/pre.directory/no-format, lifecycle, exits, JSON and no-write checks passed")
+  // v0.3.0 security & UX checks: --id traversal blocked, --ignore, init omits pre.json gitignore, mixed npm+Cargo e2e
+  let v030_root = @fs.tmpdir(prefix="moonset-v030-")
+  defer { @fs.rmdir(v030_root, recursive=true) catch { _ => () } }
+  write(v030_root, "moon.mod", "name = \"acme/v030\"\nversion = \"0.1.0\"\n")
+  ignore(invoke(binary, v030_root, ["init", "--json"], 0))
+  assert_true(!@fs.exists(@path.Path(v030_root).join(@path.Path(".changeset/.gitignore")).to_string()))
+  assert_true(@fs.read_text(@path.Path(v030_root).join(@path.Path(".moonset/.gitignore")).to_string()).contains("pack-results-*.json"))
+  ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--patch", "--summary=bad", "--id=../evil", "--json"], 2))
+  ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--major", "--summary=v030 major", "--id=v030-maj", "--json"], 0))
+  let ignored_ver = invoke(binary, v030_root, ["version", "--ignore=acme/v030", "--dry-run", "--json"], 0)
+  assert_true(ignored_ver is { "analysis": { "releases": [], .. }, .. })
+
+  println("CLI integration (release binary): Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.3.0 pre/snapshot/ignore/id-security, lifecycle, exits, JSON and no-write checks passed")
 }

@@ -1,10 +1,19 @@
 ///|
-pub fn error_message(error : Error) -> String {
+fn error_message(error : Error) -> String {
   match error {
     @model.Invalid(diagnostic) => diagnostic.message
     @model.Io(message) => message
     other => other.to_string()
   }
+}
+
+///|
+fn invalid_error(
+  code : String,
+  message : String,
+  path~ : String = "",
+) -> @model.MoonsetError {
+  @model.Invalid(@model.diagnostic(code, message, path~))
 }
 
 ///|
@@ -24,6 +33,16 @@ pub(open) trait ExecutionHost {
   async fn tmpdir(Self, String) -> String
   async fn rmdir(Self, String) -> Unit
   async fn run(Self, String, Array[String], String?) -> @adapters.ProcessResult
+  async fn run_with_env(
+    Self,
+    String,
+    Array[String],
+    String?,
+    Map[String, String],
+    String?,
+    Int32?,
+  ) -> @adapters.ProcessResult
+  async fn sleep_ms(Self, Int32) -> Unit
   fn getenv(Self, String) -> String?
   fn now(Self) -> UInt64
 }
@@ -51,6 +70,8 @@ pub extend NativeHost with ExecutionHost::{
   tmpdir,
   rmdir,
   run,
+  run_with_env,
+  sleep_ms,
   getenv,
   now,
 }
@@ -152,6 +173,45 @@ pub impl ExecutionHost for NativeHost with fn run(_self, program, args, cwd) {
 }
 
 ///|
+pub impl ExecutionHost for NativeHost with fn run_with_env(
+  _self,
+  program,
+  args,
+  cwd,
+  environment,
+  stdin_text,
+  timeout_ms,
+) {
+  let cmd = match stdin_text {
+    Some(text) =>
+      @shell.Cmd(
+        program,
+        args,
+        cwd?,
+        inherit_env=false,
+        env=environment,
+        stdin=@shell.Text(text),
+      )
+    None => @shell.Cmd(program, args, cwd?, inherit_env=false, env=environment)
+  }
+  let output = cmd.output(timeout_ms?) catch {
+    error => raise @model.Io(error.to_string())
+  }
+  {
+    exit_code: output.exit_code(),
+    stdout: output.stdout(),
+    stderr: output.stderr(),
+  }
+}
+
+///|
+pub impl ExecutionHost for NativeHost with fn sleep_ms(_self, ms) {
+  if ms > 0 {
+    @async.sleep(ms)
+  }
+}
+
+///|
 pub impl ExecutionHost for NativeHost with fn getenv(_self, name) {
   @env.get_env_var(name)
 }
@@ -162,8 +222,8 @@ pub impl ExecutionHost for NativeHost with fn now(_self) {
 }
 
 ///|
-pub fn absolute_path(root : String, relative_path : String) -> String {
-  if relative_path == "" {
+fn absolute_path(root : String, relative_path : String) -> String {
+  if relative_path == "" || relative_path == "." {
     root
   } else {
     @path.Path(root).join(@path.Path(relative_path)).to_string()
@@ -171,8 +231,32 @@ pub fn absolute_path(root : String, relative_path : String) -> String {
 }
 
 ///|
-pub fn parent_dir(path : String) -> String {
+fn parent_dir(path : String) -> String {
   @path.Path(path).dirname().to_string()
+}
+
+///|
+/// Atomically replace `target` via a unique temporary file in the same directory.
+async fn[H : ExecutionHost] atomic_write_text(
+  host : H,
+  target : String,
+  content : String,
+  tag : String,
+) -> Unit {
+  let temporary = target +
+    ".moonset-" +
+    host.now().to_string() +
+    "-" +
+    tag +
+    ".tmp"
+  host.mkdir(parent_dir(target))
+  errdefer @async.protect_from_cancel(() => {
+    host.remove(temporary) catch {
+      _ => ()
+    }
+  })
+  host.write_text(temporary, content)
+  host.rename(temporary, target)
 }
 
 ///|
@@ -233,11 +317,21 @@ pub fn utc_datetime(milliseconds : UInt64) -> String {
 }
 
 ///|
-pub fn[H : ExecutionHost] package_manager_program(
+fn[H : ExecutionHost] is_windows_host(host : H) -> Bool {
+  host.getenv("ComSpec") is Some(_) || host.getenv("COMSPEC") is Some(_)
+}
+
+///|
+fn[H : ExecutionHost] package_manager_program(
   host : H,
-  name : String,
+  manager : @model.PackageManager,
 ) -> String {
-  if host.getenv("ComSpec") is Some(_) && (name == "npm" || name == "pnpm") {
+  let name = manager.text()
+  if is_windows_host(host) &&
+    (
+      manager == @model.PackageManager::Npm ||
+      manager == @model.PackageManager::Pnpm
+    ) {
     name + ".cmd"
   } else {
     name
@@ -245,26 +339,24 @@ pub fn[H : ExecutionHost] package_manager_program(
 }
 
 ///|
-pub fn manager_for_unit(
+fn manager_for_unit(
   snapshot : @model.WorkspaceSnapshot,
   unit : @model.ReleaseUnit,
-) -> String {
+) -> @model.PackageManager {
   for workspace in snapshot.workspaces {
     if workspace.id == unit.workspace_id {
       return workspace.manager
     }
   }
-  if unit.ecosystem == "cargo" {
-    "cargo"
-  } else if unit.ecosystem == "moonbit" {
-    "moon"
-  } else {
-    "npm"
+  match unit.ecosystem {
+    @model.Cargo => @model.PackageManager::Cargo
+    @model.MoonBit => @model.PackageManager::Moon
+    @model.Npm => @model.PackageManager::Npm
   }
 }
 
 ///|
-pub fn workspace_root_for_unit(
+fn workspace_root_for_unit(
   snapshot : @model.WorkspaceSnapshot,
   unit : @model.ReleaseUnit,
 ) -> String {
@@ -277,7 +369,7 @@ pub fn workspace_root_for_unit(
 }
 
 ///|
-pub fn bytes_fingerprint(bytes : Bytes) -> String {
+fn bytes_fingerprint(bytes : Bytes) -> String {
   let mut hash : UInt64 = 14695981039346656037UL
   for byte in bytes.iter() {
     hash = (hash ^ byte.to_uint64()) * 1099511628211UL
@@ -297,6 +389,10 @@ fn is_ephemeral_moonset_state_path(path : String) -> Bool {
   }
   unquoted == ".moonset/publish-state.json" ||
   unquoted == ".moonset/pack-results.json" ||
+  (
+    unquoted.has_prefix(".moonset/pack-results-") &&
+    unquoted.has_suffix(".json")
+  ) ||
   unquoted == ".moonset/version-journal.json"
 }
 
@@ -313,4 +409,19 @@ fn has_dirty_worktree_changes(porcelain : String) -> Bool {
     }
   }
   false
+}
+
+///|
+fn process_failure_detail(res : @adapters.ProcessResult) -> String {
+  let err = res.stderr.trim().to_owned()
+  if err != "" {
+    err
+  } else {
+    let out = res.stdout.trim().to_owned()
+    if out != "" {
+      out
+    } else {
+      "exit code " + res.exit_code.to_string()
+    }
+  }
 }

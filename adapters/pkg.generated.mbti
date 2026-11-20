@@ -2,6 +2,7 @@
 package "unmbt/moonset/adapters"
 
 import {
+  "moonbitlang/core/debug",
   "moonbitlang/core/json",
   "unmbt/moonset/model",
 }
@@ -15,7 +16,7 @@ pub fn parse_response(@json.Json) -> JsonlResponse raise @model.MoonsetError
 
 pub fn require_capability(CapabilityReport, Capability) -> Unit raise @model.MoonsetError
 
-pub async fn run_jsonl(PluginSpec, JsonlRequest) -> JsonlResponse raise @model.MoonsetError
+pub async fn run_jsonl(PluginSpec, JsonlRequest, host_allowed_programs? : Array[String]) -> JsonlResponse raise @model.MoonsetError
 
 pub fn validate_conformance(CapabilityReport) -> Unit raise @model.MoonsetError
 
@@ -25,10 +26,11 @@ pub fn validate_conformance(CapabilityReport) -> Unit raise @model.MoonsetError
 pub(all) struct AdapterRegistry {
   adapters : Map[String, CapabilityReport]
 }
-pub fn AdapterRegistry::require(Self, String, Capability) -> Unit raise @model.MoonsetError
+pub fn AdapterRegistry::require(Self, @model.Ecosystem, Capability) -> Unit raise @model.MoonsetError
+pub fn AdapterRegistry::require_named(Self, String, Capability) -> Unit raise @model.MoonsetError
 pub fn AdapterRegistry::with_builtins() -> Self
 
-#derive(Eq)
+#derive(Eq, @debug.Debug)
 pub(all) enum Capability {
   Discovery
   Range
@@ -40,16 +42,11 @@ pub(all) enum Capability {
 pub fn Capability::equal(Self, Self) -> Bool
 pub fn Capability::not_equal(Self, Self) -> Bool
 pub fn Capability::text(Self) -> String
+pub fn Capability::to_repr(Self) -> @debug.Repr
 
 pub(all) struct CapabilityReport {
   adapter : String
   supported : Array[Capability]
-}
-
-pub(all) struct FileHost {
-  read_text : (String) -> String?
-  write_text : (String, String) -> Unit raise @model.MoonsetError
-  exists : (String) -> Bool
 }
 
 pub(all) struct JsonlRequest {
@@ -76,10 +73,6 @@ pub(all) struct PluginSpec {
   environment : Map[String, String]
 }
 
-pub(all) struct ProcessHost {
-  run : (String, Array[String], String?, Map[String, String], String, Int32, Int32) -> ProcessResult raise @model.MoonsetError
-}
-
 pub(all) struct ProcessResult {
   exit_code : Int32
   stdout : String
@@ -88,9 +81,10 @@ pub(all) struct ProcessResult {
 
 pub(all) struct PublisherRegistry {
   plugins : Map[String, PluginSpec]
+  allowed_programs : Array[String]
 }
 pub async fn PublisherRegistry::execute(Self, String, String, @json.Json) -> @json.Json raise @model.MoonsetError
-pub fn PublisherRegistry::new() -> Self
+pub fn PublisherRegistry::new(allowed_programs? : Array[String]) -> Self
 pub fn PublisherRegistry::register(Self, String, PluginSpec) -> Unit
 
 pub(all) struct RegistryHost {
@@ -102,52 +96,8 @@ pub(all) struct RegistryHost {
 // Type aliases
 
 // Traits
-pub(open) trait ArtifactPort {
-  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
-}
-
-pub(open) trait ArtifactProvider {
-  fn artifacts(Self, Array[@model.ArtifactIntent]) -> Array[@model.PackResult]
-}
-
-pub(open) trait DiscoveryPort {
-  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
-}
-
-pub(open) trait EcosystemAdapter {
-  fn name(Self) -> String
-  fn capabilities(Self) -> Array[Capability]
-}
-
-pub(open) trait LockfilePort {
-  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[@model.FileEdit] raise @model.MoonsetError
-}
-
-pub(open) trait OperationalAdapter {
-  fn name(Self) -> String
-  fn capabilities(Self) -> Array[Capability]
-  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
-  fn satisfies(Self, String, String) -> Bool
-  fn rewrite_range(Self, String, String) -> String raise @model.MoonsetError
-  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
-  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[@model.FileEdit] raise @model.MoonsetError
-  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
-  fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
-  fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
-  fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
-}
-
-pub(open) trait OwnershipPort {
-  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
-}
-
 pub(open) trait PublisherPort {
   fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
   fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
   fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
-}
-
-pub(open) trait RangePort {
-  fn satisfies(Self, String, String) -> Bool
-  fn rewrite(Self, String, String) -> String raise @model.MoonsetError
 }

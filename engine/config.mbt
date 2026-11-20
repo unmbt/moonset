@@ -1,4 +1,19 @@
 ///|
+let cached_config_schema : Ref[Json?] = Ref(None)
+
+///|
+fn builtin_config_schema() -> Json raise @model.MoonsetError {
+  match cached_config_schema.val {
+    Some(schema) => schema
+    None => {
+      let parsed = parse_json(config_schema_text, "builtin-config-schema")
+      cached_config_schema.val = Some(parsed)
+      parsed
+    }
+  }
+}
+
+///|
 pub fn parse_json(
   source : String,
   path : String,
@@ -49,10 +64,44 @@ fn strings(value : Json) -> Array[String] {
 }
 
 ///|
+fn normalize_group_entry(entry : String) -> String {
+  if entry.has_prefix("!") && !entry.has_prefix("!(") {
+    "!" + unit_pattern_key(entry[1:].to_owned())
+  } else {
+    unit_pattern_key(entry)
+  }
+}
+
+///|
 fn groups(value : Json) -> Array[Array[String]] {
   match value {
-    Array(items) => items.map(x => strings(x).map(canonical_id))
+    Array(items) => items.map(x => strings(x).map(normalize_group_entry))
     _ => []
+  }
+}
+
+///|
+fn validate_domain_relative_path(
+  label : String,
+  raw_path : String,
+  config_path : String,
+) -> Unit raise @model.MoonsetError {
+  let normalized = raw_path.replace_all(old="\\", new="/").trim().to_owned()
+  let has_drive = normalized.length() >= 2 &&
+    (
+      (normalized[0] >= 'A' && normalized[0] <= 'Z') ||
+      (normalized[0] >= 'a' && normalized[0] <= 'z')
+    ) &&
+    normalized[1] == ':'
+  if normalized == "" ||
+    normalized.has_prefix("/") ||
+    has_drive ||
+    normalized.split("/").any(seg => seg.to_owned() == "..") {
+    invalid(
+      label + " must stay inside the release domain: " + raw_path,
+      path=config_path,
+      code="invalid-config",
+    )
   }
 }
 
@@ -141,12 +190,39 @@ fn locate_json_path(source : String, json_path : String) -> (Int32, Int32) {
 }
 
 ///|
+fn parse_artifacts_field(value : Json) -> Array[@model.ArtifactTargetSpec] {
+  let specs : Array[@model.ArtifactTargetSpec] = []
+  match property(value, "artifacts") {
+    Array(items) =>
+      for item in items {
+        if item is { "target": String(target), .. } {
+          let linked_package = match item {
+            { "package": String(pkg), .. } => Some(canonical_id(pkg))
+            _ => None
+          }
+          let required = match item {
+            { "required": False, .. } => false
+            _ => true
+          }
+          let path = match item {
+            { "path": String(p), .. } => Some(p)
+            _ => None
+          }
+          specs.push({ target, linked_package, required, path, })
+        }
+      }
+    _ => ()
+  }
+  specs
+}
+
+///|
 pub fn parse_config(
   source : String,
   path~ : String = ".changeset/config.json",
 ) -> @model.Config raise @model.MoonsetError {
   let raw = parse_json(source, path)
-  let schema = parse_json(config_schema_text, "builtin-config-schema")
+  let schema = builtin_config_schema()
   if schema_issue(raw, schema, schema, "$") is Some(issue) {
     let json_path = issue.split(":").next().unwrap_or("$").to_owned()
     let (line, column) = locate_json_path(source, json_path)
@@ -178,34 +254,48 @@ pub fn parse_config(
   }
   let fixed = groups(property(raw, "fixed"))
   let linked = groups(property(raw, "linked"))
-  let ignore = strings(property(raw, "ignore")).map(canonical_id)
+  let ignore = strings(property(raw, "ignore")).map(normalize_group_entry)
   let occupied : Map[String, Bool] = Map([])
   for group in fixed + linked {
     for id in group {
-      if occupied.contains(id) {
-        invalid("Overlapping or repeated version group member: " + id, path~)
+      validate_glob_pattern(id, allow_negation=true, path~)
+      if !(id.has_prefix("!") && !id.has_prefix("!(")) {
+        if !has_glob_meta(id) && occupied.contains(id) {
+          invalid("Overlapping or repeated version group member: " + id, path~)
+        }
+        occupied[id] = true
       }
-      occupied[id] = true
     }
   }
-  for id in occupied.keys().collect() + ignore {
-    validate_glob_pattern(id, allow_negation=false, path~)
+  for id in ignore {
+    validate_glob_pattern(id, allow_negation=true, path~)
   }
-  let mixed = property(property(raw, "experimental"), "mixedWorkspaces")
-  let mixed_workspaces : Array[@model.MixedWorkspaceSpec] = []
-  let bridges : Array[@model.Bridge] = []
-  let unit_overrides : Map[String, @model.UnitOverride] = Map([])
-  if mixed != Json::null() {
+  let mixed_raw = property(property(raw, "experimental"), "mixedWorkspaces")
+  let mixed : @model.MixedWorkspacesConfig? = if mixed_raw != Json::null() {
+    let mode = match property(mixed_raw, "mode") {
+      String(s) =>
+        match @model.MixedMode::parse(s) {
+          Some(m) => m
+          None => {
+            invalid("Invalid mixedWorkspaces.mode: " + s, path~)
+            @model.Coexist
+          }
+        }
+      _ => @model.Coexist
+    }
+    let mixed_workspaces : Array[@model.MixedWorkspaceSpec] = []
+    let bridges : Array[@model.Bridge] = []
+    let unit_overrides : Map[String, @model.UnitOverride] = Map([])
     let ids : Map[String, Bool] = Map([])
-    match mixed {
+    match mixed_raw {
       { "workspaces": Array(workspaces), .. } =>
         for ws in workspaces {
           guard ws
             is {
               "id": String(id),
-              "ecosystem": String(ecosystem),
+              "ecosystem": String(eco_str),
               "root": String(root),
-              "manager": String(manager),
+              "manager": String(mgr_str),
               "includeRoot": include_root,
               ..
             } else {
@@ -215,8 +305,13 @@ pub fn parse_config(
           if ids.contains(id) {
             invalid("Duplicate workspace ID: " + id, path~)
           }
-          if !["moon", "npm", "pnpm", "cargo"].contains(manager) {
-            invalid("Unsupported workspace manager: " + manager, path~)
+          guard @model.Ecosystem::parse(eco_str) is Some(ecosystem) else {
+            invalid("Unsupported workspace ecosystem: " + eco_str, path~)
+            continue
+          }
+          guard @model.PackageManager::parse(mgr_str) is Some(manager) else {
+            invalid("Unsupported workspace manager: " + mgr_str, path~)
+            continue
           }
           ids[id] = true
           mixed_workspaces.push({
@@ -229,7 +324,7 @@ pub fn parse_config(
         }
       _ => invalid("Mixed workspaces require a workspaces array", path~)
     }
-    match mixed {
+    match mixed_raw {
       { "bridges": Array(items), .. } =>
         for item in items {
           guard item
@@ -237,7 +332,7 @@ pub fn parse_config(
               "consumer": String(consumer),
               "producer": String(producer),
               "bump": String(bump),
-              "waitFor": String(wait_for),
+              "waitFor": String(wait_for_str),
               ..
             } else {
             invalid("Invalid build bridge declaration", path~)
@@ -252,14 +347,15 @@ pub fn parse_config(
               @model.Patch
             }
           }
-          if !["build", "publish"].contains(wait_for) {
+          guard @model.BridgeWaitFor::parse(wait_for_str) is Some(wait_for) else {
             invalid("Bridge waitFor must be build or publish", path~)
+            continue
           }
           bridges.push({ consumer, producer, bump: level, wait_for, })
         }
       _ => ()
     }
-    match mixed {
+    match mixed_raw {
       { "units": Object(items), .. } =>
         for id, value in items {
           let publish = match property(value, "publish") {
@@ -275,14 +371,40 @@ pub fn parse_config(
             String(format) => Some(format)
             _ => None
           }
-          unit_overrides[id] = { publish, publisher, tag_format, }
+          let artifacts = parse_artifacts_field(value)
+          unit_overrides[canonical_id(id)] = {
+            publish,
+            publisher,
+            tag_format,
+            artifacts,
+          }
         }
       _ => ()
     }
+    let lockfiles = match property(mixed_raw, "lockfiles") {
+      String(s) =>
+        match @model.LockfileMode::parse(s) {
+          Some(m) => m
+          None => @model.Refresh
+        }
+      _ => @model.Refresh
+    }
+    Some({
+      mode,
+      workspaces: mixed_workspaces,
+      bridges,
+      unit_overrides,
+      lockfiles,
+    })
+  } else {
+    None
   }
   let changed_patterns = match property(raw, "changedFilePatterns") {
     Array(_) as xs => strings(xs)
     _ => defaults.changed_patterns
+  }
+  for pattern in changed_patterns {
+    validate_glob_pattern(pattern, allow_negation=true, path~)
   }
   let formatter = match property(raw, "formatter") {
     String(s) => s
@@ -324,28 +446,24 @@ pub fn parse_config(
   }
   let changelog_raw = property(raw, "changelog")
   let changelog_enabled = changelog_raw != Json::boolean(false)
-  let changelog = match changelog_raw {
+  let changelog_generator = match changelog_raw {
     False => "none"
-    String(s) => s
     { "generator": String(s), .. } => s
-    _ => defaults.changelog
+    _ => defaults.changelog.generator
   }
   let changelog_file = match changelog_raw {
     { "file": String(file), .. } => file
-    _ => defaults.changelog_file
+    _ => defaults.changelog.file
   }
+  validate_domain_relative_path("changelog.file", changelog_file, path)
   let changelog_options = property(changelog_raw, "options")
   let github_section = property(raw, "github")
-  let github = match property(changelog_options, "repo") {
+  let github_repo = match property(changelog_options, "repo") {
     String(s) if s != "" => Some(s)
     _ =>
       match property(github_section, "repo") {
         String(s) if s != "" => Some(s)
-        _ =>
-          match property(changelog_raw, "repo") {
-            String(s) if s != "" => Some(s)
-            _ => None
-          }
+        _ => None
       }
   }
   let github_links = property(github_section, "links") != Json::boolean(false)
@@ -356,7 +474,7 @@ pub fn parse_config(
     property(github_section, "thanks") != Json::boolean(false)
   }
   let access = match property(raw, "access") {
-    String(s) => s
+    String(s) => @model.Access::parse(s).unwrap_or(defaults.access)
     _ => defaults.access
   }
   let base_branch = match property(raw, "baseBranch") {
@@ -365,26 +483,27 @@ pub fn parse_config(
   }
   let commit_raw = property(raw, "commit")
   let commit_mode = match commit_raw {
-    False => "never"
-    { "mode": String(mode), .. } => mode
-    _ => defaults.commit_mode
+    False => @model.Never
+    { "mode": String(m), .. } =>
+      @model.CommitMode::parse(m).unwrap_or(defaults.commit.mode)
+    _ => defaults.commit.mode
   }
   let commit_add_message = match property(commit_raw, "addMessage") {
     String(msg) if msg.trim() != "" => msg
-    _ => defaults.commit_add_message
+    _ => defaults.commit.add_message
   }
   let commit_version_message = match property(commit_raw, "versionMessage") {
     String(msg) if msg.trim() != "" => msg
-    _ => defaults.commit_version_message
+    _ => defaults.commit.version_message
   }
   let publisher = property(raw, "publisher")
   let publisher_kind = match property(publisher, "kind") {
     String(kind) => kind
-    _ => defaults.publisher_kind
+    _ => defaults.publisher.kind
   }
   let publisher_registry = match property(publisher, "registry") {
     String(registry) => registry
-    _ => defaults.publisher_registry
+    _ => defaults.publisher.registry
   }
   let publisher_dry_run_first = property(publisher, "dryRunFirst") !=
     Json::boolean(false)
@@ -402,50 +521,83 @@ pub fn parse_config(
   if publisher_registry != "default" {
     let _ = parse_target_mapping(Some(publisher_registry))
   }
-  match property(property(raw, "snapshot"), "prereleaseTemplate") {
-    String(template) => validate_snapshot_template(template, path~)
-    _ => ()
+  let snap_raw = property(raw, "snapshot")
+  let snap_enabled = match property(snap_raw, "enabled") {
+    False => false
+    True => true
+    _ => defaults.snapshot.enabled
   }
-  let pre_directory = match property(property(raw, "pre"), "directory") {
+  let snap_use_calc = property(snap_raw, "useCalculatedVersion") ==
+    Json::boolean(true)
+  let snap_template = match property(snap_raw, "prereleaseTemplate") {
+    String(template) => {
+      validate_snapshot_template(template, path~)
+      template
+    }
+    _ => defaults.snapshot.prerelease_template
+  }
+  let pre_raw = property(raw, "pre")
+  let pre_file = match property(pre_raw, "file") {
     String(s) => s
-    _ => defaults.pre_directory
+    _ => defaults.pre.file
   }
-  let normalized_pre_dir = pre_directory.replace_all(old="\\", new="/")
-  if normalized_pre_dir.has_prefix("/") ||
-    normalized_pre_dir.split("/").any(seg => seg.to_owned() == "..") {
+  validate_domain_relative_path("pre.file", pre_file, path)
+  let pre_directory = match property(pre_raw, "directory") {
+    String(s) => s
+    _ => defaults.pre.directory
+  }
+  validate_domain_relative_path("pre.directory", pre_directory, path)
+  let private_raw = property(raw, "privatePackages")
+  let (private_version, private_tag, private_publish) = match private_raw {
+    True => (true, true, false)
+    False => (false, false, false)
+    Object(_) =>
+      (
+        property(private_raw, "version") == Json::boolean(true),
+        property(private_raw, "tag") == Json::boolean(true),
+        property(private_raw, "publish") == Json::boolean(true),
+      )
+    _ =>
+      (
+        defaults.private_packages.version,
+        defaults.private_packages.tag,
+        defaults.private_packages.publish,
+      )
+  }
+  if !private_version && (private_tag || private_publish) {
     invalid(
-      "pre.directory must stay inside the release domain: " + pre_directory,
+      "privatePackages.tag and privatePackages.publish require privatePackages.version to be true",
       path~,
       code="invalid-config",
     )
   }
-  let private_packages = property(raw, "privatePackages")
-  let private_version = property(private_packages, "version") ==
-    Json::boolean(true)
-  let private_tag = property(private_packages, "tag") == Json::boolean(true)
-  let private_publish = property(private_packages, "publish") ==
-    Json::boolean(true)
-  let tag = property(raw, "tag")
-  let tag_create = match property(tag, "create") {
+  let tag_raw = property(raw, "tag")
+  let tag_create = match property(tag_raw, "create") {
     False => false
     _ => true
   }
-  let tag_after_publish = match property(tag, "afterPublish") {
+  let tag_after_publish = match property(tag_raw, "afterPublish") {
     False => false
     _ => true
   }
-  let tag_format = match property(tag, "format") {
+  let tag_format = match property(tag_raw, "format") {
     String(format) => format
-    _ => defaults.tag_format
+    _ => defaults.tag.format
   }
-  let tag_push = property(tag, "push") == Json::boolean(true)
-  let lockfiles = match mixed {
-    { "lockfiles": String(mode), .. } => mode
-    _ => defaults.lockfiles
+  let tag_push = property(tag_raw, "push") == Json::boolean(true)
+  let update_dependents = match property(raw, "updateInternalDependents") {
+    String(s) =>
+      @model.UpdateDependents::parse(s).unwrap_or(defaults.update_dependents)
+    _ => defaults.update_dependents
   }
-  for pattern in changed_patterns {
-    validate_glob_pattern(pattern, allow_negation=true, path~)
-  }
+  let only_peer_out_of_range = property(
+      raw, "onlyUpdatePeerDependentsWhenOutOfRange",
+    ) ==
+    Json::boolean(true)
+  let workspace_protocol_only = property(
+      raw, "bumpVersionsWithWorkspaceProtocolOnly",
+    ) ==
+    Json::boolean(true)
   {
     fixed,
     linked,
@@ -456,47 +608,50 @@ pub fn parse_config(
     } else {
       @model.Patch
     },
-    update_dependents: match property(raw, "updateInternalDependents") {
-      String(s) => s
-      _ => defaults.update_dependents
-    },
+    update_dependents,
+    only_update_peer_dependents_when_out_of_range: only_peer_out_of_range,
+    bump_versions_with_workspace_protocol_only: workspace_protocol_only,
     changed_patterns,
-    pre_file: match property(property(raw, "pre"), "file") {
-      String(s) => s
-      _ => defaults.pre_file
-    },
-    pre_directory,
-    mixed: mixed != Json::null(),
     formatter,
     format_mode,
-    changelog_enabled,
-    changelog,
-    github,
-    github_links,
-    github_thanks,
     access,
     base_branch,
-    commit_mode,
-    commit_add_message,
-    commit_version_message,
-    private_version,
-    private_tag,
-    private_publish,
-    changelog_file,
-    tag_create,
-    tag_after_publish,
-    tag_format,
-    tag_push,
-    publisher_kind,
-    publisher_registry,
-    publisher_dry_run_first,
-    publisher_command,
-    publisher_token_env,
-    lockfiles,
-    mixed_workspaces,
-    bridges,
-    unit_overrides,
+    changelog: {
+      enabled: changelog_enabled,
+      generator: changelog_generator,
+      file: changelog_file,
+    },
+    commit: {
+      mode: commit_mode,
+      add_message: commit_add_message,
+      version_message: commit_version_message,
+    },
+    private_packages: {
+      version: private_version,
+      tag: private_tag,
+      publish: private_publish,
+    },
+    pre: { file: pre_file, directory: pre_directory, },
+    snapshot: {
+      enabled: snap_enabled,
+      use_calculated_version: snap_use_calc,
+      prerelease_template: snap_template,
+    },
+    tag: {
+      create: tag_create,
+      after_publish: tag_after_publish,
+      format: tag_format,
+      push: tag_push,
+    },
+    publisher: {
+      kind: publisher_kind,
+      registry: publisher_registry,
+      dry_run_first: publisher_dry_run_first,
+      command: publisher_command,
+      token_env: publisher_token_env,
+    },
+    github: { repo: github_repo, links: github_links, thanks: github_thanks, },
     generators,
-    raw,
+    mixed,
   }
 }

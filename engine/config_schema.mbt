@@ -46,18 +46,25 @@ let config_schema_text : String =
   #|    "formatter": { "enum": ["builtin", "prettier", "oxfmt", "biome", "dprint"] },
   #|    "updateInternalDependencies": { "enum": ["patch", "minor"] },
   #|    "updateInternalDependents": { "enum": ["out-of-range", "always"] },
+  #|    "onlyUpdatePeerDependentsWhenOutOfRange": { "type": "boolean" },
+  #|    "bumpVersionsWithWorkspaceProtocolOnly": { "type": "boolean" },
   #|    "changedFilePatterns": { "type": "array", "items": { "type": "string", "minLength": 1 } },
   #|    "fixed": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
   #|    "linked": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
   #|    "ignore": { "type": "array", "items": { "type": "string", "minLength": 1 } },
   #|    "privatePackages": {
-  #|      "type": "object",
-  #|      "additionalProperties": false,
-  #|      "properties": {
-  #|        "version": { "type": "boolean" },
-  #|        "tag": { "type": "boolean" },
-  #|        "publish": { "type": "boolean" }
-  #|      }
+  #|      "oneOf": [
+  #|        { "type": "boolean" },
+  #|        {
+  #|          "type": "object",
+  #|          "additionalProperties": false,
+  #|          "properties": {
+  #|            "version": { "type": "boolean" },
+  #|            "tag": { "type": "boolean" },
+  #|            "publish": { "type": "boolean" }
+  #|          }
+  #|        }
+  #|      ]
   #|    },
   #|    "pre": {
   #|      "type": "object",
@@ -131,6 +138,7 @@ let config_schema_text : String =
   #|    },
   #|    "experimental": {
   #|      "type": "object",
+  #|      "additionalProperties": false,
   #|      "properties": {
   #|        "mixedWorkspaces": { "$ref": "#/$defs/mixedWorkspaces" }
   #|      }

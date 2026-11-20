@@ -38,17 +38,41 @@ fn sanitize_user_text(text : String) -> String {
 }
 
 ///|
+/// Sanitize text placed inside backticks / shell code blocks: escape backticks
+/// and newlines without injecting zero-width spaces into scoped `@org/pkg` names.
+fn sanitize_code_text(text : String) -> String {
+  text
+  .replace_all(old="\r", new="")
+  .replace_all(old="\n", new=" ")
+  .replace_all(old="`", new="'")
+  .replace_all(old="\"", new="'")
+}
+
+///|
+fn truncate_chars(text : String, max_chars : Int32) -> String {
+  let chars = text.to_array()
+  if chars.length() <= max_chars {
+    return text
+  }
+  if max_chars <= 0 {
+    return ""
+  }
+  String::from_array(chars[:max_chars].to_owned())
+}
+
+///|
 fn first_summary_line(summary : String) -> String {
   for raw in summary.replace_all(old="\r\n", new="\n").split("\n") {
     let trimmed = raw.trim().to_owned()
     if trimmed != "" {
-      let clean = sanitize_user_text(trimmed)
+      let truncated = if trimmed.to_array().length() > 137 {
+        truncate_chars(trimmed, 137) + "..."
+      } else {
+        trimmed
+      }
+      return sanitize_user_text(truncated)
         .replace_all(old="|", new="\\|")
         .replace_all(old="`", new="\\`")
-      if clean.length() > 140 {
-        return clean[:137].to_owned() + "..."
-      }
-      return clean
     }
   }
   "(no summary)"
@@ -151,11 +175,13 @@ fn deterministic_changeset_slug(
     "headRef": head_ref,
     "changed": Json::array(changed.map(Json::string)),
   })
-  let short_hash = if digest.length() > 8 {
-    digest[:8].to_owned()
-  } else {
-    digest
+  // Strip algorithm prefix (`fnv1a64:`) before slicing so the slug carries actual
+  // hex hash entropy and never contains `:` (illegal in Windows filenames).
+  let hex = match digest.find(":") {
+    Some(idx) => digest[idx + 1:].to_owned()
+    None => digest
   }
+  let short_hash = if hex.length() > 8 { hex[:8].to_owned() } else { hex }
   sanitize_slug_token(head_ref) + "-" + short_hash
 }
 
@@ -171,12 +197,14 @@ fn encode_ref_path(head_ref : String) -> String {
 ///|
 fn truncate_markdown(body : String, max_length : Int32) -> String {
   let limit = if max_length < 256 { 256 } else { max_length }
-  if body.length() <= limit {
+  let body_chars = body.to_array()
+  if body_chars.length() <= limit {
     return body
   }
   let suffix = "\n\n> ⚠️ Output truncated due to comment length limit; see the workflow run logs for full details.\n"
-  let budget = limit - suffix.length()
-  let cut_raw = if budget > 0 { body[:budget].to_owned() } else { "" }
+  let suffix_len = suffix.to_array().length()
+  let budget = limit - suffix_len
+  let cut_raw = if budget > 0 { truncate_chars(body, budget) } else { "" }
   let cut = match cut_raw.rev_find("\n") {
     Some(idx) if idx > 0 => cut_raw[:idx].to_owned()
     _ => cut_raw
@@ -190,17 +218,19 @@ fn touched_units(
   changed : Array[String],
 ) -> Array[@model.ReleaseUnit] {
   let result : Array[@model.ReleaseUnit] = []
-  for unit in snapshot.units {
-    if snapshot.config.ignore.contains(unit.id) {
-      continue
-    }
-    if changed.any(path => unit_owns_path(path, unit)) {
+  let seen : Map[String, Bool] = Map([])
+  for path in changed {
+    for unit in owning_units_for_path(path, snapshot.units) {
+      if is_unit_ignored(snapshot.config, unit.id) || seen.contains(unit.id) {
+        continue
+      }
+      seen[unit.id] = true
       result.push(unit)
     }
   }
   if result.is_empty() {
     for unit in snapshot.units {
-      if !snapshot.config.ignore.contains(unit.id) {
+      if !is_unit_ignored(snapshot.config, unit.id) {
         result.push(unit)
         break
       }
@@ -271,18 +301,36 @@ pub fn status_markdown(
       lines.push("")
       lines.push("| Package | Version | Bump |")
       lines.push("|---|---|---|")
+      let released_ids : Map[String, Bool] = Map([])
       for release in plan.releases {
+        released_ids[release.unit_id] = true
         lines.push(
           "| `" +
-          sanitize_user_text(release.unit_id).replace_all(old="|", new="\\|") +
+          sanitize_code_text(release.unit_id).replace_all(old="|", new="\\|") +
           "` | `" +
-          sanitize_user_text(release.old_version) +
+          sanitize_code_text(release.old_version) +
           "` → `" +
-          sanitize_user_text(release.new_version) +
+          sanitize_code_text(release.new_version) +
           "` | `" +
           release.level.text() +
           "` |",
         )
+      }
+      // Highlight modified managed units not covered by any release in this PR (like changesets/bot).
+      if !changed.is_empty() && snapshot.units.length() > 1 {
+        let uncovered : Array[String] = []
+        for unit in touched_units(snapshot, changed) {
+          if !released_ids.contains(unit.id) && !uncovered.contains(unit.id) {
+            uncovered.push(unit.id)
+          }
+        }
+        if !uncovered.is_empty() {
+          lines.push("")
+          lines.push(
+            "> ℹ️ Modified packages without a changeset in this PR: " +
+            uncovered.map(id => "`" + sanitize_code_text(id) + "`").join(", "),
+          )
+        }
       }
       if !plan.changesets.is_empty() {
         lines.push("")
@@ -296,7 +344,7 @@ pub fn status_markdown(
         for cs in plan.changesets {
           lines.push(
             "- `" +
-            sanitize_user_text(cs.path) +
+            sanitize_code_text(cs.path) +
             "`: " +
             first_summary_line(cs.summary),
           )
@@ -315,7 +363,7 @@ pub fn status_markdown(
       lines.push("")
       let shown = if changed.length() > 20 { 20 } else { changed.length() }
       for i in 0..<shown {
-        lines.push("- `" + sanitize_user_text(changed[i]) + "`")
+        lines.push("- `" + sanitize_code_text(changed[i]) + "`")
       }
       if changed.length() > 20 {
         lines.push(
@@ -330,7 +378,7 @@ pub fn status_markdown(
       lines.push("```sh")
       lines.push(
         "moonset add --package \"" +
-        sanitize_user_text(sample_unit) +
+        sanitize_code_text(sample_unit) +
         "\" --type patch --summary \"Describe your change\"",
       )
       lines.push("```")
@@ -392,7 +440,7 @@ pub fn error_markdown(
   let loc = if diagnostic.path == "" {
     "(workspace)"
   } else {
-    sanitize_user_text(diagnostic.path) +
+    sanitize_code_text(diagnostic.path) +
     ":" +
     diagnostic.line.to_string() +
     ":" +
@@ -402,7 +450,7 @@ pub fn error_markdown(
     bot_marker,
     "### ❌ Failed to inspect changesets",
     "",
-    "- **Code**: `" + sanitize_user_text(diagnostic.code) + "`",
+    "- **Code**: `" + sanitize_code_text(diagnostic.code) + "`",
     "- **Location**: `" + loc + "`",
     "- **Message**: " + sanitize_user_text(diagnostic.message),
     "",

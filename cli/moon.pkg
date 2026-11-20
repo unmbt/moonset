@@ -8,13 +8,11 @@ import {
   "unmbt/moonset/changelog",
   "unmbt/moonset/executor",
   "moonbitlang/core/async/fs",
+  "moonbitlang/core/async/shell",
   "moonbitlang/core/async/stdio",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
-  "mizchi/tui",
-  "mizchi/tui/render",
-  "mizchi/tui/io",
 }
 
 supported_targets = "native"
@@ -23,8 +21,10 @@ options(
   "allow-experimental-packages": [
     "moonbitlang/core/async",
     "moonbitlang/core/async/fs",
+    "moonbitlang/core/async/shell",
     "moonbitlang/core/async/stdio",
   ],
+  "native-stub": [ "tty_native.c" ],
 )
 
 rule(

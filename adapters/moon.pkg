@@ -1,6 +1,7 @@
 import {
   "unmbt/moonset/model",
   "moonbitlang/core/json",
+  "moonbitlang/core/env",
   "moonbitlang/core/async/shell",
 }
 
@@ -16,5 +17,4 @@ options(
 
 import {
   "moonbitlang/core/async",
-  "moonbitlang/core/env",
 } for "test"

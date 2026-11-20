@@ -28,7 +28,7 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
   "ignore": [],
   "privatePackages": { "version": false, "tag": false, "publish": false },
   "pre": { "file": ".changeset/pre.json", "directory": ".changeset/pre" },
-  "snapshot": { "enabled": false, "useCalculatedVersion": false, "prereleaseTemplate": "{tag}-{datetime}" },
+  "snapshot": { "enabled": true, "useCalculatedVersion": false, "prereleaseTemplate": "{tag}-{datetime}" },
   "tag": { "create": true, "afterPublish": true, "format": "auto", "push": false },
   "publisher": { "kind": "moon", "registry": "default", "dryRunFirst": true },
   "format": "auto",
@@ -51,7 +51,7 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 | `ignore` | string[] | 暂时跳过的包（支持精确名称与 glob 匹配）；若与非 ignore 包存在必须联动的依赖，规划失败。 |
 | `privatePackages` | object | 分别控制 version、tag、publish，默认全关；不能绕过 npm `private: true` 等原生发布禁令。MoonBit 的 restricted visibility 不等于 npm private。 |
 | `pre` | object | 预发布状态文件（默认 `.changeset/pre.json`）和 changeset 隔离目录（默认 `.changeset/pre`）；active 预发布期间已消费 changeset 会原子迁入隔离目录并在 `pre exit` 毕业时统一清理。 |
-| `snapshot` | object | 快照版本开关（`enabled`，默认 `false`）、基准版本策略（`useCalculatedVersion`，`false` 使用 `0.0.0`，`true` 使用计算版本）与预发布模板（`prereleaseTemplate`，默认 `{tag}-{datetime}`，支持 `{tag}`、`{datetime}`、`{commit}`、`{version}`）。 |
+| `snapshot` | object | 快照版本开关（`enabled`，默认 `true`，显式设 `false` 可禁用）、基准版本策略（`useCalculatedVersion`，`false` 使用 `0.0.0`，`true` 使用计算版本）与预发布模板（`prereleaseTemplate`，支持 `{tag}`、`{datetime}`、`{timestamp}`、`{commit}`、`{commit-short}`、`{version}`；支持无 tag 调用）。 |
 | `tag` | object | 标签创建时机、模板策略和推送开关。 |
 | `publisher` | object | `moon`、`command` 或 `api` publisher；`command` 走参数化 JSONL 协议，`api` 通过 `ApiPublisherRegistry` + `publish_release_with_api` 编程接入；`registry` 支持全局值或分目标映射（如 `npm=https://...,cargo=private`）。 |
 | `changedFilePatterns` | string[] | `status --since` 认定包发生变化的 glob 列表，支持 `*`、`**`、`?`、`[...]`、`{...}`、`(...)`/extglob 与 `!` 否定过滤。 |
@@ -90,11 +90,9 @@ defaults < .changeset/config.json < MOONSET_*（仅非机密运行选项） < CL
 - `changelog` 和 `publisher` 的自定义名称只能引用注册的 MoonBit API 或显式允许的外部命令。
 - 配置错误在任何写操作前报告；错误消息包含 JSON path，例如 `$.tag.format`。
 
-## 6. 混合 workspace（实验草案）
+## 6. 混合 workspace 配置
 
-Phase 1 接受 MoonBit-only 的显式 coexist 分区；同目录 JS/Cargo 文件报告 unmanaged。显式声明 npm/Cargo workspace、unified 模式或非空 bridges 会报能力错误。其他执行阶段字段只做配置验证，不执行生成器、格式化器或 publisher。缺失默认配置时采用默认值；显式指定不存在的配置时报错。
-
-详见 [混合 workspace 设计](mixed-workspaces.md) 和 [完整配置示例](examples/mixed-workspaces.json)。该扩展已加入本地 JSON Schema，以便验证文档形状；通过 schema 不代表 CLI 已实现该能力。
+混合生态配置位于 `experimental.mixedWorkspaces`，已支持 MoonBit、npm/pnpm 与 Cargo（crates.io）的共存（`coexist`）与统一管理（`unified`）。缺失默认配置时采用默认值；显式指定不存在的配置时报错。详见 [混合 workspace 设计](mixed-workspaces.md) 和 [完整配置示例](examples/mixed-workspaces.json)。
 
 | 子字段 | 契约 |
 |---|---|
@@ -106,7 +104,7 @@ Phase 1 接受 MoonBit-only 的显式 coexist 分区；同目录 JS/Cargo 文件
 
 混合模式 `fixed`、`linked`、`ignore` 使用完整 UnitId。未覆盖的 publisher 按生态选择：MoonBit → moon，npm → npm；全局 moon publisher 不作用于 JS。全局显式指定 incompatible publisher 则报错。`tagFormat` 的生态模板用于避免同名跨生态 Git tag 冲突；不能直接使用包含冒号的 UnitId。
 
-schema 可校验结构和 manager/生态配对；重复 workspace ID、路径越界、字段所有权、不存在的 UnitId、依赖环和 publisher 能力需要语义校验。`cargo` 在 schema 中保留，但在 Cargo adapter 发布前必须返回 unsupported capability。
+schema 校验结构和 manager/生态配对；重复 workspace ID、路径越界、字段所有权、不存在的 UnitId、依赖环和 publisher 能力由语义校验保证。Cargo（crates.io）已支持，非 crates.io Cargo registry 与 Tauri 同步保持 Deferred。
 
 
 ### External changelog generators

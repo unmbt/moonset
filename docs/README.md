@@ -6,7 +6,7 @@
 
 ## 阅读顺序
 
-核心契约与可执行能力已覆盖 Phase 1～5 与模块化 PR Bot GitHub Actions；混合生态已支持 MoonBit、npm/pnpm 与 Cargo（`crates.io`），详见 [Phase 1 契约](phase-1-contract.md) 与 [混合 workspace 设计](mixed-workspaces.md)。
+核心契约与可执行能力已覆盖 Phase 1～6、v0.3.0 API/Adapter 收敛（[ADR-008](decisions/008-v030-api-and-adapter-convergence.md)）、Changesets v3 预发布/快照模型（[ADR-009](decisions/009-changesets-v3-pre-and-snapshot-model.md)）与模块化 PR Bot GitHub Actions；混合生态已支持 MoonBit、npm/pnpm 与 Cargo（`crates.io`），详见 [命令契约](commands.md) 与 [混合 workspace 设计](mixed-workspaces.md)。
 
 1. [需求规格](requirements.md)：为什么做、做什么、不做什么，以及可验收条件。
 2. [命令契约](commands.md)：CLI 的参数、输出、退出码和副作用。
@@ -22,7 +22,7 @@
 12. [混合 workspace 设计](mixed-workspaces.md)：MoonBit + npm/pnpm 的共存、统一管理、跨生态构建与发布；包含 napi-rs/Tauri 类型场景和后续 Cargo 边界。
 13. [常见问题与排障指南（FAQ）](faq.md)：GitHub Actions PR 创建权限、审批界面与合并按钮、macOS Runner 排队、`MOONCAKES_CREDENTIALS` 与 `.moonset/` 目录规范。
 
-设计决策记录在 [decisions/](decisions/)；符合性审查与阶段历史记录见 [SDD 审查报告](sdd-review.md)。
+设计决策记录在 [decisions/](decisions/)；需求验收追踪见 [需求规格](requirements.md)。
 
 ## SDD 工作规则
 

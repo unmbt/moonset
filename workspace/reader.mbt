@@ -3,8 +3,10 @@ priv struct Reader {
   root : String
   git_root : String?
   head : String?
+  use_git_tree : Bool
   tree : Map[String, String]
   sources : Map[String, String]
+  visited_dirs : Map[String, Bool]
 }
 
 ///|
@@ -29,6 +31,18 @@ fn parent(path : String) -> String {
 }
 
 ///|
+fn norm_cmp_path(path : String) -> String {
+  let s = slash(path)
+  let trimmed = if s.has_prefix("//?/") { s[4:].to_owned() } else { s }
+  // Normalize Windows drive letter case (`d:/...` == `D:/...`)
+  if trimmed.length() >= 2 && trimmed[1] == ':' {
+    trimmed[:1].to_owned().to_upper() + trimmed[1:].to_owned()
+  } else {
+    trimmed
+  }
+}
+
+///|
 fn fail_input(
   message : String,
   path~ : String = "",
@@ -41,7 +55,9 @@ fn fail_input(
 /// Relative paths are confined lexically before any filesystem access.
 fn relative(root : String, path : String) -> String raise {
   let result = slash(
-    @path.Path(path).relative(base=@path.Path(root)).to_string(),
+    @path.Path(norm_cmp_path(path))
+    .relative(base=@path.Path(norm_cmp_path(root)))
+    .to_string(),
   )
   if result == ".." ||
     result.has_prefix("../") ||
@@ -81,6 +97,9 @@ fn parse_decimal_int(text : String) -> Int32? {
 
 ///|
 async fn Reader::prefetch(self : Reader, paths : Array[String]) -> Unit {
+  if !self.use_git_tree {
+    return
+  }
   guard (self.git_root, self.head) is (Some(root), Some(head)) else { return }
   let pending : Array[(String, String)] = []
   let seen_repo : Map[String, Bool] = Map([])
@@ -161,29 +180,31 @@ async fn Reader::read(self : Reader, path : String) -> String? {
   if self.sources.get(domain_path) is Some(cached) {
     return Some(cached)
   }
-  let result = match (self.git_root, self.head) {
-    (Some(root), Some(head)) => {
-      let repo_path = relative(root, join(self.root, domain_path))
-      if self.tree.get(repo_path) is Some("100644" | "100755") {
-        Some(git(root, ["show", head + ":" + repo_path]))
-      } else if self.tree.contains(repo_path) {
-        fail_input(
-          "Git snapshot input must be a regular file",
-          path=domain_path,
-        )
-        None
-      } else {
-        None
+  let result = if self.use_git_tree {
+    match (self.git_root, self.head) {
+      (Some(root), Some(head)) => {
+        let repo_path = relative(root, join(self.root, domain_path))
+        if self.tree.get(repo_path) is Some("100644" | "100755") {
+          Some(git(root, ["show", head + ":" + repo_path]))
+        } else if self.tree.contains(repo_path) {
+          fail_input(
+            "Git snapshot input must be a regular file",
+            path=domain_path,
+          )
+          None
+        } else {
+          None
+        }
       }
+      _ => None
     }
-    _ => {
-      let absolute = join(self.root, domain_path)
-      if @fs.exists(absolute) {
-        ignore(relative(self.root, @fs.realpath(absolute)))
-        Some(@fs.read_text(absolute))
-      } else {
-        None
-      }
+  } else {
+    let absolute = join(self.root, domain_path)
+    if @fs.exists(absolute) {
+      ignore(relative(self.root, @fs.realpath(absolute)))
+      Some(@fs.read_text(absolute))
+    } else {
+      None
     }
   }
   if result is Some(source) {
@@ -195,8 +216,8 @@ async fn Reader::read(self : Reader, path : String) -> String? {
 ///|
 async fn Reader::files(self : Reader, directory : String) -> Array[String] {
   let result = []
-  match self.git_root {
-    Some(root) => {
+  if self.use_git_tree {
+    if self.git_root is Some(root) {
       let rel_dir = relative(root, join(self.root, directory))
       let prefix = if rel_dir == "" { "" } else { rel_dir + "/" }
       for path in self.tree.keys() {
@@ -208,12 +229,11 @@ async fn Reader::files(self : Reader, directory : String) -> Array[String] {
         }
       }
     }
-    None => {
-      let absolute = join(self.root, directory)
-      if @fs.exists(absolute) {
-        ignore(relative(self.root, @fs.realpath(absolute)))
-        result.append(@fs.readdir(absolute, include_hidden=true))
-      }
+  } else {
+    let absolute = join(self.root, directory)
+    if @fs.exists(absolute) {
+      ignore(relative(self.root, @fs.realpath(absolute)))
+      result.append(@fs.readdir(absolute, include_hidden=true))
     }
   }
   result.sort()
@@ -223,8 +243,8 @@ async fn Reader::files(self : Reader, directory : String) -> Array[String] {
 ///|
 async fn Reader::dirs(self : Reader, directory : String) -> Array[String] {
   let result : Array[String] = []
-  match self.git_root {
-    Some(root) => {
+  if self.use_git_tree {
+    if self.git_root is Some(root) {
       let rel_dir = relative(root, join(self.root, directory))
       let prefix = if rel_dir == "" { "" } else { rel_dir + "/" }
       for path in self.tree.keys() {
@@ -239,15 +259,24 @@ async fn Reader::dirs(self : Reader, directory : String) -> Array[String] {
         }
       }
     }
-    None => {
-      let absolute = join(self.root, directory)
-      if @fs.exists(absolute) {
-        ignore(relative(self.root, @fs.realpath(absolute)))
-        for entry in @fs.readdir(absolute) {
-          let child = join(absolute, entry)
-          if @fs.kind(child) == @fs.Directory {
-            result.push(entry)
-          }
+  } else {
+    let absolute = join(self.root, directory)
+    if @fs.exists(absolute) {
+      let canonical_dir = @fs.realpath(absolute)
+      ignore(relative(self.root, canonical_dir))
+      if self.visited_dirs.contains(canonical_dir) {
+        return result
+      }
+      self.visited_dirs[canonical_dir] = true
+      for entry in @fs.readdir(absolute) {
+        let child = join(absolute, entry)
+        // Guard against broken symlinks and symlink loops
+        let is_dir = (@fs.kind(child, follow_symlink=false) catch {
+            _ => @fs.Regular
+          }) ==
+          @fs.Directory
+        if is_dir {
+          result.push(entry)
         }
       }
     }
@@ -266,13 +295,52 @@ async fn make_reader(
   let changed : Array[String] = []
   let warnings : Array[@model.Diagnostic] = []
   guard since is Some(reference) else {
+    // Best-effort resolve HEAD commit even without `--since` so `pack` / `publish`
+    // can validate `sourceCommit == HEAD` accurately.
+    let git_root_opt : String? = try {
+      let top = git(root, ["rev-parse", "--show-toplevel"]).trim().to_owned()
+      if top == "" {
+        None
+      } else {
+        Some(@fs.realpath(top) catch { _ => top })
+      }
+    } catch {
+      _ => None
+    }
+    let head_opt : String? = match git_root_opt {
+      Some(gr) =>
+        try {
+          let h = git(gr, ["rev-parse", "--verify", "HEAD^{commit}"])
+            .trim()
+            .to_owned()
+          if h == "" {
+            None
+          } else {
+            Some(h)
+          }
+        } catch {
+          _ => None
+        }
+      None => None
+    }
     return (
-      { root, git_root: None, head: None, tree, sources, },
+      {
+        root,
+        git_root: git_root_opt,
+        head: head_opt,
+        use_git_tree: false,
+        tree,
+        sources,
+        visited_dirs: Map([]),
+      },
       changed,
       warnings,
     )
   }
-  let git_root = git(root, ["rev-parse", "--show-toplevel"]).trim().to_owned()
+  let git_root_raw = git(root, ["rev-parse", "--show-toplevel"])
+    .trim()
+    .to_owned()
+  let git_root = @fs.realpath(git_root_raw) catch { _ => git_root_raw }
   let head = git(git_root, ["rev-parse", "--verify", "HEAD^{commit}"])
     .trim()
     .to_owned()
@@ -341,7 +409,15 @@ async fn make_reader(
     )
   }
   (
-    { root, git_root: Some(git_root), head: Some(head), tree, sources, },
+    {
+      root,
+      git_root: Some(git_root),
+      head: Some(head),
+      use_git_tree: true,
+      tree,
+      sources,
+      visited_dirs: Map([]),
+    },
     changed,
     warnings,
   )

@@ -69,21 +69,22 @@ test "FR-027 version groups and ignore expand globs and reject overlaps" {
 
 ///|
 test "FR-028 snapshot config gates snapshot releases and renders templates" {
+  let mod_a = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
   let ws_disabled : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.1.0")]),
-    sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
-    ]),
+    ..snapshot(
+      [unit_with_source("acme/a", mod_a, version="0.1.0")],
+      config="{\"snapshot\":{\"enabled\":false}}",
+    ),
+    sources: Map([("acme/a/moon.mod", mod_a)]),
   }
   let cs = change("acme/a", bump="minor")
-  let analysis = @engine.build_plan(ws_disabled, [cs])
   let blocked = try {
     ignore(
-      @engine.build_version_plan(
+      @engine.build_plan(
         ws_disabled,
-        analysis,
-        { dry_run: true, no_changelog: true, snapshot_tag: Some("canary"), },
+        [cs],
         generated_at="2026-11-19T15:30:45Z",
+        snapshot_tag="canary",
       ),
     )
     false
@@ -97,9 +98,9 @@ test "FR-028 snapshot config gates snapshot releases and renders templates" {
   let mod_b = "name = \"acme/b\"\nversion = \"0.1.0\"\nimport {\n  \"acme/a@0.1.0\",\n}\n"
   let dep_pos = mod_b.find("\"acme/a@0.1.0\"").unwrap()
   let units_with_span = [
-    unit("acme/a", version="0.1.0"),
+    unit_with_source("acme/a", mod_a, version="0.1.0"),
     {
-      ..unit("acme/b", version="0.1.0"),
+      ..unit_with_source("acme/b", mod_b, version="0.1.0"),
       dependencies: [
         {
           producer: "moonbit:acme/a",
@@ -115,24 +116,39 @@ test "FR-028 snapshot config gates snapshot releases and renders templates" {
   ]
   let ws_zero : @model.WorkspaceSnapshot = {
     ..snapshot(units_with_span, config="{\"snapshot\":{\"enabled\":true}}"),
-    sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
-      ("acme/b/moon.mod", mod_b),
-    ]),
+    sources: Map([("acme/a/moon.mod", mod_a), ("acme/b/moon.mod", mod_b)]),
     git_head: Some("abcdef1234567890"),
   }
-  let a0 = @engine.build_plan(ws_zero, [
-    change("acme/a", bump="minor", id="c1"),
-    change("acme/b", bump="patch", id="c2"),
-  ])
+  let a0 = @engine.build_plan(
+    ws_zero,
+    [
+      change("acme/a", bump="minor", id="c1"),
+      change("acme/b", bump="patch", id="c2"),
+    ],
+    generated_at="2026-11-19T15:30:45Z",
+    snapshot_tag="canary",
+  )
   let vp0 = @engine.build_version_plan(
     ws_zero,
     a0,
-    { dry_run: true, no_changelog: true, snapshot_tag: Some("canary"), },
+    {
+      dry_run: true,
+      no_changelog: true,
+      snapshot_tag: Some("canary"),
+      snapshot: true,
+    },
     generated_at="2026-11-19T15:30:45Z",
   )
   assert_true(vp0.consumed_changesets.is_empty())
-  assert_true(!vp0.edits.any(e => e.path == ".moonset/release-state.json"))
+  // Snapshot persists isSnapshot=true release-state so `moonset publish` works end-to-end,
+  // while emitting zero Git tags!
+  assert_true(vp0.tags.is_empty())
+  assert_true(
+    vp0.edits.any(e => {
+      e.path == ".moonset/release-state.json" &&
+      e.after_text.contains("\"isSnapshot\":true")
+    }),
+  )
   assert_true(
     vp0.edits.any(e => {
       e.path == "acme/a/moon.mod" &&
@@ -146,19 +162,29 @@ test "FR-028 snapshot config gates snapshot releases and renders templates" {
     }),
   )
 
-  // useCalculatedVersion = true + custom template with {commit}
+  // useCalculatedVersion = true + custom template with {commit-short}
   let ws_calc : @model.WorkspaceSnapshot = {
     ..ws_zero,
-    units: [unit("acme/a", version="0.1.0")],
+    units: [unit_with_source("acme/a", mod_a, version="0.1.0")],
     config: @engine.parse_config(
-      "{\"snapshot\":{\"enabled\":true,\"useCalculatedVersion\":true,\"prereleaseTemplate\":\"{tag}.{commit}.{datetime}\"}}",
+      "{\"snapshot\":{\"enabled\":true,\"useCalculatedVersion\":true,\"prereleaseTemplate\":\"{tag}.{commit-short}.{datetime}\"}}",
     ),
   }
-  let a1 = @engine.build_plan(ws_calc, [change("acme/a", bump="minor")])
+  let a1 = @engine.build_plan(
+    ws_calc,
+    [change("acme/a", bump="minor")],
+    generated_at="2026-11-19T15:30:45Z",
+    snapshot_tag="rc",
+  )
   let vp1 = @engine.build_version_plan(
     ws_calc,
     a1,
-    { dry_run: true, no_changelog: true, snapshot_tag: Some("rc"), },
+    {
+      dry_run: true,
+      no_changelog: true,
+      snapshot_tag: Some("rc"),
+      snapshot: true,
+    },
     generated_at="2026-11-19T15:30:45Z",
   )
   assert_true(
@@ -174,26 +200,25 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
   let cfg = "{\"pre\":{\"file\":\".changeset/pre.json\",\"directory\":\".changeset/pre-box\"}}"
   let c1_text = "---\nacme/a: minor\n---\nFirst pre feature\n"
   let c2_text = "---\nacme/a: patch\n---\nSecond pre fix\n"
+  let mod_a0 = "name = \"acme/a\"\nversion = \"0.1.0\"\n"
   let ws1 : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.1.0")], config=cfg),
-    sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"\n"),
-      (".changeset/c1.md", c1_text),
-    ]),
+    ..snapshot(
+      [unit_with_source("acme/a", mod_a0, version="0.1.0")],
+      config=cfg,
+    ),
+    sources: Map([("acme/a/moon.mod", mod_a0), (".changeset/c1.md", c1_text)]),
     changed_files: [".changeset/pre-box/c1.md"],
   }
   // Files inside pre.directory are excluded from relevant_changes
   assert_true(@engine.relevant_changes(ws1).is_empty())
 
-  let pre0 = @engine.parse_pre_state(
-    "{\"mode\":\"active\",\"tag\":\"alpha\",\"initialVersions\":{},\"nextNumbers\":{},\"consumed\":[]}",
-  )
+  let pre0 = @engine.parse_pre_state("{\"mode\":\"pre\",\"tag\":\"alpha\"}")
   let c1 = @engine.parse_changeset(c1_text, id="c1", path=".changeset/c1.md")
   let p1 = @engine.build_plan(ws1, [c1], pre=pre0)
   let vp1 = @engine.build_version_plan(
     ws1,
     p1,
-    { dry_run: true, no_changelog: true, snapshot_tag: None, },
+    { dry_run: true, no_changelog: true, snapshot_tag: None, snapshot: false, },
     generated_at="2026-11-19",
   )
   assert_true(
@@ -207,10 +232,14 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
 
   // Next prerelease: c1 already in pre-box is untouched; c2 moves into pre-box
   let pre1 = p1.next_pre_state.unwrap()
+  let mod_a1 = "name = \"acme/a\"\nversion = \"0.2.0-alpha.0\"\n"
   let ws2 : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.2.0-alpha.0")], config=cfg),
+    ..snapshot(
+      [unit_with_source("acme/a", mod_a1, version="0.2.0-alpha.0")],
+      config=cfg,
+    ),
     sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.2.0-alpha.0\"\n"),
+      ("acme/a/moon.mod", mod_a1),
       (".changeset/pre-box/c1.md", c1_text),
       (".changeset/c2.md", c2_text),
       (".changeset/pre.json", pre1.to_json().stringify()),
@@ -220,13 +249,14 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
     c1_text,
     id="c1",
     path=".changeset/pre-box/c1.md",
+    in_pre_dir=true,
   )
   let c2 = @engine.parse_changeset(c2_text, id="c2", path=".changeset/c2.md")
   let p2 = @engine.build_plan(ws2, [c1_iso, c2], pre=pre1)
   let vp2 = @engine.build_version_plan(
     ws2,
     p2,
-    { dry_run: true, no_changelog: true, snapshot_tag: None, },
+    { dry_run: true, no_changelog: true, snapshot_tag: None, snapshot: false, },
     generated_at="2026-11-19",
   )
   assert_true(!vp2.edits.any(e => e.path == ".changeset/pre-box/c1.md"))
@@ -240,19 +270,21 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
   )
 
   // Graduation (mode: exit) deletes isolated changesets + pre.json
-  let pre_exit : @model.PreState = {
-    ..p2.next_pre_state.unwrap(),
-    mode: "exit",
-  }
+  let pre_exit = @model.PreState::new(@model.Exit, "alpha")
   let c2_iso = @engine.parse_changeset(
     c2_text,
     id="c2",
     path=".changeset/pre-box/c2.md",
+    in_pre_dir=true,
   )
+  let mod_a2 = "name = \"acme/a\"\nversion = \"0.2.0-alpha.1\"\n"
   let ws3 : @model.WorkspaceSnapshot = {
-    ..snapshot([unit("acme/a", version="0.2.0-alpha.1")], config=cfg),
+    ..snapshot(
+      [unit_with_source("acme/a", mod_a2, version="0.2.0-alpha.1")],
+      config=cfg,
+    ),
     sources: Map([
-      ("acme/a/moon.mod", "name = \"acme/a\"\nversion = \"0.2.0-alpha.1\"\n"),
+      ("acme/a/moon.mod", mod_a2),
       (".changeset/pre-box/c1.md", c1_text),
       (".changeset/pre-box/c2.md", c2_text),
       (".changeset/pre.json", pre_exit.to_json().stringify()),
@@ -262,7 +294,7 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
   let vp3 = @engine.build_version_plan(
     ws3,
     p3,
-    { dry_run: true, no_changelog: true, snapshot_tag: None, },
+    { dry_run: true, no_changelog: true, snapshot_tag: None, snapshot: false, },
     generated_at="2026-11-19",
   )
   assert_true(
@@ -284,72 +316,99 @@ test "FR-029 pre.directory isolates consumed changesets and cleans up on graduat
 test "FR-030 npm and Cargo compound SemVer ranges match validate and rewrite" {
   // npm union, conjunction, hyphen, x-range
   assert_true(
-    @engine.matches_ecosystem_range("npm", "^1.0.0 || ^2.0.0", "1.5.0"),
+    @engine.matches_ecosystem_range(@model.Npm, "^1.0.0 || ^2.0.0", "1.5.0"),
   )
   assert_true(
-    @engine.matches_ecosystem_range("npm", "^1.0.0 || ^2.0.0", "2.3.4"),
+    @engine.matches_ecosystem_range(@model.Npm, "^1.0.0 || ^2.0.0", "2.3.4"),
   )
   assert_true(
-    !@engine.matches_ecosystem_range("npm", "^1.0.0 || ^2.0.0", "3.0.0"),
-  )
-  assert_true(@engine.matches_ecosystem_range("npm", ">=1.0.0 <2.0.0", "1.9.9"))
-  assert_true(
-    !@engine.matches_ecosystem_range("npm", ">=1.0.0 <2.0.0", "2.0.0"),
+    !@engine.matches_ecosystem_range(@model.Npm, "^1.0.0 || ^2.0.0", "3.0.0"),
   )
   assert_true(
-    @engine.matches_ecosystem_range("npm", ">= 1.2.0 <= 1.5.0", "1.5.0"),
+    @engine.matches_ecosystem_range(@model.Npm, ">=1.0.0 <2.0.0", "1.9.9"),
   )
-  assert_true(@engine.matches_ecosystem_range("npm", "1.2.0 - 2.0.0", "1.9.0"))
-  assert_true(!@engine.matches_ecosystem_range("npm", "1.2.0 - 2.0.0", "2.0.1"))
-  assert_true(@engine.matches_ecosystem_range("npm", "1.x", "1.4.2"))
-  assert_true(!@engine.matches_ecosystem_range("npm", "1.x", "2.0.0"))
+  assert_true(
+    !@engine.matches_ecosystem_range(@model.Npm, ">=1.0.0 <2.0.0", "2.0.0"),
+  )
+  assert_true(
+    @engine.matches_ecosystem_range(@model.Npm, ">= 1.2.0 <= 1.5.0", "1.5.0"),
+  )
+  assert_true(
+    @engine.matches_ecosystem_range(@model.Npm, "1.2.0 - 2.0.0", "1.9.0"),
+  )
+  assert_true(
+    !@engine.matches_ecosystem_range(@model.Npm, "1.2.0 - 2.0.0", "2.0.1"),
+  )
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, "1.x", "1.4.2"))
+  assert_true(!@engine.matches_ecosystem_range(@model.Npm, "1.x", "2.0.0"))
 
-  // Cargo comma conjunction, || union, >, <, bare caret
+  // Cargo comma conjunction, >, <, wildcard, bare caret (disjunction || is invalid in Cargo)
   assert_true(
-    @engine.matches_ecosystem_range("cargo", ">=1.0.0, <2.0.0", "1.4.0"),
+    @engine.matches_ecosystem_range(@model.Cargo, ">=1.0.0, <2.0.0", "1.4.0"),
   )
   assert_true(
-    !@engine.matches_ecosystem_range("cargo", ">=1.0.0, <2.0.0", "2.0.0"),
+    !@engine.matches_ecosystem_range(@model.Cargo, ">=1.0.0, <2.0.0", "2.0.0"),
   )
   assert_true(
-    @engine.matches_ecosystem_range("cargo", ">0.1.0, <=0.5.0", "0.5.0"),
+    @engine.matches_ecosystem_range(@model.Cargo, ">0.1.0, <=0.5.0", "0.5.0"),
   )
   assert_true(
-    !@engine.matches_ecosystem_range("cargo", ">0.1.0, <=0.5.0", "0.1.0"),
+    !@engine.matches_ecosystem_range(@model.Cargo, ">0.1.0, <=0.5.0", "0.1.0"),
   )
-  assert_true(@engine.matches_ecosystem_range("cargo", "^1.0 || ^2.0", "2.1.0"))
-  assert_true(@engine.matches_ecosystem_range("cargo", "0.1.0", "0.1.5"))
-  assert_true(!@engine.matches_ecosystem_range("cargo", "0.1.0", "0.2.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Cargo, "1.2.*", "1.2.9"))
+  assert_true(!@engine.matches_ecosystem_range(@model.Cargo, "1.2.*", "1.9.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Cargo, "0.1.0", "0.1.5"))
+  assert_true(!@engine.matches_ecosystem_range(@model.Cargo, "0.1.0", "0.2.0"))
 
   // Rewriting preserves semantics and always satisfies target
-  let r1 = @engine.rewrite_ecosystem_range("npm", ">=1.0.0 <2.0.0", "1.2.0")
+  let r1 = @engine.rewrite_ecosystem_range(
+    @model.Npm,
+    ">=1.0.0 <2.0.0",
+    "1.2.0",
+  )
   assert_eq(r1, ">=1.2.0 <2.0.0")
-  assert_true(@engine.matches_ecosystem_range("npm", r1, "1.2.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, r1, "1.2.0"))
 
-  let r2 = @engine.rewrite_ecosystem_range("npm", ">=1.0.0 <2.0.0", "2.0.0")
+  let r2 = @engine.rewrite_ecosystem_range(
+    @model.Npm,
+    ">=1.0.0 <2.0.0",
+    "2.0.0",
+  )
   assert_eq(r2, ">=2.0.0 <3.0.0")
-  assert_true(@engine.matches_ecosystem_range("npm", r2, "2.0.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, r2, "2.0.0"))
 
-  let r3 = @engine.rewrite_ecosystem_range("npm", "^1.0.0 || ^2.0.0", "2.1.0")
+  let r3 = @engine.rewrite_ecosystem_range(
+    @model.Npm,
+    "^1.0.0 || ^2.0.0",
+    "2.1.0",
+  )
   assert_eq(r3, "^1.0.0 || ^2.1.0")
-  assert_true(@engine.matches_ecosystem_range("npm", r3, "2.1.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, r3, "2.1.0"))
 
-  let r4 = @engine.rewrite_ecosystem_range("npm", "^1.0.0 || ^2.0.0", "3.0.0")
+  let r4 = @engine.rewrite_ecosystem_range(
+    @model.Npm,
+    "^1.0.0 || ^2.0.0",
+    "3.0.0",
+  )
   assert_eq(r4, "^1.0.0 || ^2.0.0 || ^3.0.0")
-  assert_true(@engine.matches_ecosystem_range("npm", r4, "3.0.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, r4, "3.0.0"))
 
-  let r5 = @engine.rewrite_ecosystem_range("cargo", ">=1.0.0, <2.0.0", "2.0.0")
+  let r5 = @engine.rewrite_ecosystem_range(
+    @model.Cargo,
+    ">=1.0.0, <2.0.0",
+    "2.0.0",
+  )
   assert_eq(r5, ">=2.0.0, <3.0.0")
-  assert_true(@engine.matches_ecosystem_range("cargo", r5, "2.0.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Cargo, r5, "2.0.0"))
 
-  let r6 = @engine.rewrite_ecosystem_range("npm", "1.0.0 - 1.5.0", "2.0.0")
+  let r6 = @engine.rewrite_ecosystem_range(@model.Npm, "1.0.0 - 1.5.0", "2.0.0")
   assert_eq(r6, "1.0.0 - 2.0.0")
-  assert_true(@engine.matches_ecosystem_range("npm", r6, "2.0.0"))
+  assert_true(@engine.matches_ecosystem_range(@model.Npm, r6, "2.0.0"))
 
   // Malformed ranges rejected
   for bad in ["^1.0.0 | ^2.0.0", "^1.0.0 || ", ">= ", "1.2.3.4"] {
     let rejected = try {
-      @engine.validate_ecosystem_range("npm", bad)
+      @engine.validate_ecosystem_range(@model.Npm, bad)
       false
     } catch {
       @model.Invalid(_) => true
@@ -379,7 +438,7 @@ test "FR-026 formatter resolution and FR-031 scoped publish target mapping" {
   assert_true(@engine.formatter_supports_path("dprint", "Cargo.toml"))
   assert_eq(
     @engine.formatter_command("biome", ["package.json"]),
-    Some(("biome", ["format", "--write", "package.json"])),
+    Some(("biome", ["format", "--write", "--", "package.json"])),
   )
 
   let scoped = @engine.parse_target_mapping(
@@ -389,19 +448,19 @@ test "FR-026 formatter resolution and FR-031 scoped publish target mapping" {
   )
   assert_eq(scoped.global, None)
   assert_eq(
-    @engine.resolve_target_override(scoped, "npm:@acme/ui", "npm"),
+    @engine.resolve_target_override(scoped, "npm:@acme/ui", @model.Npm),
     Some("https://ui.reg"),
   )
   assert_eq(
-    @engine.resolve_target_override(scoped, "npm:@acme/core", "npm"),
+    @engine.resolve_target_override(scoped, "npm:@acme/core", @model.Npm),
     Some("https://npm.pkg.github.com"),
   )
   assert_eq(
-    @engine.resolve_target_override(scoped, "cargo:acme-rs", "cargo"),
+    @engine.resolve_target_override(scoped, "cargo:acme-rs", @model.Cargo),
     Some("private"),
   )
   assert_eq(
-    @engine.resolve_target_override(scoped, "moonbit:acme/a", "moonbit"),
+    @engine.resolve_target_override(scoped, "moonbit:acme/a", @model.MoonBit),
     None,
   )
   // Plain URL with '=' in query string remains a global value

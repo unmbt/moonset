@@ -33,28 +33,6 @@ pub(all) struct ProcessResult {
 }
 
 ///|
-/// Injectable filesystem port used by operational adapters.
-pub(all) struct FileHost {
-  read_text : (String) -> String?
-  write_text : (String, String) -> Unit raise @model.MoonsetError
-  exists : (String) -> Bool
-}
-
-///|
-/// Injectable process port. Implementations must invoke executable/argv directly.
-pub(all) struct ProcessHost {
-  run : (
-    String,
-    Array[String],
-    String?,
-    Map[String, String],
-    String,
-    Int32,
-    Int32,
-  ) -> ProcessResult raise @model.MoonsetError
-}
-
-///|
 /// Injectable registry queries and publication port; credentials remain host-owned.
 pub(all) struct RegistryHost {
   already_published : (String, String, String) -> Bool raise @model.MoonsetError
@@ -63,54 +41,7 @@ pub(all) struct RegistryHost {
 }
 
 ///|
-/// Experimental operation ports: v1 contracts may change before v2.
-pub(open) trait DiscoveryPort {
-  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
-}
-
-///|
-pub(open) trait RangePort {
-  fn satisfies(Self, String, String) -> Bool
-  fn rewrite(Self, String, String) -> String raise @model.MoonsetError
-}
-
-///|
-pub(open) trait OwnershipPort {
-  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
-}
-
-///|
-pub(open) trait LockfilePort {
-  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[
-    @model.FileEdit,
-  ] raise @model.MoonsetError
-}
-
-///|
-pub(open) trait ArtifactPort {
-  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
-}
-
-///|
 pub(open) trait PublisherPort {
-  fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
-  fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
-  fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
-}
-
-///|
-/// Combined experimental adapter facade for all executable operations.
-pub(open) trait OperationalAdapter {
-  fn name(Self) -> String
-  fn capabilities(Self) -> Array[Capability]
-  fn discover(Self, String) -> Array[@model.ReleaseUnit] raise @model.MoonsetError
-  fn satisfies(Self, String, String) -> Bool
-  fn rewrite_range(Self, String, String) -> String raise @model.MoonsetError
-  fn ownership(Self, Array[String]) -> Array[@model.Ownership] raise @model.MoonsetError
-  fn stage_lockfile(Self, @model.WorkspaceSnapshot, String) -> Array[
-    @model.FileEdit,
-  ] raise @model.MoonsetError
-  fn pack(Self, @model.ArtifactIntent) -> @model.PackResult raise @model.MoonsetError
   fn already_published(Self, @model.PublishTarget) -> Bool raise @model.MoonsetError
   fn preflight(Self, @model.PublishTarget) -> Unit raise @model.MoonsetError
   fn publish(Self, @model.PublishTarget) -> String raise @model.MoonsetError
@@ -128,6 +59,7 @@ pub fn JsonlRequest::to_json(self : JsonlRequest) -> Json {
 ///|
 pub fn JsonlResponse::to_json(self : JsonlResponse) -> Json {
   {
+    "schemaVersion": 1,
     "ok": self.ok,
     "result": self.result,
     "error": match self.error {
@@ -162,6 +94,17 @@ pub fn parse_request(value : Json) -> JsonlRequest raise @model.MoonsetError {
 
 ///|
 pub fn parse_response(value : Json) -> JsonlResponse raise @model.MoonsetError {
+  if value is { "schemaVersion": ver_json, .. } {
+    match ver_json {
+      Number(v, ..) if v == 1.0 => ()
+      _ =>
+        raise @model.Invalid(
+          @model.diagnostic(
+            "plugin-schema", "Unsupported JSONL response schemaVersion",
+          ),
+        )
+    }
+  }
   match value {
     { "ok": True, "result": result, .. } => { ok: true, result, error: None, }
     { "ok": False, "error": String(message), .. } =>
@@ -201,6 +144,7 @@ pub fn generator_result(
 ///|
 fn split_lines(source : String) -> Array[String] {
   source
+  .replace_all(old="\r\n", new="\n")
   .split("\n")
   .filter(x => x.trim() != "")
   .map(x => x.trim().to_owned())
@@ -208,42 +152,88 @@ fn split_lines(source : String) -> Array[String] {
 }
 
 ///|
+fn is_windows_env(environment : Map[String, String]) -> Bool {
+  for k, _ in environment {
+    if k.to_lower() == "comspec" {
+      return true
+    }
+  }
+  @env.get_env_var("ComSpec") is Some(_) ||
+  @env.get_env_var("COMSPEC") is Some(_)
+}
+
+///|
+fn stderr_detail(stderr : String) -> String {
+  let trimmed = stderr.trim().to_owned()
+  if trimmed == "" {
+    ""
+  } else {
+    ": " + trimmed
+  }
+}
+
+///|
 /// Execute one request without invoking a shell or inheriting credentials.
+/// Host-side `host_allowed_programs`, when provided, overrides `spec.allowed_programs`.
 pub async fn run_jsonl(
   spec : PluginSpec,
   request : JsonlRequest,
+  host_allowed_programs? : Array[String],
 ) -> JsonlResponse raise @model.MoonsetError {
-  if !spec.allowed_programs.contains(spec.program) {
+  let allowlist = host_allowed_programs.unwrap_or(spec.allowed_programs)
+  if spec.program.trim() == "" || !allowlist.contains(spec.program) {
     raise @model.Invalid(
       @model.diagnostic(
         "plugin-permission-denied", "Plugin executable is not explicitly registered",
       ),
     )
   }
-  let command = @shell.Cmd(
-    spec.program,
-    spec.args,
-    cwd?=spec.cwd,
-    inherit_env=false,
-    env=spec.environment,
-    stdin=@shell.Text(request.to_json().stringify() + "\n"),
-  )
-  let output = command.output(
-    timeout_ms=spec.timeout_ms,
-    max_output_bytes=spec.max_output_bytes,
-  ) catch {
-    _ =>
-      raise @model.Invalid(
-        @model.diagnostic(
-          "plugin-execution-failed", "Plugin timed out or exceeded the output limit",
-        ),
-      )
+  let stdin_payload = request.to_json().stringify() + "\n"
+  let run_once = async fn(program : String) {
+    let command = @shell.Cmd(
+      program,
+      spec.args,
+      cwd?=spec.cwd,
+      inherit_env=false,
+      env=spec.environment,
+      stdin=@shell.Text(stdin_payload),
+    )
+    command.output(
+      timeout_ms=spec.timeout_ms,
+      max_output_bytes=spec.max_output_bytes,
+    )
+  }
+  let output = run_once(spec.program) catch {
+    first_err =>
+      if is_windows_env(spec.environment) &&
+        !spec.program.to_lower().has_suffix(".exe") &&
+        !spec.program.to_lower().has_suffix(".cmd") &&
+        !spec.program.to_lower().has_suffix(".bat") {
+        run_once(spec.program + ".cmd") catch {
+          _ =>
+            raise @model.Io(
+              "Plugin execution failed (" +
+              spec.program +
+              "): " +
+              first_err.to_string(),
+            )
+        }
+      } else {
+        raise @model.Io(
+          "Plugin execution failed (" +
+          spec.program +
+          "): " +
+          first_err.to_string(),
+        )
+      }
   }
   if output.exit_code() != 0 {
     raise @model.Invalid(
       @model.diagnostic(
         "plugin-crashed",
-        "Plugin exited with code " + output.exit_code().to_string(),
+        "Plugin exited with code " +
+        output.exit_code().to_string() +
+        stderr_detail(output.stderr()),
       ),
     )
   }
@@ -251,14 +241,19 @@ pub async fn run_jsonl(
   if lines.length() != 1 {
     raise @model.Invalid(
       @model.diagnostic(
-        "plugin-invalid-output", "Plugin must return exactly one JSONL response",
+        "plugin-invalid-output",
+        "Plugin must return exactly one JSONL response" +
+        stderr_detail(output.stderr()),
       ),
     )
   }
   let parsed = @json.parse(lines[0]) catch {
     _ =>
       raise @model.Invalid(
-        @model.diagnostic("plugin-invalid-output", "Plugin output is not JSON"),
+        @model.diagnostic(
+          "plugin-invalid-output",
+          "Plugin output is not JSON" + stderr_detail(output.stderr()),
+        ),
       )
   }
   parse_response(parsed)
@@ -266,7 +261,7 @@ pub async fn run_jsonl(
 
 ///|
 /// Capability names used by the adapter conformance suite.
-#derive(Eq)
+#derive(Eq, Debug)
 pub(all) enum Capability {
   Discovery
   Range
@@ -280,6 +275,21 @@ pub(all) enum Capability {
 pub extend Capability with Eq::{equal, not_equal}
 
 ///|
+pub extend Capability with Debug::{to_repr}
+
+///|
+pub fn Capability::text(self : Capability) -> String {
+  match self {
+    Discovery => "discovery"
+    Range => "range"
+    Ownership => "ownership"
+    Lockfile => "lockfile"
+    Artifact => "artifact"
+    Publish => "publish"
+  }
+}
+
+///|
 pub(all) struct CapabilityReport {
   adapter : String
   supported : Array[Capability]
@@ -288,10 +298,11 @@ pub(all) struct CapabilityReport {
 ///|
 pub(all) struct PublisherRegistry {
   plugins : Map[String, PluginSpec]
+  allowed_programs : Array[String]
 }
 
 ///|
-/// Built-in operational adapter registrations used by CLI routing.
+/// Built-in operational adapter registrations used by CLI and executor routing.
 pub(all) struct AdapterRegistry {
   adapters : Map[String, CapabilityReport]
 }
@@ -299,15 +310,32 @@ pub(all) struct AdapterRegistry {
 ///|
 pub fn AdapterRegistry::with_builtins() -> AdapterRegistry {
   let adapters : Map[String, CapabilityReport] = Map([])
-  let capabilities = [Discovery, Range, Ownership, Lockfile, Artifact, Publish]
-  for ecosystem in ["moonbit", "npm", "cargo"] {
-    adapters[ecosystem] = { adapter: ecosystem, supported: capabilities, }
+  adapters["moonbit"] = {
+    adapter: "moonbit",
+    supported: [Discovery, Range, Ownership, Artifact, Publish],
+  }
+  adapters["npm"] = {
+    adapter: "npm",
+    supported: [Discovery, Range, Ownership, Lockfile, Artifact, Publish],
+  }
+  adapters["cargo"] = {
+    adapter: "cargo",
+    supported: [Discovery, Range, Ownership, Lockfile, Artifact, Publish],
   }
   { adapters, }
 }
 
 ///|
 pub fn AdapterRegistry::require(
+  self : AdapterRegistry,
+  ecosystem : @model.Ecosystem,
+  capability : Capability,
+) -> Unit raise @model.MoonsetError {
+  self.require_named(ecosystem.text(), capability)
+}
+
+///|
+pub fn AdapterRegistry::require_named(
   self : AdapterRegistry,
   ecosystem : String,
   capability : Capability,
@@ -325,8 +353,10 @@ pub fn AdapterRegistry::require(
 }
 
 ///|
-pub fn PublisherRegistry::new() -> PublisherRegistry {
-  { plugins: Map([]), }
+pub fn PublisherRegistry::new(
+  allowed_programs~ : Array[String] = [],
+) -> PublisherRegistry {
+  { plugins: Map([]), allowed_programs, }
 }
 
 ///|
@@ -354,22 +384,26 @@ pub async fn PublisherRegistry::execute(
       ),
     )
   }
-  let spec = self.plugins
-    .get(name)
-    .unwrap_or({
-      program: "",
-      args: [],
-      cwd: None,
-      timeout_ms: 30000,
-      max_output_bytes: 1048576,
-      allowed_programs: [],
-      environment: Map([]),
-    })
-  let response = run_jsonl(spec, {
-    schema_version: 1,
-    protocol_method,
-    payload,
-  })
+  let spec = match self.plugins.get(name) {
+    Some(found) => found
+    None =>
+      raise @model.Invalid(
+        @model.diagnostic(
+          "plugin-permission-denied",
+          "Publisher plugin is not registered: " + name,
+        ),
+      )
+  }
+  let host_allowed = if self.allowed_programs.is_empty() {
+    None
+  } else {
+    Some(self.allowed_programs)
+  }
+  let response = run_jsonl(
+    spec,
+    { schema_version: 1, protocol_method, payload, },
+    host_allowed_programs?=host_allowed,
+  )
   if !response.ok {
     raise @model.Invalid(
       @model.diagnostic(
@@ -382,36 +416,13 @@ pub async fn PublisherRegistry::execute(
 }
 
 ///|
+/// Validate that an adapter declares all five universal release capabilities.
 pub fn validate_conformance(
   report : CapabilityReport,
 ) -> Unit raise @model.MoonsetError {
-  for capability in [Discovery, Range, Ownership, Lockfile, Artifact, Publish] {
+  for capability in [Discovery, Range, Ownership, Artifact, Publish] {
     require_capability(report, capability)
   }
-}
-
-///|
-pub fn Capability::text(self : Capability) -> String {
-  match self {
-    Discovery => "discovery"
-    Range => "range"
-    Ownership => "ownership"
-    Lockfile => "lockfile"
-    Artifact => "artifact"
-    Publish => "publish"
-  }
-}
-
-///|
-/// Adapter contracts are intentionally data-oriented for cross-package conformance.
-pub(open) trait EcosystemAdapter {
-  fn name(Self) -> String
-  fn capabilities(Self) -> Array[Capability]
-}
-
-///|
-pub(open) trait ArtifactProvider {
-  fn artifacts(Self, Array[@model.ArtifactIntent]) -> Array[@model.PackResult]
 }
 
 ///|

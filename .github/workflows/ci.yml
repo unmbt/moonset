@@ -23,15 +23,24 @@ jobs:
       - run: moon update
       - run: moon check --target native --deny-warn
       - run: moon test --target native
-      - run: moon check --target wasm-gc
+      - run: moon check --target wasm-gc --deny-warn
       - run: moon test --target wasm-gc
       - run: moon build --target native --release
+      - run: moon package
       - run: moon run scripts/embed-schema.mbtx --check
       - run: moon run scripts/lint-workflows.mbtx
       - run: moon run scripts/cli-integration.mbtx
       - run: moon info
       - run: moon fmt --check
-      - run: git diff --exit-code
+      - name: Verify clean working tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            exit 1
+          fi
 
   actionlint:
     runs-on: ubuntu-latest

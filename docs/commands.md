@@ -30,20 +30,20 @@ moonset init [--force] [--config path] [--format json]
 
 创建：
 
-- `.changeset/config.json`：只在不存在时写入默认配置。
+- `.changeset/config.json`：只在不存在时写入默认配置（`--force` 可显式覆盖）。
 - `.changeset/README.md`：解释 front matter 和提交流程。
-- `.changeset/.gitignore`：只忽略运行时状态，如 `pre.json` 由配置决定。
-
-默认拒绝覆盖已有配置；`--force` 只允许补缺文件，不覆盖已有文件。输出创建、跳过和冲突列表。
+- `.moonset/.gitignore`：忽略运行时临时状态（`version-journal.json`、`publish-state.json`、`pack-results.json`、`pack-results-*.json`）。依据 [ADR-009](decisions/009-changesets-v3-pre-and-snapshot-model.md)，`.changeset/pre.json` 必须提交至 Git，不再写入 `.changeset/.gitignore`。
 
 ## `add`
 
 ```text
-moonset add [--package name ...] [--type major|minor|patch|none]
-  [--summary text] [--empty] [--id id] [--no-format]
+moonset add [--package name ...] [--type major|minor|patch|none | --major | --minor | --patch]
+  [--summary text] [--empty] [--id id] [--open] [--no-format] [--no-commit]
 ```
 
-交互式模式让用户选择包、版本级别和 Markdown 摘要。非交互式模式要求同时提供 `--package`、`--type` 和 `--summary`，或显式 `--empty`。一个文件可以包含多个包的 release。
+交互式模式采用内置跨平台 UTF-8 原生 TUI（Windows 下通过 `WriteConsoleW` / `ReadConsoleInputW` 完整支持中文输入法与显示，无乱码），支持包变更分组、`a` 全选、`0.x -> 1.0.0` major 确认、摘要光标编辑与 `Ctrl+E` 调用外部 `$VISUAL`/`$EDITOR`。设置 `CI=1` 或 `MOONSET_NON_INTERACTIVE=1` 时自动关闭 TUI。
+
+非交互式模式要求同时提供 `--package`、`--type`（或 `--major`/`--minor`/`--patch`）和 `--summary`，或显式 `--empty`。所有参数均支持 `--flag=value` 与 `--` 终止符；`--id` 严格限制为安全文件名（拒绝路径穿越）。一个文件可以包含多个包的 release。
 
 文件格式：
 

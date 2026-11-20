@@ -1,123 +1,17 @@
 ///|
-fn strip_toml_comment(line : String) -> String {
-  let mut in_double = false
-  let mut in_single = false
-  let mut escaped = false
-  let out : Array[Char] = []
-  for ch in line.to_array() {
-    if escaped {
-      out.push(ch)
-      escaped = false
-      continue
-    }
-    if in_double && ch == '\\' {
-      out.push(ch)
-      escaped = true
-      continue
-    }
-    if !in_single && ch == '"' {
-      in_double = !in_double
-      out.push(ch)
-      continue
-    }
-    if !in_double && ch == '\'' {
-      in_single = !in_single
-      out.push(ch)
-      continue
-    }
-    if !in_double && !in_single && ch == '#' {
-      break
-    }
-    out.push(ch)
-  }
-  String::from_array(out)
-}
-
-///|
-fn cargo_value(source : String, section : String, key : String) -> String? {
-  let mut active = ""
-  for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = strip_toml_comment(raw.to_owned()).trim().to_owned()
-    if line.has_prefix("[") && line.has_suffix("]") {
-      active = line[1:line.length() - 1].trim().to_owned()
-      continue
-    }
-    if active == section && line.has_prefix(key) {
-      let after_key = line[key.length():].trim().to_owned()
-      if after_key.has_prefix("=") {
-        let value = after_key[1:].trim().to_owned()
-        if (value.has_prefix("\"") && value.has_suffix("\"")) ||
-          (value.has_prefix("'") && value.has_suffix("'")) {
-          if value.length() >= 2 {
-            return Some(value[1:value.length() - 1].to_owned())
-          }
+fn cargo_publish_allowed(val : TomlVal?) -> Bool {
+  match val {
+    None => true
+    Some(Bool(flag)) => flag
+    Some(Arr(items)) =>
+      items.any(item => {
+        match item {
+          Str(reg, _) => reg == "crates-io"
+          _ => false
         }
-      }
-    }
+      })
+    _ => true
   }
-  None
-}
-
-///|
-fn cargo_raw_value(source : String, section : String, key : String) -> String? {
-  let mut active = ""
-  for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = strip_toml_comment(raw.to_owned()).trim().to_owned()
-    if line.has_prefix("[") && line.has_suffix("]") {
-      active = line[1:line.length() - 1].trim().to_owned()
-    } else if active == section && line.has_prefix(key) {
-      let after_key = line[key.length():].trim().to_owned()
-      if after_key.has_prefix("=") {
-        return Some(after_key[1:].trim().to_owned())
-      }
-    }
-  }
-  None
-}
-
-///|
-fn cargo_array(source : String, key : String) -> Array[String] {
-  let result : Array[String] = []
-  let mut active = false
-  let mut collecting = false
-  let mut values = ""
-  for raw in source.replace_all(old="\r\n", new="\n").split("\n") {
-    let line = raw.trim().to_owned()
-    if line == "[workspace]" {
-      active = true
-      continue
-    }
-    if active && line.has_prefix(key + " =") {
-      collecting = true
-      values = line.split("=").last().unwrap_or("").to_owned()
-    } else if collecting {
-      values = values + " " + line
-    }
-    if collecting && values.contains("]") {
-      for
-        item in values
-        .split("[")
-        .last()
-        .unwrap_or("")
-        .replace_all(old="]", new="")
-        .split(",") {
-        let value = item.trim().replace_all(old="\"", new="")
-        if value != "" {
-          result.push(value.to_owned())
-        }
-      }
-      return result
-    }
-    if active && line.has_prefix("[") {
-      active = false
-    }
-  }
-  result
-}
-
-///|
-fn cargo_members(source : String) -> Array[String] {
-  cargo_array(source, "members")
 }
 
 ///|
@@ -171,7 +65,7 @@ async fn expand_cargo_glob(
     }
     return
   }
-  if !part.contains("*") && !part.contains("?") {
+  if !@engine.has_glob_meta(part) {
     let next = if current == "" { part } else { current + "/" + part }
     expand_cargo_glob(reader, workspace_root, next, parts, index + 1, result)
     return
@@ -195,11 +89,17 @@ async fn cargo_candidates(
   workspace_root : String,
   pattern : String,
 ) -> Array[String] {
-  let mut clean = pattern.trim().to_owned()
+  let mut clean = slash(pattern).trim().to_owned()
   while clean.has_prefix("./") {
     clean = clean[2:].to_owned()
   }
-  if !clean.contains("*") && !clean.contains("?") {
+  while clean.has_suffix("/") {
+    clean = clean[:clean.length() - 1].to_owned()
+  }
+  if clean == "" || clean == "." {
+    return [""]
+  }
+  if !@engine.has_glob_meta(clean) {
     return [clean]
   }
   let parts = clean
@@ -213,246 +113,163 @@ async fn cargo_candidates(
 }
 
 ///|
-priv struct CargoEntry {
-  section : String
-  key : String
-  raw : String
-  offset : Int32
-}
-
-///|
-fn cargo_entries(source : String) -> Array[CargoEntry] {
-  let result : Array[CargoEntry] = []
-  let bytes = @utf8.encode(source)
-  let mut section = ""
-  let mut pos : Int32 = 0
-  while pos <= bytes.length() {
-    let mut nl = pos
-    while nl < bytes.length() && bytes[nl].to_int() != 0x0A {
-      nl += 1
-    }
-    let line_end = if nl > pos && bytes[nl - 1].to_int() == 0x0D {
-      nl - 1
-    } else {
-      nl
-    }
-    let line = @utf8.decode_lossy(bytes[pos:line_end])
-    let clean = strip_toml_comment(line)
-    let trimmed = clean.trim().to_owned()
-    if trimmed.has_prefix("[") && trimmed.has_suffix("]") {
-      section = trimmed[1:trimmed.length() - 1].trim().to_owned()
-    } else if trimmed != "" && clean.contains("=") {
-      match clean.find("=") {
-        Some(eq_char_idx) => {
-          let key = clean[:eq_char_idx].trim().to_owned()
-          let value_part = clean[eq_char_idx + 1:]
-          let raw_value = value_part.trim().to_owned()
-          let prefix_bytes = @utf8.encode(clean[:eq_char_idx + 1].to_owned()).length()
-          let mut val_offset = pos + prefix_bytes
-          while val_offset < line_end &&
-                (
-                  bytes[val_offset].to_int() == 0x20 ||
-                  bytes[val_offset].to_int() == 0x09
-                ) {
-            val_offset += 1
+fn extract_cargo_dep_from_val(
+  dep_key : String,
+  val : TomlVal,
+  ws_deps : Map[String, TomlVal]?,
+  member_manifest : String,
+  ws_manifest : String,
+  base_kind : @model.DependencyKind,
+  target_condition : String?,
+) -> @model.DependencyEdge? {
+  match val {
+    Str(req, span) =>
+      Some({
+        producer: "cargo:" + dep_key,
+        requirement: req,
+        kind: base_kind,
+        path: member_manifest,
+        start: span.start,
+        end: span.end,
+        target_condition,
+      })
+    Tbl(tbl) => {
+      let is_optional = toml_bool(tbl, "optional") == Some(true)
+      let kind = if is_optional { @model.Optional } else { base_kind }
+      let uses_ws = toml_bool(tbl, "workspace") == Some(true)
+      let effective_val : TomlVal? = if uses_ws {
+        ws_deps.bind(m => m.get(dep_key))
+      } else {
+        Some(val)
+      }
+      let dep_path = if uses_ws { ws_manifest } else { member_manifest }
+      match effective_val {
+        Some(Str(req, span)) =>
+          Some({
+            producer: "cargo:" + dep_key,
+            requirement: req,
+            kind,
+            path: dep_path,
+            start: span.start,
+            end: span.end,
+            target_condition,
+          })
+        Some(Tbl(eff_tbl)) => {
+          let pkg_name = match toml_string(eff_tbl, "package") {
+            Some((renamed, _)) => renamed
+            None => dep_key
           }
-          result.push({ section, key, raw: raw_value, offset: val_offset, })
-        }
-        None => ()
-      }
-    }
-    if nl >= bytes.length() {
-      break
-    }
-    pos = nl + 1
-  }
-  result
-}
-
-///|
-fn cargo_attr(raw : String, key : String) -> String? {
-  let needle = key + " ="
-  match raw.find(needle) {
-    Some(index) => {
-      let tail = raw[index + needle.length():].trim().to_owned()
-      let value = tail.split(",").next().unwrap_or("").trim().to_owned()
-      match value.find("\"") {
-        Some(first) =>
-          match value[first + 1:].find("\"") {
-            Some(length) => Some(value[first + 1:first + 1 + length].to_owned())
-            None => Some(value)
-          }
-        None => Some(value)
-      }
-    }
-    None => None
-  }
-}
-
-///|
-fn cargo_req(entry : CargoEntry) -> String? {
-  if entry.raw.has_prefix("\"") && entry.raw.has_suffix("\"") {
-    Some(entry.raw[1:entry.raw.length() - 1].to_owned())
-  } else {
-    cargo_attr(entry.raw, "version")
-  }
-}
-
-///|
-fn find_toml_inline_key_offset(raw : String, target_key : String) -> Int32? {
-  let bytes = @utf8.encode(raw)
-  let key_bytes = @utf8.encode(target_key)
-  let mut in_double = false
-  let mut in_single = false
-  let mut escaped = false
-  let mut i : Int32 = 0
-  while i < bytes.length() {
-    let b = bytes[i].to_int()
-    if escaped {
-      escaped = false
-      i += 1
-      continue
-    }
-    if in_double {
-      if b == 0x5C {
-        escaped = true
-      } else if b == 0x22 {
-        in_double = false
-      }
-      i += 1
-      continue
-    }
-    if in_single {
-      if b == 0x27 {
-        in_single = false
-      }
-      i += 1
-      continue
-    }
-    if b == 0x22 {
-      in_double = true
-      i += 1
-      continue
-    }
-    if b == 0x27 {
-      in_single = true
-      i += 1
-      continue
-    }
-    if i + key_bytes.length() <= bytes.length() {
-      let prev_ok = i == 0 ||
-        bytes[i - 1].to_int() == 0x20 ||
-        bytes[i - 1].to_int() == 0x09 ||
-        bytes[i - 1].to_int() == 0x7B ||
-        bytes[i - 1].to_int() == 0x2C
-      if prev_ok {
-        let mut matched = true
-        for k in 0..<key_bytes.length() {
-          if bytes[i + k] != key_bytes[k] {
-            matched = false
-            break
+          match toml_string(eff_tbl, "version") {
+            Some((req, span)) =>
+              Some({
+                producer: "cargo:" + pkg_name,
+                requirement: req,
+                kind,
+                path: dep_path,
+                start: span.start,
+                end: span.end,
+                target_condition,
+              })
+            None => None
           }
         }
-        if matched {
-          let mut after = i + key_bytes.length()
-          while after < bytes.length() &&
-                (bytes[after].to_int() == 0x20 || bytes[after].to_int() == 0x09) {
-            after += 1
-          }
-          if after < bytes.length() && bytes[after].to_int() == 0x3D {
-            return Some(after + 1)
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+///|
+fn collect_cargo_dep_section(
+  section_tbl : Map[String, TomlVal],
+  ws_deps : Map[String, TomlVal]?,
+  member_manifest : String,
+  ws_manifest : String,
+  base_kind : @model.DependencyKind,
+  target_condition : String?,
+  out : Array[@model.DependencyEdge],
+) -> Unit {
+  for dep_key, val in section_tbl {
+    if extract_cargo_dep_from_val(
+        dep_key, val, ws_deps, member_manifest, ws_manifest, base_kind, target_condition,
+      )
+      is Some(edge) {
+      if !out.any(x => {
+          x.producer == edge.producer &&
+          x.path == edge.path &&
+          x.start == edge.start
+        }) {
+        out.push(edge)
+      }
+    }
+  }
+}
+
+///|
+fn collect_cargo_dependencies(
+  doc : TomlDoc,
+  ws_doc : TomlDoc,
+  member_manifest : String,
+  ws_manifest : String,
+) -> Array[@model.DependencyEdge] {
+  let ws_deps = ws_doc.get_table(["workspace", "dependencies"])
+  let out : Array[@model.DependencyEdge] = []
+  let pairs : Array[(String, @model.DependencyKind)] = [
+    ("dependencies", @model.Runtime),
+    ("dev-dependencies", @model.Development),
+    ("build-dependencies", @model.Build),
+  ]
+  for pair in pairs {
+    if doc.get_table([pair.0]) is Some(sec) {
+      collect_cargo_dep_section(
+        sec,
+        ws_deps,
+        member_manifest,
+        ws_manifest,
+        pair.1,
+        None,
+        out,
+      )
+    }
+  }
+  if doc.get_table(["target"]) is Some(targets_tbl) {
+    for cond, target_val in targets_tbl {
+      if target_val is Tbl(t_sub) {
+        for pair in pairs {
+          if t_sub.get(pair.0) is Some(Tbl(sec)) {
+            collect_cargo_dep_section(
+              sec,
+              ws_deps,
+              member_manifest,
+              ws_manifest,
+              pair.1,
+              Some(cond),
+              out,
+            )
           }
         }
       }
     }
-    i += 1
   }
-  None
+  out
 }
 
 ///|
-fn cargo_req_span(entry : CargoEntry) -> (Int32, Int32) {
-  let raw = entry.raw
-  let bytes = @utf8.encode(raw)
-  let base_offset : Int32 = if raw.has_prefix("\"") || raw.has_prefix("'") {
-    0
-  } else {
-    match find_toml_inline_key_offset(raw, "version") {
-      Some(idx) => idx
-      None => return (0, 0)
-    }
-  }
-  let mut i = base_offset
-  while i < bytes.length() &&
-        bytes[i].to_int() != 0x22 &&
-        bytes[i].to_int() != 0x27 {
-    i += 1
-  }
-  if i >= bytes.length() {
-    return (0, 0)
-  }
-  let quote = bytes[i].to_int()
-  let val_start = i + 1
-  let mut val_end = val_start
-  while val_end < bytes.length() && bytes[val_end].to_int() != quote {
-    val_end += 1
-  }
-  if val_end >= bytes.length() {
-    return (0, 0)
-  }
-  (entry.offset + val_start, entry.offset + val_end)
-}
-
-///|
-fn cargo_dependency_kind(
-  section : String,
-  raw : String,
-) -> @model.DependencyKind {
-  if raw.contains("optional = true") {
-    @model.Optional
-  } else if section.has_suffix("dev-dependencies") {
-    @model.Development
-  } else if section.has_suffix("build-dependencies") {
-    @model.Build
-  } else {
-    @model.Runtime
-  }
-}
-
-///|
-fn cargo_target_condition(section : String) -> String? {
-  if section.has_prefix("target.") {
-    match section.find(".dependencies") {
-      Some(index) =>
-        Some(
-          section[7:index]
-          .to_owned()
-          .replace_all(old="'", new="")
-          .replace_all(old="\"", new=""),
-        )
-      None => None
-    }
-  } else {
-    None
-  }
-}
-
-///|
-/// Discover an explicit Cargo workspace with native workspace package versions.
+/// Discover an explicit Cargo workspace (or single-crate Cargo root) using a
+/// proper span-preserving TOML parser.
 async fn discover_cargo_workspace(
   reader : Reader,
+  root : String,
   spec : @model.MixedWorkspaceSpec,
   units : Array[@model.ReleaseUnit],
   workspaces : Array[@model.EcosystemWorkspace],
   ownership : Array[@model.Ownership],
   seen : Map[String, Bool],
   overrides : Map[String, @model.UnitOverride],
+  managed_root_manifests : Array[String],
 ) -> Unit {
-  let ws_root = if spec.root == "." || spec.root == "" {
-    ""
-  } else {
-    slash(spec.root)
-  }
+  let ws_root = normalize_ws_root(spec.root)
   let manifest = if ws_root == "" {
     "Cargo.toml"
   } else {
@@ -462,36 +279,55 @@ async fn discover_cargo_workspace(
     fail_input("Cargo workspace has no Cargo.toml", path=manifest)
     return
   }
-  let inherited = cargo_value(workspace_source, "workspace.package", "version")
-  let member_patterns = cargo_members(workspace_source)
-  let excluded_patterns = cargo_array(workspace_source, "exclude")
+  if !managed_root_manifests.contains(manifest) {
+    managed_root_manifests.push(manifest)
+  }
+  let ws_doc = parse_toml(workspace_source)
+  let ws_pkg_tbl = ws_doc.get_table(["workspace", "package"])
+  let inherited_version = ws_pkg_tbl.bind(t => toml_string(t, "version"))
+  let inherited_publish_val = ws_pkg_tbl.bind(t => t.get("publish"))
+  let ws_tbl = ws_doc.get_table(["workspace"])
+  let member_patterns = match ws_tbl {
+    Some(t) => toml_string_array(t, "members")
+    None => []
+  }
+  let excluded_patterns = match ws_tbl {
+    Some(t) => toml_string_array(t, "exclude")
+    None => []
+  }
+  let norm_excludes = excluded_patterns.map(ex => {
+    let mut clean = slash(ex).trim().to_owned()
+    while clean.has_prefix("./") {
+      clean = clean[2:].to_owned()
+    }
+    while clean.has_suffix("/") {
+      clean = clean[:clean.length() - 1].to_owned()
+    }
+    clean
+  })
   let members : Array[String] = []
   for pattern in member_patterns {
     for candidate in cargo_candidates(reader, ws_root, pattern) {
       if !members.contains(candidate) &&
-        !excluded_patterns.any(exclude => {
-          candidate == exclude ||
-          (
-            exclude.has_suffix("/*") &&
-            candidate.has_prefix(exclude[:exclude.length() - 1])
-          )
-        }) {
+        !norm_excludes.any(ex => @engine.matches_pattern(candidate, ex)) {
         members.push(candidate)
       }
     }
   }
+  let root_pkg_name = ws_doc
+    .get_table(["package"])
+    .bind(t => toml_string(t, "name"))
+  if spec.include_root && root_pkg_name is Some(_) && !members.contains("") {
+    members.push("")
+  }
   if members.is_empty() {
     fail_input("Cargo workspace members must not be empty", path=manifest)
-  }
-  if spec.include_root &&
-    cargo_value(workspace_source, "package", "name") is Some(_) {
-    members.push("")
   }
   workspaces.push({
     id: spec.id,
     root: ws_root,
-    ecosystem: "cargo",
-    manager: "cargo",
+    ecosystem: @model.Cargo,
+    manager: @model.Cargo,
   })
   for package_member in members {
     let member_path = if package_member == "" {
@@ -500,6 +336,18 @@ async fn discover_cargo_workspace(
       package_member
     } else {
       ws_root + "/" + package_member
+    }
+    if member_path
+      .split("/")
+      .any(x => {
+        ["node_modules", "_build", "target", ".mooncakes", ".git"].contains(
+          x.to_owned(),
+        )
+      }) {
+      continue
+    }
+    if nested_checkout(reader, member_path) {
+      continue
     }
     let member_manifest = if member_path == "" {
       "Cargo.toml"
@@ -513,68 +361,84 @@ async fn discover_cargo_workspace(
       )
       continue
     }
-    guard cargo_value(source, "package", "name") is Some(name) else {
+    let canonical = if !reader.use_git_tree {
+      @fs.realpath(join(root, member_manifest))
+    } else {
+      member_manifest
+    }
+    let doc = parse_toml(source)
+    guard doc.get_table(["package"]) is Some(pkg_tbl) else {
+      fail_input(
+        "Cargo member is missing [package] table",
+        path=member_manifest,
+      )
+      continue
+    }
+    guard toml_string(pkg_tbl, "name") is Some((name, _)) else {
       fail_input("Cargo package requires name", path=member_manifest)
       continue
     }
-    let direct_version = cargo_value(source, "package", "version")
-    let inherited_version = if source.contains("version.workspace = true") {
-      inherited
-    } else {
-      direct_version
-    }
-    let version = match inherited_version {
-      Some(value) => Some(value)
-      None => inherited
-    }
-    let version_path = if direct_version is Some(_) {
-      member_manifest
-    } else {
-      manifest
-    }
-    let version_field = if direct_version is Some(_) {
-      "package"
-    } else {
-      "workspace.package"
+    let direct_version = toml_string(pkg_tbl, "version")
+    let inherits_version = toml_is_workspace_inherited(pkg_tbl.get("version"))
+    let (version, version_span, version_path, version_field) : (
+      String?,
+      @model.TextSpan?,
+      String,
+      String,
+    ) = match direct_version {
+      Some((v, sp)) => (Some(v), Some(sp), member_manifest, "package")
+      None =>
+        if inherits_version {
+          match inherited_version {
+            Some((v, sp)) => (Some(v), Some(sp), manifest, "workspace.package")
+            None => {
+              fail_input(
+                "Cargo package inherits version.workspace = true, but [workspace.package].version is missing",
+                path=member_manifest,
+              )
+              (None, None, manifest, "workspace.package")
+            }
+          }
+        } else {
+          (None, None, member_manifest, "package")
+        }
     }
     let id = "cargo:" + name
-    if seen.contains(member_manifest) || units.any(x => x.id == id) {
+    if seen.contains(canonical) || units.any(x => x.id == id) {
       fail_input("Duplicate Cargo package: " + id, path=member_manifest)
     }
-    seen[member_manifest] = true
-    let raw_publish = cargo_raw_value(source, "package", "publish")
-    let cargo_allows_publish = match raw_publish {
-      None => true
-      Some(raw) => {
-        let clean = raw.trim().to_owned()
-        if clean == "false" {
-          false
-        } else if clean.has_prefix("[") {
-          clean.contains("\"crates-io\"") || clean.contains("'crates-io'")
-        } else {
-          true
-        }
-      }
+    seen[canonical] = true
+    let publish_val = pkg_tbl.get("publish")
+    let effective_publish_val = if toml_is_workspace_inherited(publish_val) {
+      inherited_publish_val
+    } else {
+      publish_val
     }
+    let cargo_allows_publish = cargo_publish_allowed(effective_publish_val)
     let publish = cargo_allows_publish &&
       overrides.get(id).map(x => x.publish).unwrap_or(None) != Some(false)
+    let dependencies = collect_cargo_dependencies(
+      doc, ws_doc, member_manifest, manifest,
+    )
     units.push({
       id,
       native_name: name,
-      ecosystem: "cargo",
+      ecosystem: @model.Cargo,
       workspace_id: spec.id,
       root: member_path,
       manifest: member_manifest,
       version_path,
       version_field,
       version,
-      visibility: if publish {
-        "public"
+      version_span,
+      visibility: if cargo_allows_publish {
+        @model.Public
       } else {
-        "private"
+        @model.Private
       },
       publish,
-      dependencies: [],
+      publish_config: None,
+      dependencies,
     })
     if version is Some(_) &&
       !ownership.any(x => x.path == version_path && x.field == "package.version") {
@@ -583,74 +447,6 @@ async fn discover_cargo_workspace(
         field: "package.version",
         owner: id,
       })
-    }
-  }
-  let unit_ids = units.filter(x => x.workspace_id == spec.id).map(x => x.id)
-  for id in unit_ids {
-    let mut current : @model.ReleaseUnit? = None
-    for unit in units {
-      if unit.id == id {
-        current = Some(unit)
-      }
-    }
-    match current {
-      Some(unit) => {
-        let source = reader.read(unit.manifest).unwrap()
-        let dependencies : Array[@model.DependencyEdge] = []
-        for entry in cargo_entries(source) {
-          let is_dependency_section = entry.section == "dependencies" ||
-            entry.section == "dev-dependencies" ||
-            entry.section == "build-dependencies" ||
-            entry.section.has_suffix(".dependencies") ||
-            entry.section.has_suffix(".dev-dependencies") ||
-            entry.section.has_suffix(".build-dependencies")
-          if !is_dependency_section {
-            continue
-          }
-          let mut ws_entry : CargoEntry? = None
-          if entry.raw.contains("workspace = true") {
-            for candidate in cargo_entries(workspace_source) {
-              if candidate.section == "workspace.dependencies" &&
-                candidate.key == entry.key {
-                ws_entry = Some(candidate)
-              }
-            }
-          }
-          let effective = ws_entry.unwrap_or(entry)
-          let package_name = cargo_attr(effective.raw, "package").unwrap_or(
-            entry.key,
-          )
-          let producer = "cargo:" + package_name
-          let range = cargo_req(effective).unwrap_or("*")
-          let (start, end) = cargo_req_span(effective)
-          let dependency_path = if ws_entry is Some(_) {
-            manifest
-          } else {
-            unit.manifest
-          }
-          if start > 0 &&
-            !dependencies.any(x => {
-              x.producer == producer &&
-              x.path == dependency_path &&
-              x.start == start
-            }) {
-            dependencies.push({
-              producer,
-              requirement: range,
-              kind: cargo_dependency_kind(entry.section, entry.raw),
-              path: dependency_path,
-              start,
-              end,
-              target_condition: cargo_target_condition(entry.section),
-            })
-          }
-        }
-        let index = units.search_by(x => x.id == id).unwrap_or(-1)
-        if index >= 0 {
-          units[index] = { ..unit, dependencies, }
-        }
-      }
-      None => ()
     }
   }
 }

@@ -1,222 +1,4 @@
 ///|
-pub(all) struct PublishOptions {
-  dry_run : Bool
-  only : Array[String]
-  registry : String?
-  tag : String?
-  yes : Bool
-  allow_uncommitted : Bool
-  retry : Int32
-  no_tag : Bool
-}
-
-///|
-fn registry_for_ecosystem(ecosystem : String) -> String {
-  if ecosystem == "cargo" {
-    "crates.io"
-  } else if ecosystem == "npm" {
-    "npm"
-  } else {
-    "mooncakes"
-  }
-}
-
-///|
-fn parse_publish_state(name : String) -> @model.PublishState {
-  match name {
-    "pending" => @model.Pending
-    "preflighted" => @model.Preflighted
-    "published" => @model.Published
-    "skipped" => @model.Skipped
-    "failed" => @model.Failed
-    "blocked" => @model.Blocked
-    _ => @model.Unknown
-  }
-}
-
-///|
-fn status_key(unit_id : String, version : String, target : String) -> String {
-  unit_id + "@" + version + "/" + target
-}
-
-///|
-async fn[H : ExecutionHost] registry_lookup(
-  host : H,
-  ecosystem : String,
-  manager : String,
-  name : String,
-  version : String,
-  cwd : String,
-  registry_override : String?,
-) -> String {
-  if ecosystem == "moonbit" {
-    let output = host.run(
-      "moon",
-      ["view", name + "@" + version, "--json"],
-      Some(cwd),
-    )
-    let raw = output.stdout.trim().to_owned()
-    if raw == "" {
-      // Compatibility fallback for stubbed test hosts returning empty output.
-      return if output.exit_code == 0 { "absent" } else { "unknown" }
-    }
-    let parsed = @json.parse(raw) catch { _ => Json::null() }
-    match parsed {
-      { "status": "success", "result": Object(_), .. } => return "present"
-      { "status": "failure", .. } => {
-        let lower = (raw + "\n" + output.stderr).to_lower()
-        if lower.contains("404") || lower.contains("not found") {
-          return "absent"
-        }
-        return "unknown"
-      }
-      _ => {
-        let lower = (raw + "\n" + output.stderr).to_lower()
-        if lower.contains("404") || lower.contains("not found") {
-          return "absent"
-        }
-        return "unknown"
-      }
-    }
-  }
-  let package_id = name + "@" + version
-  let (program, args) = if ecosystem == "cargo" {
-    let base = ["info", package_id]
-    if registry_override is Some(reg) {
-      base.push("--registry")
-      base.push(reg)
-    }
-    ("cargo", base)
-  } else {
-    let base = ["view", package_id, "version", "--json"]
-    if registry_override is Some(reg) {
-      base.push("--registry")
-      base.push(reg)
-    }
-    (package_manager_program(host, manager), base)
-  }
-  let output = host.run(program, args, Some(cwd))
-  if output.exit_code == 0 {
-    "present"
-  } else if ecosystem == "cargo" &&
-    (
-      output.stderr.contains("could not find") ||
-      output.stderr.contains("does not exist") ||
-      output.stderr.contains("not found")
-    ) {
-    "absent"
-  } else if ecosystem == "npm" &&
-    (output.stderr.contains("E404") || output.stderr.contains("404 Not Found")) {
-    "absent"
-  } else {
-    "unknown"
-  }
-}
-
-///|
-fn topological_release_order(
-  release_ids : Array[String],
-  units_map : Map[String, @model.ReleaseUnit],
-  bridges : Array[@model.Bridge],
-  specs_by_unit : Map[String, Array[@engine.ArtifactTargetSpec]],
-) -> Array[String] {
-  let ordered : Array[String] = []
-  let visited : Map[String, Bool] = Map([])
-  fn visit(id : String) {
-    if visited.contains(id) {
-      return
-    }
-    visited[id] = true
-    if units_map.get(id) is Some(unit) {
-      for dep in unit.dependencies {
-        if dep.kind == @model.Runtime && release_ids.contains(dep.producer) {
-          visit(dep.producer)
-        }
-      }
-    }
-    for bridge in bridges {
-      if bridge.consumer == id &&
-        bridge.wait_for == "publish" &&
-        release_ids.contains(bridge.producer) {
-        visit(bridge.producer)
-      }
-    }
-    for spec in specs_by_unit.get(id).unwrap_or([]) {
-      if spec.required &&
-        spec.package_unit_id is Some(pkg) &&
-        pkg != id &&
-        release_ids.contains(pkg) {
-        visit(pkg)
-      }
-    }
-    ordered.push(id)
-  }
-  for id in release_ids {
-    visit(id)
-  }
-  ordered
-}
-
-///|
-fn upstream_producers(
-  unit_id : String,
-  units_map : Map[String, @model.ReleaseUnit],
-  bridges : Array[@model.Bridge],
-  specs_by_unit : Map[String, Array[@engine.ArtifactTargetSpec]],
-) -> Array[String] {
-  let producers : Array[String] = []
-  if units_map.get(unit_id) is Some(unit) {
-    for dep in unit.dependencies {
-      if dep.kind == @model.Runtime && !producers.contains(dep.producer) {
-        producers.push(dep.producer)
-      }
-    }
-  }
-  for bridge in bridges {
-    if bridge.consumer == unit_id &&
-      bridge.wait_for == "publish" &&
-      !producers.contains(bridge.producer) {
-      producers.push(bridge.producer)
-    }
-  }
-  for spec in specs_by_unit.get(unit_id).unwrap_or([]) {
-    if spec.required &&
-      spec.package_unit_id is Some(pkg) &&
-      pkg != unit_id &&
-      !producers.contains(pkg) {
-      producers.push(pkg)
-    }
-  }
-  producers
-}
-
-///|
-fn persist_publish_state(
-  plan_id : String,
-  order_keys : Array[String],
-  status_map : Map[String, @model.PublishStatus],
-) -> (Array[@model.PublishStatus], String) {
-  let statuses : Array[@model.PublishStatus] = []
-  for key in order_keys {
-    if status_map.get(key) is Some(item) {
-      statuses.push(item)
-    }
-  }
-  for key, item in status_map {
-    if !order_keys.contains(key) {
-      statuses.push(item)
-    }
-  }
-  let text = @model.canonical_json({
-      "schemaVersion": 1,
-      "planId": plan_id,
-      "statuses": statuses.map(x => x.to_json()),
-    }) +
-    "\n"
-  (statuses, text)
-}
-
-///|
 /// Programmatic publisher implementation registered for `publisher.kind = "api"`
 /// or per-unit custom publisher routing.
 pub(all) struct ApiPublisher {
@@ -292,8 +74,8 @@ fn ApiPublisherRegistry::resolve(
   if self.publishers.get(unit.id) is Some(pub_impl) {
     return Some((unit.id, pub_impl))
   }
-  if self.publishers.get(unit.ecosystem) is Some(pub_impl) {
-    return Some((unit.ecosystem, pub_impl))
+  if self.publishers.get(unit.ecosystem.text()) is Some(pub_impl) {
+    return Some((unit.ecosystem.text(), pub_impl))
   }
   if is_global_api {
     if self.publishers.get("default") is Some(pub_impl) {
@@ -304,6 +86,53 @@ fn ApiPublisherRegistry::resolve(
     }
   }
   None
+}
+
+///|
+pub(all) struct PublishOptions {
+  dry_run : Bool
+  only : Array[String]
+  registry : String?
+  tag : String?
+  otp : String?
+  yes : Bool
+  allow_uncommitted : Bool
+  retry : Int32
+  no_tag : Bool
+  reconcile : Bool
+  artifacts_dir : String?
+  api_publishers : ApiPublisherRegistry?
+}
+
+///|
+pub fn PublishOptions::new(
+  dry_run~ : Bool = false,
+  only~ : Array[String] = [],
+  registry? : String,
+  tag? : String,
+  otp? : String,
+  yes~ : Bool = false,
+  allow_uncommitted~ : Bool = false,
+  retry~ : Int32 = 0,
+  no_tag~ : Bool = false,
+  reconcile~ : Bool = false,
+  artifacts_dir? : String,
+  api_publishers? : ApiPublisherRegistry,
+) -> PublishOptions {
+  {
+    dry_run,
+    only,
+    registry,
+    tag,
+    otp,
+    yes,
+    allow_uncommitted,
+    retry,
+    no_tag,
+    reconcile,
+    artifacts_dir,
+    api_publishers,
+  }
 }
 
 ///|
@@ -330,130 +159,184 @@ fn make_publish_target(
 }
 
 ///|
-async fn[H : ExecutionHost] publish_release_core(
+/// Build safe base environment for command publisher plugins without leaking unrelated secrets.
+fn[H : ExecutionHost] build_command_publisher_env(
+  host : H,
+  token_env : String?,
+) -> Map[String, String] {
+  let env : Map[String, String] = Map([])
+  for
+    key in [
+      "PATH", "SystemRoot", "HOME", "USERPROFILE", "PATHEXT", "TEMP", "TMP", "ComSpec",
+      "COMSPEC",
+    ] {
+    if host.getenv(key) is Some(val) {
+      env[key] = val
+    }
+  }
+  if token_env is Some(token_var) {
+    if host.getenv(token_var) is Some(val) {
+      env[token_var] = val
+    }
+  }
+  env
+}
+
+///|
+/// Execute one JSONL command publisher request through `ExecutionHost` so it is
+/// testable, auditable, and never bypasses the host boundary.
+async fn[H : ExecutionHost] run_command_publisher(
+  host : H,
+  root : String,
+  cmd : Array[String],
+  env : Map[String, String],
+  protocol_method : String,
+  payload : Json,
+) -> Json {
+  let request : @adapters.JsonlRequest = {
+    schema_version: 1,
+    protocol_method,
+    payload,
+  }
+  let stdin_text = request.to_json().stringify() + "\n"
+  let output = host.run_with_env(
+    cmd[0],
+    cmd[1:].to_owned(),
+    Some(root),
+    env,
+    Some(stdin_text),
+    Some(30000),
+  )
+  if output.exit_code != 0 {
+    raise invalid_error(
+      "plugin-crashed",
+      "Publisher command exited with code " +
+      output.exit_code.to_string() +
+      ": " +
+      process_failure_detail(output),
+    )
+  }
+  let lines = output.stdout
+    .replace_all(old="\r\n", new="\n")
+    .split("\n")
+    .map(x => x.trim().to_owned())
+    .filter(x => x != "")
+    .collect()
+  if lines.length() != 1 {
+    raise invalid_error(
+      "plugin-invalid-output", "Publisher command must return exactly one JSONL response",
+    )
+  }
+  let parsed = @json.parse(lines[0]) catch {
+    _ =>
+      raise invalid_error(
+        "plugin-invalid-output", "Publisher command output is not JSON",
+      )
+  }
+  let response = @adapters.parse_response(parsed)
+  if !response.ok {
+    raise invalid_error(
+      "plugin-request-failed",
+      response.error.unwrap_or("Publisher command rejected request"),
+    )
+  }
+  response.result
+}
+
+///|
+fn infer_snapshot_dist_tag(version : String) -> String {
+  match version.find("-") {
+    Some(idx) => {
+      let pre = version[idx + 1:].to_owned()
+      let first = pre.split("-").collect()[0].to_owned()
+      let is_all_digits = first != "" &&
+        first.to_array().all(ch => ch >= '0' && ch <= '9')
+      if first != "" && !is_all_digits {
+        first
+      } else {
+        "snapshot"
+      }
+    }
+    None => "snapshot"
+  }
+}
+
+///|
+fn build_command_payload(
+  unit : @model.ReleaseUnit,
+  version : String,
+  registry : String,
+  dist_tag : String?,
+  access : @model.Access,
+  archive_path : String?,
+) -> Json {
+  let payload : Map[String, Json] = Map([
+    ("unitId", Json::string(unit.id)),
+    ("name", Json::string(unit.native_name)),
+    ("version", Json::string(version)),
+    ("ecosystem", Json::string(unit.ecosystem.text())),
+    ("registry", Json::string(registry)),
+    ("access", Json::string(access.text())),
+  ])
+  if dist_tag is Some(dt) {
+    payload["distTag"] = Json::string(dt)
+  }
+  if archive_path is Some(path) && path != "" {
+    payload["archivePath"] = Json::string(path)
+  }
+  Json::object(payload)
+}
+
+///|
+pub async fn[H : ExecutionHost] publish_release_with(
   host : H,
   loaded : @workspace.LoadedWorkspace,
   options : PublishOptions,
-  artifacts_dir : String?,
-  api_publishers : ApiPublisherRegistry?,
 ) -> @model.PublishResult {
   let adapter_registry = @adapters.AdapterRegistry::with_builtins()
   let specs_by_unit = @engine.parse_artifact_specs(loaded.snapshot.config)
-  let state_path = absolute_path(
+  let (release_state, _raw_state) = load_release_state(
+    host,
     loaded.snapshot.root,
-    ".moonset/release-state.json",
   )
-  if !host.exists(state_path) {
-    raise invalid_error(
-      "usage",
-      "No release state exists; run version first",
-      path=state_path,
-    )
-  }
-  let state = @json.parse(host.read_text(state_path)) catch {
-    _ =>
-      raise invalid_error(
-        "usage",
-        "Release state is not valid JSON",
-        path=state_path,
-      )
-  }
-  guard state
-    is { "planFingerprint": String(plan_id), "releases": Array(items), .. } else {
-    raise invalid_error(
-      "usage",
-      "Release state has an invalid shape",
-      path=state_path,
-    )
-  }
+  let plan_id = release_state.plan_fingerprint
   let units_map : Map[String, @model.ReleaseUnit] = Map([])
   for unit in loaded.snapshot.units {
     units_map[unit.id] = unit
   }
   let release_versions : Map[String, String] = Map([])
   let release_ids : Array[String] = []
-  for item in items {
-    if item
-      is {
-        "unitId": String(unit_id),
-        "newVersion": String(version),
-        "publish": True,
-        ..
-      } {
-      release_versions[unit_id] = version
-      release_ids.push(unit_id)
+  for rel in release_state.releases {
+    if rel.publish {
+      release_versions[rel.unit_id] = rel.new_version
+      release_ids.push(rel.unit_id)
     }
   }
-  let resolved_fixed = @engine.resolve_unit_groups(
-    loaded.snapshot.config.fixed,
-    loaded.snapshot.units,
+  // Load existing publish-state before resolving --only closure so retries after
+  // upstream success are permitted!
+  let status_map = load_publish_state(host, loaded.snapshot.root, plan_id)
+  let selected_ids = resolve_only_selection(
+    options.only,
+    release_ids,
+    release_versions,
+    units_map,
+    loaded,
+    specs_by_unit,
+    status_map,
   )
-  let selected_ids : Array[String] = if options.only.is_empty() {
-    release_ids.copy()
-  } else {
-    let chosen : Array[String] = []
-    for raw in options.only {
-      let id = @engine.canonical_id(raw)
-      if !release_versions.contains(id) {
-        raise invalid_error(
-          "unknown-unit",
-          "--only references a unit not in the release plan: " + raw,
-        )
-      }
-      if !chosen.contains(id) {
-        chosen.push(id)
-      }
-    }
-    let missing : Array[String] = []
-    for group in resolved_fixed {
-      if group.any(id => chosen.contains(id)) {
-        for group_member in group {
-          if release_versions.contains(group_member) &&
-            !chosen.contains(group_member) &&
-            !missing.contains(group_member) {
-            missing.push(group_member)
-          }
-        }
-      }
-    }
-    for id in chosen {
-      for
-        producer in upstream_producers(
-          id,
-          units_map,
-          loaded.snapshot.config.bridges,
-          specs_by_unit,
-        ) {
-        if release_versions.contains(producer) &&
-          !chosen.contains(producer) &&
-          !missing.contains(producer) {
-          missing.push(producer)
-        }
-      }
-    }
-    if !missing.is_empty() {
-      missing.sort()
-      raise invalid_error(
-        "incomplete-selection",
-        "Incomplete --only selection; missing required closure members: " +
-        missing.join(", "),
-      )
-    }
-    chosen
-  }
-  let is_global_api = loaded.snapshot.config.publisher_kind == "api"
-  if is_global_api && api_publishers is None {
+  let is_global_api = loaded.snapshot.config.publisher.kind == "api"
+  if is_global_api && options.api_publishers is None {
     raise invalid_error(
-      "unsupported-capability", "publisher.kind='api' must be invoked programmatically through publish_release_with_api",
+      "unsupported-capability", "publisher.kind='api' requires PublishOptions.api_publishers",
     )
   }
-  let use_command_publisher = loaded.snapshot.config.publisher_kind == "command"
+  let use_command_publisher = loaded.snapshot.config.publisher.kind == "command"
   let cli_registry_map = @engine.parse_target_mapping(options.registry)
   let cli_tag_map = @engine.parse_target_mapping(options.tag)
-  let cfg_registry_map = if loaded.snapshot.config.publisher_registry !=
+  let cfg_registry_map = if loaded.snapshot.config.publisher.registry !=
     "default" {
     @engine.parse_target_mapping(
-      Some(loaded.snapshot.config.publisher_registry),
+      Some(loaded.snapshot.config.publisher.registry),
     )
   } else {
     @engine.parse_target_mapping(None)
@@ -474,34 +357,19 @@ async fn[H : ExecutionHost] publish_release_core(
       )
     }
   }
-  let command_publishers = @adapters.PublisherRegistry::new()
-  if use_command_publisher {
-    let cmd = loaded.snapshot.config.publisher_command
-    if cmd.is_empty() {
-      raise invalid_error(
-        "invalid-config", "publisher.command must not be empty when publisher.kind='command'",
-      )
-    }
-    let env : Map[String, String] = Map([])
-    for key in ["PATH", "SystemRoot"] {
-      if host.getenv(key) is Some(val) {
-        env[key] = val
-      }
-    }
-    if loaded.snapshot.config.publisher_token_env is Some(token_var) {
-      if host.getenv(token_var) is Some(val) {
-        env[token_var] = val
-      }
-    }
-    command_publishers.register("command", {
-      program: cmd[0],
-      args: cmd[1:].to_owned(),
-      cwd: Some(loaded.snapshot.root),
-      timeout_ms: 30000,
-      max_output_bytes: 1048576,
-      allowed_programs: [cmd[0]],
-      environment: env,
-    })
+  let command_cmd = loaded.snapshot.config.publisher.command
+  if use_command_publisher && command_cmd.is_empty() {
+    raise invalid_error(
+      "invalid-config", "publisher.command must not be empty when publisher.kind='command'",
+    )
+  }
+  let command_env = if use_command_publisher {
+    build_command_publisher_env(
+      host,
+      loaded.snapshot.config.publisher.token_env,
+    )
+  } else {
+    Map([])
   }
   let mut worktree_dirty = false
   if !options.dry_run {
@@ -523,14 +391,15 @@ async fn[H : ExecutionHost] publish_release_core(
       "confirmation-required", "Real publish requires explicit --yes confirmation",
     )
   }
-  let should_verify_matrix = artifacts_dir is Some(_) ||
+  let should_verify_matrix = options.artifacts_dir is Some(_) ||
     (!specs_by_unit.is_empty() && !options.dry_run)
   let pack_state_path = absolute_path(
     loaded.snapshot.root,
     ".moonset/pack-results.json",
   )
   let packed_by_unit : Map[String, Json] = Map([])
-  if !should_verify_matrix && host.exists(pack_state_path) {
+  let verified_archives : Map[String, String] = Map([])
+  if host.exists(pack_state_path) {
     let pack_json = @json.parse(host.read_text(pack_state_path)) catch {
       _ => Json::null()
     }
@@ -542,16 +411,18 @@ async fn[H : ExecutionHost] publish_release_core(
       }
     }
   }
-  let selected_ecosystems : Array[String] = []
+  let selected_ecosystems : Array[@model.Ecosystem] = []
   let unit_api_map : Map[String, (String, ApiPublisher)] = Map([])
   let unit_registry_overrides : Map[String, String?] = Map([])
   let unit_tag_overrides : Map[String, String?] = Map([])
+  let unit_access_map : Map[String, @model.Access] = Map([])
   for unit_id in selected_ids {
     if units_map.get(unit_id) is Some(unit) {
-      let unit_override_pub = loaded.snapshot.config.unit_overrides
+      let unit_override_pub = loaded.snapshot.config
+        .unit_overrides()
         .get(unit.id)
         .bind(x => x.publisher)
-      let resolved_api = match api_publishers {
+      let resolved_api = match options.api_publishers {
         Some(reg) => reg.resolve(unit, unit_override_pub, is_global_api)
         None => None
       }
@@ -566,7 +437,8 @@ async fn[H : ExecutionHost] publish_release_core(
       } else if !use_command_publisher {
         adapter_registry.require(unit.ecosystem, @adapters.Publish)
       }
-      if unit.version != Some(release_versions[unit_id]) {
+      let target_ver = release_versions[unit_id]
+      if unit.version != Some(target_ver) {
         raise invalid_error(
           "stale-release-state",
           "Current manifest version does not match release-state.json for " +
@@ -574,7 +446,8 @@ async fn[H : ExecutionHost] publish_release_core(
           path=unit.manifest,
         )
       }
-      if packed_by_unit.get(unit_id) is Some(pack_entry) {
+      if !should_verify_matrix &&
+        packed_by_unit.get(unit_id) is Some(pack_entry) {
         match pack_entry {
           {
             "version": String(pack_ver),
@@ -582,7 +455,7 @@ async fn[H : ExecutionHost] publish_release_core(
             "archivePath": String(archive_path),
             ..
           } => {
-            if pack_ver != release_versions[unit_id] {
+            if pack_ver != target_ver {
               raise invalid_error(
                 "stale-artifact",
                 "Packed artifact version does not match release state for " +
@@ -590,12 +463,29 @@ async fn[H : ExecutionHost] publish_release_core(
                 path=pack_state_path,
               )
             }
-            if archive_path != "" && !host.exists(archive_path) {
-              raise invalid_error(
-                "artifact-missing",
-                "Packed artifact is missing on disk: " + archive_path,
-                path=archive_path,
-              )
+            if archive_path != "" {
+              let resolved_arch = if host.exists(archive_path) {
+                archive_path
+              } else {
+                absolute_path(loaded.snapshot.root, archive_path)
+              }
+              if !host.exists(resolved_arch) {
+                raise invalid_error(
+                  "artifact-missing",
+                  "Packed artifact is missing on disk: " + archive_path,
+                  path=archive_path,
+                )
+              }
+              if pack_entry is { "contentHash": String(ch), .. } &&
+                ch.has_prefix("fnv1a64:") &&
+                bytes_fingerprint(host.read_binary(resolved_arch)) != ch {
+                raise invalid_error(
+                  "stale-artifact",
+                  "Packed artifact hash mismatch on disk for " + unit.id,
+                  path=resolved_arch,
+                )
+              }
+              verified_archives[unit.id] = resolved_arch
             }
             if pack_entry is { "sourceCommit": String(pack_commit), .. } &&
               loaded.snapshot.git_head is Some(head) &&
@@ -616,7 +506,8 @@ async fn[H : ExecutionHost] publish_release_core(
             )
         }
       }
-      if unit.visibility == "private" && !loaded.snapshot.config.private_publish {
+      if unit.visibility == @model.Private &&
+        !loaded.snapshot.config.private_packages.publish {
         raise invalid_error(
           "private-policy",
           "Publishing private unit is disabled: " + unit.id,
@@ -626,7 +517,7 @@ async fn[H : ExecutionHost] publish_release_core(
       if !selected_ecosystems.contains(unit.ecosystem) {
         selected_ecosystems.push(unit.ecosystem)
       }
-      let reg_override = match
+      let cli_or_cfg_reg = match
         @engine.resolve_target_override(
           cli_registry_map,
           unit.id,
@@ -640,13 +531,39 @@ async fn[H : ExecutionHost] publish_release_core(
             unit.ecosystem,
           )
       }
-      let tag_override = @engine.resolve_target_override(
+      let reg_override = match cli_or_cfg_reg {
+        Some(v) => Some(v)
+        None => unit.publish_config.bind(pc => pc.registry)
+      }
+      let cli_tag = @engine.resolve_target_override(
         cli_tag_map,
         unit.id,
         unit.ecosystem,
       )
+      // Automatically route npm prerelease/snapshot publishes to an explicit dist-tag
+      // when the caller did not specify `--tag`, preventing accidental `latest` overwrite!
+      let auto_tag = match cli_tag {
+        Some(t) => Some(t)
+        None =>
+          if unit.ecosystem == @model.Npm {
+            if release_state.is_snapshot {
+              Some(infer_snapshot_dist_tag(target_ver))
+            } else if loaded.pre is Some({ mode: @model.Pre, tag: pre_tag, .. }) &&
+              target_ver.contains("-") {
+              Some(pre_tag)
+            } else {
+              None
+            }
+          } else {
+            None
+          }
+      }
+      let eff_access = unit.publish_config
+        .bind(pc => pc.access)
+        .unwrap_or(loaded.snapshot.config.access)
       unit_registry_overrides[unit.id] = reg_override
-      unit_tag_overrides[unit.id] = tag_override
+      unit_tag_overrides[unit.id] = auto_tag
+      unit_access_map[unit.id] = eff_access
     }
   }
   if selected_ecosystems.length() > 1 &&
@@ -663,12 +580,12 @@ async fn[H : ExecutionHost] publish_release_core(
       if !has_custom {
         let reg_override = unit_registry_overrides.get(unit.id).unwrap_or(None)
         let tag_override = unit_tag_overrides.get(unit.id).unwrap_or(None)
-        if unit.ecosystem == "moonbit" && reg_override is Some(_) {
+        if unit.ecosystem == @model.MoonBit && reg_override is Some(_) {
           raise invalid_error(
             "unsupported-capability", "Mooncakes CLI does not support --registry overrides",
           )
         }
-        if (unit.ecosystem == "moonbit" || unit.ecosystem == "cargo") &&
+        if (unit.ecosystem == @model.MoonBit || unit.ecosystem == @model.Cargo) &&
           tag_override is Some(_) {
           raise invalid_error(
             "unsupported-capability", "Only npm/pnpm registries support --tag dist-tag overrides",
@@ -677,65 +594,13 @@ async fn[H : ExecutionHost] publish_release_core(
       }
     }
   }
-  let status_map : Map[String, @model.PublishStatus] = Map([])
-  let previous_path = absolute_path(
-    loaded.snapshot.root,
-    ".moonset/publish-state.json",
-  )
-  if host.exists(previous_path) {
-    let previous = @json.parse(host.read_text(previous_path)) catch {
-      _ => Json::null()
-    }
-    match previous {
-      {
-        "planId": String(previous_plan),
-        "statuses": Array(previous_statuses),
-        ..
-      } if previous_plan == plan_id =>
-        for previous_status in previous_statuses {
-          if previous_status
-            is {
-              "unitId": String(previous_unit),
-              "version": String(previous_version),
-              "target": String(previous_target),
-              "state": String(previous_state),
-              ..
-            } {
-            let registry = match previous_status {
-              { "registry": String(reg), .. } => reg
-              _ => "unknown"
-            }
-            let message = match previous_status {
-              { "message": String(msg), .. } => Some(msg)
-              _ => None
-            }
-            let parsed_state = if previous_state == "publishing" {
-              @model.Unknown
-            } else {
-              parse_publish_state(previous_state)
-            }
-            let key = status_key(
-              previous_unit, previous_version, previous_target,
-            )
-            status_map[key] = {
-              plan_id,
-              unit_id: previous_unit,
-              version: previous_version,
-              target: previous_target,
-              registry,
-              state: parsed_state,
-              digest: None,
-              external_id: None,
-              message,
-            }
-          }
-        }
-      _ => ()
-    }
-  }
   let artifact_blocked_messages : Map[String, String] = Map([])
   if should_verify_matrix {
-    let report = verify_artifacts_with(host, loaded, artifacts_dir?)
+    let report = verify_artifacts_with(
+      host,
+      loaded,
+      artifacts_dir?=options.artifacts_dir,
+    )
     for issue in report.issues {
       if issue.blocking && !artifact_blocked_messages.contains(issue.unit_id) {
         artifact_blocked_messages[issue.unit_id] = issue.message
@@ -746,7 +611,7 @@ async fn[H : ExecutionHost] publish_release_core(
         let mut msg = "Required platform artifact verification failed for " +
           blocked_uid
         for spec in specs_by_unit.get(blocked_uid).unwrap_or([]) {
-          if spec.required && spec.package_unit_id is Some(pkg) {
+          if spec.required && spec.linked_package is Some(pkg) {
             if artifact_blocked_messages.get(pkg) is Some(sub_msg) {
               msg = "Blocked by artifact verification failure: " + sub_msg
               break
@@ -760,7 +625,7 @@ async fn[H : ExecutionHost] publish_release_core(
   let ordered_ids = topological_release_order(
     selected_ids,
     units_map,
-    loaded.snapshot.config.bridges,
+    loaded.snapshot.config.bridges(),
     specs_by_unit,
   )
   let order_keys = ordered_ids.map(id => {
@@ -768,13 +633,74 @@ async fn[H : ExecutionHost] publish_release_core(
   })
   let mut failed = false
   let failed_units : Map[String, Bool] = Map([])
-  let to_publish : Array[(String, String, String, String, String)] = []
+  let to_publish : Array[
+    (@model.ReleaseUnit, String, @model.PackageManager, String),
+  ] = []
+  let query_registry = async fn(
+    unit : @model.ReleaseUnit,
+    version : String,
+    manager : @model.PackageManager,
+    cwd : String,
+    registry : String,
+    reg_override : String?,
+    tag_override : String?,
+    access : @model.Access,
+    archive : String?,
+  ) -> RegistryLookup {
+    match unit_api_map.get(unit.id) {
+      Some((pub_name, api_pub)) => {
+        let target = make_publish_target(
+          unit.id,
+          version,
+          registry,
+          pub_name,
+          tag_override,
+        )
+        let present = (api_pub.already_published)(target) catch {
+          err => return LookupUnknown(error_message(err))
+        }
+        if present {
+          Present
+        } else {
+          Absent
+        }
+      }
+      None =>
+        if use_command_publisher {
+          let payload = build_command_payload(
+            unit, version, registry, tag_override, access, archive,
+          )
+          let resp = run_command_publisher(
+            host,
+            loaded.snapshot.root,
+            command_cmd,
+            command_env,
+            "already-published",
+            payload,
+          ) catch {
+            err => return LookupUnknown(error_message(err))
+          }
+          match resp {
+            { "published": True, .. } | True => Present
+            _ => Absent
+          }
+        } else {
+          driver_registry_lookup(
+            host, unit, manager, version, cwd, reg_override,
+          )
+        }
+    }
+  }
   for unit_id in ordered_ids {
     let version = release_versions[unit_id]
     let key = status_key(unit_id, version, "source")
     let unit_opt = units_map.get(unit_id)
     let unit_reg_override = unit_registry_overrides.get(unit_id).unwrap_or(None)
     let unit_tag_override = unit_tag_overrides.get(unit_id).unwrap_or(None)
+    let unit_access = unit_access_map
+      .get(unit_id)
+      .unwrap_or(loaded.snapshot.config.access)
+    let unit_archive = verified_archives.get(unit_id)
     let registry = match unit_opt {
       Some(unit) =>
         unit_reg_override.unwrap_or(registry_for_ecosystem(unit.ecosystem))
@@ -785,16 +711,56 @@ async fn[H : ExecutionHost] publish_release_core(
         continue
       }
       if prev.state == @model.Unknown {
-        failed = true
-        failed_units[unit_id] = true
-        status_map[key] = {
-          ..prev,
-          state: @model.Blocked,
-          message: Some(
-            "Previous publish outcome is unknown; verify the registry before retrying",
-          ),
+        if options.reconcile && unit_opt is Some(unit) {
+          let unit_pub = loaded.snapshot.config
+            .unit_overrides()
+            .get(unit.id)
+            .bind(x => x.publisher)
+          let eff_mgr = match unit_pub {
+            Some("npm") => @model.PackageManager::Npm
+            Some("pnpm") => @model.PackageManager::Pnpm
+            _ => manager_for_unit(loaded.snapshot, unit)
+          }
+          let cwd = absolute_path(loaded.snapshot.root, unit.root)
+          match
+            query_registry(
+              unit, version, eff_mgr, cwd, registry, unit_reg_override, unit_tag_override,
+              unit_access, unit_archive,
+            ) {
+            Present => {
+              status_map[key] = {
+                ..prev,
+                state: @model.Published,
+                message: Some("reconciled as already published"),
+              }
+              continue
+            }
+            Absent => ()
+            LookupUnknown(detail) => {
+              failed = true
+              failed_units[unit_id] = true
+              status_map[key] = {
+                ..prev,
+                state: @model.Blocked,
+                message: Some(
+                  "Reconcile could not determine registry state: " + detail,
+                ),
+              }
+              continue
+            }
+          }
+        } else {
+          failed = true
+          failed_units[unit_id] = true
+          status_map[key] = {
+            ..prev,
+            state: @model.Blocked,
+            message: Some(
+              "Previous publish outcome is unknown; verify the registry or retry with --reconcile",
+            ),
+          }
+          continue
         }
-        continue
       }
     }
     if artifact_blocked_messages.get(unit_id) is Some(block_msg) {
@@ -816,7 +782,7 @@ async fn[H : ExecutionHost] publish_release_core(
     let blocked_by = upstream_producers(
       unit_id,
       units_map,
-      loaded.snapshot.config.bridges,
+      loaded.snapshot.config.bridges(),
       specs_by_unit,
     ).filter(p => failed_units.contains(p))
     if !blocked_by.is_empty() {
@@ -851,101 +817,61 @@ async fn[H : ExecutionHost] publish_release_core(
       }
       continue
     }
-    let effective_registry = unit_reg_override
-    let unit_publisher = loaded.snapshot.config.unit_overrides
+    let unit_publisher = loaded.snapshot.config
+      .unit_overrides()
       .get(unit.id)
       .bind(x => x.publisher)
     let effective_manager = match unit_publisher {
-      Some("npm" | "pnpm" as mgr) => mgr
+      Some("npm") => @model.PackageManager::Npm
+      Some("pnpm") => @model.PackageManager::Pnpm
       _ => manager_for_unit(loaded.snapshot, unit)
     }
     let cwd = absolute_path(loaded.snapshot.root, unit.root)
-    let unit_api_opt = unit_api_map.get(unit.id)
-    let registry_state = match unit_api_opt {
-      Some((pub_name, api_pub)) => {
-        let target = make_publish_target(
-          unit.id,
+    match
+      query_registry(
+        unit, version, effective_manager, cwd, registry, unit_reg_override, unit_tag_override,
+        unit_access, unit_archive,
+      ) {
+      Present => {
+        status_map[key] = {
+          plan_id,
+          unit_id,
           version,
+          target: "source",
           registry,
-          pub_name,
-          unit_tag_override,
-        )
-        let present = (api_pub.already_published)(target) catch { _ => false }
-        if present {
-          "present"
-        } else {
-          "absent"
+          state: @model.Published,
+          digest: None,
+          external_id: None,
+          message: Some("already published"),
         }
+        continue
       }
-      None =>
-        if use_command_publisher {
-          let payload : Map[String, Json] = Map([
-            ("unitId", Json::string(unit.id)),
-            ("name", Json::string(unit.native_name)),
-            ("version", Json::string(version)),
-            ("ecosystem", Json::string(unit.ecosystem)),
-            ("registry", Json::string(registry)),
-          ])
-          if unit_tag_override is Some(dt) {
-            payload["distTag"] = Json::string(dt)
-          }
-          let resp = command_publishers.execute(
-            "command",
-            "already-published",
-            Json::object(payload),
-          )
-          match resp {
-            { "published": True, .. } | True => "present"
-            _ => "absent"
-          }
-        } else {
-          registry_lookup(
-            host,
-            unit.ecosystem,
-            effective_manager,
-            unit.native_name,
-            version,
-            cwd,
-            effective_registry,
-          )
+      LookupUnknown(detail) => {
+        failed = true
+        failed_units[unit_id] = true
+        status_map[key] = {
+          plan_id,
+          unit_id,
+          version,
+          target: "source",
+          registry,
+          state: @model.Blocked,
+          digest: None,
+          external_id: None,
+          message: Some(
+            "Could not determine whether the package is already published: " +
+            detail,
+          ),
         }
-    }
-    if registry_state == "present" {
-      status_map[key] = {
-        plan_id,
-        unit_id,
-        version,
-        target: "source",
-        registry,
-        state: @model.Published,
-        digest: None,
-        external_id: None,
-        message: Some("already published"),
+        continue
       }
-      continue
-    }
-    if registry_state == "unknown" {
-      failed = true
-      failed_units[unit_id] = true
-      status_map[key] = {
-        plan_id,
-        unit_id,
-        version,
-        target: "source",
-        registry,
-        state: @model.Blocked,
-        digest: None,
-        external_id: None,
-        message: Some(
-          "Could not determine whether the package is already published",
-        ),
-      }
-      continue
+      Absent => ()
     }
     let mut ok = true
     let mut preflight_already_published = false
-    if options.dry_run || loaded.snapshot.config.publisher_dry_run_first {
-      match unit_api_opt {
+    let mut preflight_err_detail = "Registry preflight failed"
+    if options.dry_run || loaded.snapshot.config.publisher.dry_run_first {
+      match unit_api_map.get(unit.id) {
         Some((pub_name, api_pub)) => {
           let target = make_publish_target(
             unit.id,
@@ -954,76 +880,51 @@ async fn[H : ExecutionHost] publish_release_core(
             pub_name,
             unit_tag_override,
           )
-          let preflight_ok = try {
-            (api_pub.preflight)(target)
-            true
-          } catch {
-            _ => false
+          (api_pub.preflight)(target) catch {
+            err => {
+              ok = false
+              preflight_err_detail = error_message(err)
+            }
           }
-          ok = preflight_ok
         }
         None =>
           if use_command_publisher {
-            let payload : Map[String, Json] = Map([
-              ("unitId", Json::string(unit.id)),
-              ("name", Json::string(unit.native_name)),
-              ("version", Json::string(version)),
-              ("ecosystem", Json::string(unit.ecosystem)),
-              ("registry", Json::string(registry)),
-            ])
-            if unit_tag_override is Some(dt) {
-              payload["distTag"] = Json::string(dt)
+            let payload = build_command_payload(
+              unit, version, registry, unit_tag_override, unit_access, unit_archive,
+            )
+            ignore(
+              run_command_publisher(
+                host,
+                loaded.snapshot.root,
+                command_cmd,
+                command_env,
+                "preflight",
+                payload,
+              ),
+            ) catch {
+              err => {
+                ok = false
+                preflight_err_detail = error_message(err)
+              }
             }
-            let preflight_ok = try {
-              ignore(
-                command_publishers.execute(
-                  "command",
-                  "preflight",
-                  Json::object(payload),
-                ),
-              )
-              true
-            } catch {
-              _ => false
-            }
-            ok = preflight_ok
           } else {
-            let program = if unit.ecosystem == "moonbit" {
-              "moon"
-            } else if unit.ecosystem == "cargo" {
-              "cargo"
-            } else {
-              package_manager_program(host, effective_manager)
-            }
-            let preflight_args = if unit.ecosystem == "moonbit" {
-              ["publish", "--dry-run"]
-            } else if unit.ecosystem == "cargo" {
-              let args = ["publish", "--dry-run", "--allow-dirty"]
-              if effective_registry is Some(reg) {
-                args.push("--registry")
-                args.push(reg)
-              }
-              args
-            } else {
-              let args = ["publish", "--dry-run", "--ignore-scripts"]
-              if effective_registry is Some(reg) {
-                args.push("--registry")
-                args.push(reg)
-              }
-              if unit_tag_override is Some(dist_tag) {
-                args.push("--tag")
-                args.push(dist_tag)
-              }
-              args
-            }
-            let preflight = host.run(program, preflight_args, Some(cwd))
-            ok = preflight.exit_code == 0
-            if !ok && unit.ecosystem == "moonbit" {
-              let combined = preflight.stdout + "\n" + preflight.stderr
-              if combined.contains("409 Conflict") ||
-                combined.contains("duplicated with an existing version") {
-                preflight_already_published = true
-              }
+            let (pf_ok, pf_dup, detail) = driver_preflight(
+              host,
+              unit,
+              effective_manager,
+              cwd,
+              {
+                registry: unit_reg_override,
+                dist_tag: unit_tag_override,
+                access: unit_access,
+                otp: options.otp,
+                archive_path: unit_archive,
+              },
+            )
+            ok = pf_ok
+            preflight_already_published = pf_dup
+            if detail != "" {
+              preflight_err_detail = detail
             }
           }
       }
@@ -1062,50 +963,67 @@ async fn[H : ExecutionHost] publish_release_core(
       message: if ok {
         None
       } else {
-        Some("Registry preflight failed")
+        Some(preflight_err_detail)
       },
     }
     if ok {
-      to_publish.push(
-        (unit_id, version, unit.ecosystem, effective_manager, cwd),
-      )
+      to_publish.push((unit, version, effective_manager, cwd))
     }
   }
-  host.mkdir(absolute_path(loaded.snapshot.root, ".moonset"))
-  let (preflight_statuses, preflight_text) = persist_publish_state(
-    plan_id, order_keys, status_map,
-  )
-  host.write_text(previous_path, preflight_text)
-  if options.dry_run || failed {
+  // INVARIANT: `--dry-run` MUST NEVER write `.moonset/publish-state.json` or any workspace file!
+  if options.dry_run {
+    let (dry_statuses, _) = serialize_publish_state(
+      plan_id, order_keys, status_map,
+    )
     return {
       schema_version: 1,
       plan_id,
-      dry_run: options.dry_run,
+      dry_run: true,
+      complete: false,
+      statuses: dry_statuses,
+      recovery_path: None,
+    }
+  }
+  let preflight_statuses = save_publish_state(
+    host,
+    loaded.snapshot.root,
+    plan_id,
+    order_keys,
+    status_map,
+    "preflight",
+  )
+  if failed {
+    return {
+      schema_version: 1,
+      plan_id,
+      dry_run: false,
       complete: false,
       statuses: preflight_statuses,
-      recovery_path: if failed {
-        Some(".moonset/publish-state.json")
-      } else {
-        None
-      },
+      recovery_path: Some(".moonset/publish-state.json"),
     }
   }
   let max_attempts = if options.retry > 0 { options.retry + 1 } else { 1 }
+  let published_unit_ids : Array[String] = []
+  let mut step_idx = 0
   for item in to_publish {
-    let (unit_id, version, ecosystem, manager, cwd) = item
+    let (unit, version, manager, cwd) = item
+    let unit_id = unit.id
     let key = status_key(unit_id, version, "source")
     let effective_registry = unit_registry_overrides
       .get(unit_id)
       .unwrap_or(None)
     let unit_tag_override = unit_tag_overrides.get(unit_id).unwrap_or(None)
+    let unit_access = unit_access_map
+      .get(unit_id)
+      .unwrap_or(loaded.snapshot.config.access)
+    let unit_archive = verified_archives.get(unit_id)
     let registry = effective_registry.unwrap_or(
-      registry_for_ecosystem(ecosystem),
+      registry_for_ecosystem(unit.ecosystem),
     )
-    let unit_api_opt = unit_api_map.get(unit_id)
     let blocked_by = upstream_producers(
       unit_id,
       units_map,
-      loaded.snapshot.config.bridges,
+      loaded.snapshot.config.bridges(),
       specs_by_unit,
     ).filter(p => failed_units.contains(p))
     if !blocked_by.is_empty() {
@@ -1122,37 +1040,18 @@ async fn[H : ExecutionHost] publish_release_core(
         external_id: None,
         message: Some("Blocked by failed upstream dependency: " + blocked_by[0]),
       }
-      let (_, text) = persist_publish_state(plan_id, order_keys, status_map)
-      host.write_text(previous_path, text)
+      ignore(
+        save_publish_state(
+          host,
+          loaded.snapshot.root,
+          plan_id,
+          order_keys,
+          status_map,
+          "blocked-" + step_idx.to_string(),
+        ),
+      )
+      step_idx += 1
       continue
-    }
-    let program = if ecosystem == "moonbit" {
-      "moon"
-    } else if ecosystem == "cargo" {
-      "cargo"
-    } else {
-      package_manager_program(host, manager)
-    }
-    let args = if ecosystem == "moonbit" {
-      ["publish"]
-    } else if ecosystem == "cargo" {
-      let base = ["publish", "--allow-dirty"]
-      if effective_registry is Some(reg) {
-        base.push("--registry")
-        base.push(reg)
-      }
-      base
-    } else {
-      let base = ["publish", "--ignore-scripts"]
-      if effective_registry is Some(reg) {
-        base.push("--registry")
-        base.push(reg)
-      }
-      if unit_tag_override is Some(dist_tag) {
-        base.push("--tag")
-        base.push(dist_tag)
-      }
-      base
     }
     status_map[key] = {
       plan_id,
@@ -1165,121 +1064,94 @@ async fn[H : ExecutionHost] publish_release_core(
       external_id: None,
       message: Some("Publishing in progress"),
     }
-    let (_, inflight_text) = persist_publish_state(
-      plan_id, order_keys, status_map,
+    ignore(
+      save_publish_state(
+        host,
+        loaded.snapshot.root,
+        plan_id,
+        order_keys,
+        status_map,
+        "inflight-" + step_idx.to_string(),
+      ),
     )
-    host.write_text(previous_path, inflight_text)
     let mut attempt = 0
     let mut published_ok = false
     let mut external_id : String? = None
+    let mut digest : String? = None
+    let mut last_error = ""
     while attempt < max_attempts && !published_ok {
       if attempt > 0 {
-        let unit_name = units_map
-          .get(unit_id)
-          .map(u => u.native_name)
-          .unwrap_or(unit_id)
-        let probe = match unit_api_opt {
-          Some((pub_name, api_pub)) => {
-            let target = make_publish_target(
-              unit_id, version, registry, pub_name, unit_tag_override,
-            )
-            let present = (api_pub.already_published)(target) catch {
-              _ => false
-            }
-            if present {
-              "present"
-            } else {
-              "absent"
-            }
+        host.sleep_ms(500 * attempt)
+        match
+          query_registry(
+            unit, version, manager, cwd, registry, effective_registry, unit_tag_override,
+            unit_access, unit_archive,
+          ) {
+          Present => {
+            published_ok = true
+            break
           }
-          None =>
-            if use_command_publisher {
-              let payload : Map[String, Json] = Map([
-                ("unitId", Json::string(unit_id)),
-                ("name", Json::string(unit_name)),
-                ("version", Json::string(version)),
-                ("ecosystem", Json::string(ecosystem)),
-                ("registry", Json::string(registry)),
-              ])
-              if unit_tag_override is Some(dt) {
-                payload["distTag"] = Json::string(dt)
-              }
-              let resp = command_publishers.execute(
-                "command",
-                "already-published",
-                Json::object(payload),
-              ) catch {
-                _ => Json::boolean(false)
-              }
-              match resp {
-                { "published": True, .. } | True => "present"
-                _ => "absent"
-              }
-            } else {
-              registry_lookup(
-                host, ecosystem, manager, unit_name, version, cwd, effective_registry,
-              )
-            }
-        }
-        if probe == "present" {
-          published_ok = true
-          break
+          _ => ()
         }
       }
-      match unit_api_opt {
+      match unit_api_map.get(unit_id) {
         Some((pub_name, api_pub)) => {
           let target = make_publish_target(
             unit_id, version, registry, pub_name, unit_tag_override,
           )
-          let ext_opt = Some((api_pub.publish)(target)) catch { _ => None }
-          if ext_opt is Some(ext) {
+          try {
+            let ext = (api_pub.publish)(target)
             published_ok = true
             if ext.trim() != "" {
-              external_id = Some(ext)
+              external_id = Some(ext.trim().to_owned())
             }
+          } catch {
+            err => last_error = error_message(err)
           }
         }
         None =>
           if use_command_publisher {
-            let unit_name = units_map
-              .get(unit_id)
-              .map(u => u.native_name)
-              .unwrap_or(unit_id)
-            let payload : Map[String, Json] = Map([
-              ("unitId", Json::string(unit_id)),
-              ("name", Json::string(unit_name)),
-              ("version", Json::string(version)),
-              ("ecosystem", Json::string(ecosystem)),
-              ("registry", Json::string(registry)),
-            ])
-            if unit_tag_override is Some(dt) {
-              payload["distTag"] = Json::string(dt)
-            }
-            let invoked = try {
-              ignore(
-                command_publishers.execute(
-                  "command",
-                  "publish",
-                  Json::object(payload),
-                ),
+            let payload = build_command_payload(
+              unit, version, registry, unit_tag_override, unit_access, unit_archive,
+            )
+            try {
+              let resp = run_command_publisher(
+                host,
+                loaded.snapshot.root,
+                command_cmd,
+                command_env,
+                "publish",
+                payload,
               )
-              true
-            } catch {
-              _ => false
-            }
-            if invoked {
               published_ok = true
+              if resp is { "externalId": String(ext), .. } && ext.trim() != "" {
+                external_id = Some(ext.trim().to_owned())
+              }
+              if resp is { "digest": String(d), .. } && d.trim() != "" {
+                digest = Some(d.trim().to_owned())
+              }
+            } catch {
+              err => last_error = error_message(err)
             }
           } else {
-            let output = host.run(program, args, Some(cwd))
-            if output.exit_code == 0 {
+            let (pub_ok, detail) = driver_publish(host, unit, manager, cwd, {
+              registry: effective_registry,
+              dist_tag: unit_tag_override,
+              access: unit_access,
+              otp: options.otp,
+              archive_path: unit_archive,
+            })
+            if pub_ok {
               published_ok = true
+            } else {
+              last_error = detail
             }
           }
       }
       attempt += 1
     }
     if published_ok {
+      published_unit_ids.push(unit_id)
       status_map[key] = {
         plan_id,
         unit_id,
@@ -1287,13 +1159,18 @@ async fn[H : ExecutionHost] publish_release_core(
         target: "source",
         registry,
         state: @model.Published,
-        digest: None,
+        digest,
         external_id,
         message: None,
       }
     } else {
       failed = true
       failed_units[unit_id] = true
+      let msg = if last_error != "" {
+        last_error + " (verify registry state or retry with --reconcile)"
+      } else {
+        "Publisher failed after invocation; verify registry state or retry with --reconcile"
+      }
       status_map[key] = {
         plan_id,
         unit_id,
@@ -1303,33 +1180,56 @@ async fn[H : ExecutionHost] publish_release_core(
         state: @model.Unknown,
         digest: None,
         external_id: None,
-        message: Some(
-          "Publisher failed after invocation; verify registry state before retrying",
-        ),
+        message: Some(msg),
       }
     }
-    let (_, updated_text) = persist_publish_state(
-      plan_id, order_keys, status_map,
+    ignore(
+      save_publish_state(
+        host,
+        loaded.snapshot.root,
+        plan_id,
+        order_keys,
+        status_map,
+        "done-" + step_idx.to_string(),
+      ),
     )
-    host.write_text(previous_path, updated_text)
+    step_idx += 1
   }
-  let (final_statuses, final_text) = persist_publish_state(
-    plan_id, order_keys, status_map,
+  let final_statuses = save_publish_state(
+    host,
+    loaded.snapshot.root,
+    plan_id,
+    order_keys,
+    status_map,
+    "final",
   )
-  host.write_text(previous_path, final_text)
+  // Skip Git tags for snapshot releases; when `--only` was specified, only tag selected units.
   if !failed &&
+    !release_state.is_snapshot &&
     !options.no_tag &&
     !worktree_dirty &&
-    loaded.snapshot.config.tag_after_publish &&
-    loaded.snapshot.config.tag_create {
+    loaded.snapshot.config.tag.after_publish &&
+    loaded.snapshot.config.tag.create {
+    let tag_units = if options.only.is_empty() {
+      []
+    } else if !published_unit_ids.is_empty() {
+      published_unit_ids
+    } else {
+      selected_ids
+    }
     ignore(
-      create_tags_with(host, loaded, {
-        dry_run: false,
-        push: loaded.snapshot.config.tag_push,
-        force: false,
-        yes: options.yes,
-        format: "",
-      }),
+      create_tags_with(
+        host,
+        loaded,
+        TagOptions::new(
+          dry_run=false,
+          push=loaded.snapshot.config.tag.push,
+          force=false,
+          yes=options.yes,
+          format="",
+          only_units=tag_units,
+        ),
+      ),
     )
   }
   {
@@ -1344,72 +1244,6 @@ async fn[H : ExecutionHost] publish_release_core(
       None
     },
   }
-}
-
-///|
-pub async fn[H : ExecutionHost] publish_release_with_api_with(
-  host : H,
-  loaded : @workspace.LoadedWorkspace,
-  options : PublishOptions,
-  api_publishers : ApiPublisherRegistry,
-  artifacts_dir? : String,
-) -> @model.PublishResult {
-  publish_release_core(
-    host,
-    loaded,
-    options,
-    artifacts_dir,
-    Some(api_publishers),
-  )
-}
-
-///|
-pub async fn publish_release_with_api(
-  loaded : @workspace.LoadedWorkspace,
-  options : PublishOptions,
-  api_publishers : ApiPublisherRegistry,
-  artifacts_dir? : String,
-) -> @model.PublishResult {
-  publish_release_with_api_with(
-    native_host(),
-    loaded,
-    options,
-    api_publishers,
-    artifacts_dir?,
-  )
-}
-
-///|
-pub async fn[H : ExecutionHost] publish_release_with_artifacts_with(
-  host : H,
-  loaded : @workspace.LoadedWorkspace,
-  options : PublishOptions,
-  artifacts_dir? : String,
-) -> @model.PublishResult {
-  publish_release_core(host, loaded, options, artifacts_dir, None)
-}
-
-///|
-pub async fn publish_release_with_artifacts(
-  loaded : @workspace.LoadedWorkspace,
-  options : PublishOptions,
-  artifacts_dir? : String,
-) -> @model.PublishResult {
-  publish_release_with_artifacts_with(
-    native_host(),
-    loaded,
-    options,
-    artifacts_dir?,
-  )
-}
-
-///|
-pub async fn[H : ExecutionHost] publish_release_with(
-  host : H,
-  loaded : @workspace.LoadedWorkspace,
-  options : PublishOptions,
-) -> @model.PublishResult {
-  publish_release_with_artifacts_with(host, loaded, options)
 }
 
 ///|
