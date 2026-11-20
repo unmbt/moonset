@@ -56,6 +56,25 @@ async fn main {
   ignore(git(root, ["commit", "-m", "empty changeset"]))
   let passing = invoke(binary, root, ["status", "--since", base, "--output", "json"], 0)
   assert_true(passing is { "hasRelease": False, "errors": [], "changesets": [{ "id": "empty", .. }], .. })
+  let json_output = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--json"]).output()
+  assert_true(!json_output.stdout().contains("\u{001b}["))
+  assert_true(!json_output.stderr().contains("\u{001b}["))
+  let previous_no_color = @env.get_env_var("NO_COLOR")
+  @env.set_env_var("NO_COLOR", "1")
+  let env_no_color = {
+    defer {
+      match previous_no_color {
+        Some(value) => @env.set_env_var("NO_COLOR", value)
+        None => @env.unset_env_var("NO_COLOR")
+      }
+    }
+    @shell.Cmd(binary, ["--cwd", root, "status", "--since", base]).output()
+  }
+  assert_true(!env_no_color.stdout().contains("\u{001b}["))
+  assert_true(!env_no_color.stderr().contains("\u{001b}["))
+  let flag_no_color = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--no-color"]).output()
+  assert_true(!flag_no_color.stdout().contains("\u{001b}["))
+  assert_true(!flag_no_color.stderr().contains("\u{001b}["))
   ignore(git(root, ["mv", ".changeset/empty.md", ".changeset/renamed.md"]))
   ignore(git(root, ["commit", "-m", "rename changeset"]))
   ignore(git(root, ["switch", "main"]))
@@ -108,6 +127,7 @@ async fn main {
   assert_true(md_missing.stdout().has_prefix("<!-- moonset-bot:changeset-check -->\n"))
   assert_true(md_missing.stdout().contains("### ⚠️ No changeset found"))
   assert_true(md_missing.stdout().contains("moonset add"))
+  assert_true(!md_missing.stdout().contains("\u{001b}["))
   write(md_root, ".changeset/bot.md", "---\nacme/app: minor\n---\nBot feature")
   ignore(git(md_root, ["add", "."]))
   ignore(git(md_root, ["commit", "-m", "add changeset"]))

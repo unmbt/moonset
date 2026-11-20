@@ -59,11 +59,20 @@ async fn execute(options : Options) -> Int32 {
 }
 
 ///|
-fn format_diagnostic_stderr(diagnostic : @model.Diagnostic) -> String {
+fn format_diagnostic_stderr(
+  diagnostic : @model.Diagnostic,
+  color~ : Bool = false,
+) -> String {
+  let code = style_error(diagnostic.code, color)
+  let message = diagnostic.message
   if diagnostic.path != "" {
-    "\{diagnostic.path}:\{diagnostic.line}:\{diagnostic.column}: \{diagnostic.code}: \{diagnostic.message}"
+    style_pkg(diagnostic.path, color) +
+    ":\{diagnostic.line}:\{diagnostic.column}: " +
+    code +
+    ": " +
+    message
   } else {
-    "\{diagnostic.code}: \{diagnostic.message}"
+    code + ": " + message
   }
 }
 
@@ -115,7 +124,10 @@ pub async fn run(args : Array[String]) -> Int32 {
         }
         println(@model.canonical_json(payload))
       }
-      stderr(format_diagnostic_stderr(diagnostic)) catch {
+      let color_errors = !wants_json &&
+        !wants_markdown &&
+        terminal_color_enabled(has_no_color_flag(args), true)
+      stderr(format_diagnostic_stderr(diagnostic, color=color_errors)) catch {
         _ => ()
       }
       code

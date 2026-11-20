@@ -14,6 +14,106 @@ async fn stderr(message : String) -> Unit {
 }
 
 ///|
+/// Pure color-enable policy following https://no-color.org/ (`NO_COLOR` disables
+/// color only when present and non-empty) and `TERM=dumb`.
+fn should_enable_color(
+  is_tty~ : Bool,
+  no_color_flag~ : Bool,
+  no_color_env~ : String?,
+  term_env~ : String?,
+) -> Bool {
+  if !is_tty || no_color_flag {
+    return false
+  }
+  if no_color_env is Some(v) && v != "" {
+    return false
+  }
+  if term_env is Some(t) && t.trim().to_lower() == "dumb" {
+    return false
+  }
+  true
+}
+
+///|
+fn terminal_color_enabled(no_color : Bool, stderr_stream : Bool) -> Bool {
+  should_enable_color(
+    is_tty=tty_enable_color(stderr_stream),
+    no_color_flag=no_color,
+    no_color_env=@env.get_env_var("NO_COLOR"),
+    term_env=@env.get_env_var("TERM"),
+  )
+}
+
+///|
+fn style_text(text : String, sgr : String, enabled : Bool) -> String {
+  if enabled && text != "" {
+    "\u{001b}[\{sgr}m" + text + ANSI_RESET
+  } else {
+    text
+  }
+}
+
+///|
+fn style_title(text : String, enabled : Bool) -> String {
+  style_text(text, "1;36", enabled)
+}
+
+///|
+fn style_success(text : String, enabled : Bool) -> String {
+  style_text(text, "32;1", enabled)
+}
+
+///|
+fn style_error(text : String, enabled : Bool) -> String {
+  style_text(text, "31;1", enabled)
+}
+
+///|
+fn style_warn(text : String, enabled : Bool) -> String {
+  style_text(text, "33;1", enabled)
+}
+
+///|
+fn style_warn_soft(text : String, enabled : Bool) -> String {
+  style_text(text, "33", enabled)
+}
+
+///|
+fn style_pkg(text : String, enabled : Bool) -> String {
+  style_text(text, "1;34", enabled)
+}
+
+///|
+fn style_dim(text : String, enabled : Bool) -> String {
+  style_text(text, "2", enabled)
+}
+
+///|
+fn style_accent(text : String, enabled : Bool) -> String {
+  style_text(text, "36", enabled)
+}
+
+///|
+fn style_kind(text : String, enabled : Bool) -> String {
+  style_text(text, "35", enabled)
+}
+
+///|
+fn style_bump(bump : String, enabled : Bool) -> String {
+  let tone = match bump {
+    "major" => "31;1"
+    "minor" => "32;1"
+    "patch" => "34;1"
+    _ => "0"
+  }
+  if tone == "0" {
+    bump
+  } else {
+    style_text(bump, tone, enabled)
+  }
+}
+
+///|
 fn print_json(value : Json, pretty : Bool) -> Unit {
   println(
     if pretty {

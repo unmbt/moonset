@@ -110,7 +110,7 @@ test "TUI state reducers and deterministic views support package, bump, and summ
   assert_eq(c1, 1)
   assert_true(!ok1 && !back1)
   let (_, ok2, back2) = reduce_choice(c1, 4, Left)
-  assert_true(!ok2 && back2)
+  assert_true(!ok2 && !back2)
   assert_true(
     render_bump_page("moonbit:acme/a", "0.1.0", 1).contains("> minor"),
   )
@@ -119,11 +119,177 @@ test "TUI state reducers and deterministic views support package, bump, and summ
   let s2 = reduce_summary(s1, Char("i"))
   let s3 = reduce_summary(s2, Backspace)
   assert_eq(s3.text(), "h")
-  let confirm = render_confirmation("Add feature", [
-    { unit_id: "moonbit:acme/a", bump: @model.Minor, },
-  ])
-  assert_true(confirm.contains("minor: moonbit:acme/a"))
-  assert_true(confirm.contains("Add feature"))
+  let committed = format_completed_step("minor: moonbit:acme/a")
+  assert_eq(committed, "✓ minor: moonbit:acme/a")
+  assert_eq(format_cancelled_step(), "✗ Cancelled")
+  assert_true(
+    render_summary_page(SummaryState::new(initial="Add feature"), false).contains(
+      "Add feature",
+    ),
+  )
+  assert_true(
+    render_summary_page(
+      SummaryState::new(),
+      false,
+      hint="Summary cannot be empty",
+    ).contains("! Summary cannot be empty"),
+  )
+  let (c_home, _, _) = reduce_choice(2, 4, Home)
+  assert_eq(c_home, 0)
+  let (c_end, _, _) = reduce_choice(0, 4, End)
+  assert_eq(c_end, 3)
+  assert_true(!reduce_select_stage(SelectState::new(2), Enter).confirmed)
+  assert_true(
+    reduce_select_stage(SelectState::new(2), Enter, allow_empty=true).confirmed,
+  )
+  let staged = assign_bump_stages(["a", "b", "c"], [0, 1, 2], [0], [1])
+  assert_true(staged[0].bump == @model.Major)
+  assert_true(staged[1].bump == @model.Minor)
+  assert_true(staged[2].bump == @model.Patch)
+  let grouped = render_package_page(
+    ["changed", "unchanged"],
+    ["1.0.0", "1.0.0"],
+    SelectState::new(2),
+    changed_flags=[true, false],
+    publish_flags=[true, false],
+  )
+  assert_true(grouped.contains("changed packages"))
+  assert_true(grouped.contains("unchanged packages"))
+  assert_true(grouped.contains("[no-publish]"))
+  // When no package is changed, omit redundant group headers
+  let ungrouped = render_package_page(
+    ["a", "b"],
+    ["1.0.0", "1.0.0"],
+    SelectState::new(2),
+    changed_flags=[false, false],
+  )
+  assert_true(!ungrouped.contains("unchanged packages"))
+}
+
+///|
+test "TUI visual width, wrapping, redraw frames, changed-package detection, and NO_COLOR policy" {
+  assert_eq(visual_width("abc"), 3)
+  assert_eq(visual_width("中文"), 4)
+  assert_eq(visual_width("Ａ"), 2)
+  assert_eq(visual_width("e\u{0301}"), 1)
+  assert_eq(visual_width("✓"), 1)
+  assert_eq(visual_width("✗"), 1)
+  assert_eq(visual_width("👩🏽‍💻"), 2)
+  assert_eq(visual_width("1️⃣"), 2)
+  assert_eq(visual_width("❤️"), 2)
+  assert_eq(visual_width("⚠️"), 2)
+  assert_eq(visual_width("a\t"), 8)
+  assert_eq(visual_width("\u{001b}[31mred\u{001b}[0m"), 3)
+  assert_eq(visual_width("👩\u{200d}💻"), 2)
+  assert_eq(visual_line_count("abcd", 3), 2)
+  assert_eq(visual_line_count("中文a", 4), 2)
+  assert_eq(visual_line_count("ab中", 3), 2)
+  assert_eq(visual_line_count("ab中中", 3), 3)
+  assert_eq(visual_line_count("ab\u{0301}c", 2), 2)
+  assert_eq(visual_line_count("one\ntwo", 80), 2)
+  assert_eq(visual_line_count("中", 1), 1)
+  assert_eq(truncate_visual("中文测试abc", 7), "中文...")
+  let redraw = tui_redraw_sequence(3)
+  assert_true(redraw.contains("\u{001b}[3A\r\u{001b}[J"))
+  assert_true(!redraw.contains("\u{001b}[2J"))
+  assert_true(!redraw.contains("\u{001b}[?1049h"))
+  assert_true(!redraw.contains("\u{001b}[?1049l"))
+  assert_eq(tui_frame_output(2, "hello"), "\u{001b}[2A\r\u{001b}[Jhello\n")
+  assert_eq(tui_frame_output(0, "hello"), "hello\n")
+  assert_eq(style_text("plain", "31", false), "plain")
+  assert_true(style_text("red", "31", true).contains("\u{001b}[31m"))
+
+  // NO_COLOR policy (https://no-color.org/) & TERM=dumb
+  assert_true(
+    should_enable_color(
+      is_tty=true,
+      no_color_flag=false,
+      no_color_env=None,
+      term_env=Some("xterm-256color"),
+    ),
+  )
+  assert_true(
+    should_enable_color(
+      is_tty=true,
+      no_color_flag=false,
+      no_color_env=Some(""),
+      term_env=None,
+    ),
+  )
+  assert_true(
+    !should_enable_color(
+      is_tty=true,
+      no_color_flag=false,
+      no_color_env=Some("1"),
+      term_env=None,
+    ),
+  )
+  assert_true(
+    !should_enable_color(
+      is_tty=true,
+      no_color_flag=true,
+      no_color_env=None,
+      term_env=None,
+    ),
+  )
+  assert_true(
+    !should_enable_color(
+      is_tty=false,
+      no_color_flag=false,
+      no_color_env=None,
+      term_env=None,
+    ),
+  )
+  assert_true(
+    !should_enable_color(
+      is_tty=true,
+      no_color_flag=false,
+      no_color_env=None,
+      term_env=Some("dumb"),
+    ),
+  )
+
+  // has_no_color_flag ignores `--no-color` inside flag values or after `--`
+  assert_true(has_no_color_flag(["status", "--no-color"]))
+  assert_true(!has_no_color_flag(["add", "--summary", "--no-color"]))
+  assert_true(!has_no_color_flag(["status", "--", "--no-color"]))
+
+  // Longest-prefix unit change detection ignores `.changeset/` and avoids root false-positives
+  let dummy_unit = (id : String, root : String) => @model.ReleaseUnit::{
+    id,
+    native_name: id,
+    ecosystem: @model.MoonBit,
+    workspace_id: "main",
+    root,
+    manifest: if root == "" {
+      "moon.mod"
+    } else {
+      root + "/moon.mod"
+    },
+    version_path: if root == "" {
+      "moon.mod"
+    } else {
+      root + "/moon.mod"
+    },
+    version_field: "version",
+    version: Some("0.1.0"),
+    version_span: None,
+    visibility: @model.Public,
+    publish: true,
+    publish_config: None,
+    dependencies: [],
+  }
+  let units = [
+    dummy_unit("moonbit:acme/root", ""),
+    dummy_unit("moonbit:acme/sub", "packages/sub"),
+  ]
+  assert_eq(
+    compute_changed_flags(units, [
+      ".changeset/note.md", "packages/sub/src/lib.mbt",
+    ]),
+    [false, true],
+  )
+  assert_eq(compute_changed_flags(units, ["src/main.mbt"]), [true, false])
 }
 
 ///|

@@ -147,7 +147,8 @@ async fn add_command(options : Options) -> Int32 {
       options.pretty,
     )
   } else if !options.quiet {
-    println("Created " + written)
+    let color = terminal_color_enabled(options.no_color, false)
+    println(style_success("Created ", color) + style_pkg(written, color))
   }
   0
 }

@@ -91,26 +91,63 @@ fn reduce_select(state : SelectState, key : TuiKey) -> SelectState {
 }
 
 ///|
+fn reduce_select_stage(
+  state : SelectState,
+  key : TuiKey,
+  allow_empty~ : Bool = false,
+) -> SelectState {
+  let next = reduce_select(state, key)
+  if key == Enter && allow_empty {
+    { ..next, confirmed: true, }
+  } else {
+    next
+  }
+}
+
+///|
 fn reduce_choice(
   cursor : Int32,
   length : Int32,
   key : TuiKey,
 ) -> (Int32, Bool, Bool) {
+  if key == Cancel || key == Escape {
+    return (cursor, false, true)
+  }
   if length <= 0 {
-    match key {
-      Cancel | Escape => return (0, false, true)
-      _ => return (0, false, false)
-    }
+    return (0, false, false)
   }
   match key {
     Up | Char("k") =>
       (if cursor == 0 { length - 1 } else { cursor - 1 }, false, false)
     Down | Char("j") =>
       (if cursor + 1 == length { 0 } else { cursor + 1 }, false, false)
+    Home => (0, false, false)
+    End => (length - 1, false, false)
     Enter => (cursor, true, false)
-    Cancel | Escape | Left => (cursor, false, true)
+    Left => (cursor, false, false)
     _ => (cursor, false, false)
   }
+}
+
+///|
+fn assign_bump_stages(
+  labels : Array[String],
+  chosen : Array[Int32],
+  major : Array[Int32],
+  minor : Array[Int32],
+) -> Array[@model.Change] {
+  let changes : Array[@model.Change] = []
+  for index in chosen {
+    let bump = if major.contains(index) {
+      @model.Major
+    } else if minor.contains(index) {
+      @model.Minor
+    } else {
+      @model.Patch
+    }
+    changes.push({ unit_id: labels[index], bump, })
+  }
+  changes
 }
 
 ///|

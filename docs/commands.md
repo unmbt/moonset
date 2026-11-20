@@ -41,7 +41,7 @@ moonset add [--package name ...] [--type major|minor|patch|none | --major | --mi
   [--summary text] [--empty] [--id id] [--open] [--no-format] [--no-commit]
 ```
 
-交互式模式采用内置跨平台 UTF-8 原生 TUI（Windows 下通过 `WriteConsoleW` / `ReadConsoleInputW` 完整支持中文输入法与显示，无乱码），支持包变更分组、`a` 全选、`0.x -> 1.0.0` major 确认、摘要光标编辑与 `Ctrl+E` 调用外部 `$VISUAL`/`$EDITOR`。设置 `CI=1` 或 `MOONSET_NON_INTERACTIVE=1` 时自动关闭 TUI。
+交互式模式采用内置跨平台 UTF-8 原生 TUI（Windows 下通过 `WriteConsoleW` / `ReadConsoleInputW` 完整支持中文输入法与显示，无乱码），在主屏内联原地重绘，不启用备用屏幕或全屏清除。多包流程先按 changed/unchanged 分组选择，再选择 major 和 minor，剩余包归为 patch；每步确认后折叠为单行摘要。单包直接选择 patch/minor/major。`0.x -> 1.0.0` major 需要确认；摘要支持光标编辑、空摘要调用外部 `$VISUAL`/`$EDITOR` 和 `Ctrl+E`。渲染按终端显示列宽处理中文及全角字符折行。设置 `CI=1` 或 `MOONSET_NON_INTERACTIVE=1` 时自动关闭 TUI。
 
 非交互式模式要求同时提供 `--package`、`--type`（或 `--major`/`--minor`/`--patch`）和 `--summary`，或显式 `--empty`。所有参数均支持 `--flag=value` 与 `--` 终止符；`--id` 严格限制为安全文件名（拒绝路径穿越）。一个文件可以包含多个包的 release。
 
@@ -176,7 +176,7 @@ moonset release-notes [--version ver] [--file path] [--package unit] [--from-sta
 
 - `--cwd path`：workspace 解析和相对路径基准。
 - `--config path`：替代 `.changeset/config.json`；显式路径不存在是错误。
-- `--no-color`、`--quiet`：只影响人类输出。
+- `--no-color`、`NO_COLOR`：禁用人类输出的 ANSI 颜色；默认仅在对应输出流连接 TTY 时着色。JSON 与 Markdown 输出不含 ANSI。`--quiet` 只影响人类输出。
 - `--yes`：跳过确认；CI 中必须显式提供。
 - `--json` 是 `--output json` 的别名。
 - `-h`、`--help`：打印命令帮助信息。

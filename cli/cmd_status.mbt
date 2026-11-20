@@ -116,8 +116,12 @@ async fn status_or_plan_command(options : Options) -> Int32 {
       base
     }
   }
+  let warning_color = terminal_color_enabled(
+    options.no_color || options.json || options.markdown,
+    true,
+  )
   for warning in plan.warnings {
-    stderr(warning.code + ": " + warning.message)
+    stderr(style_warn(warning.code, warning_color) + ": " + warning.message)
   }
   let text = if options.pretty {
     result.stringify(indent=2)
@@ -140,16 +144,19 @@ async fn status_or_plan_command(options : Options) -> Int32 {
   } else if options.json {
     println(text)
   } else if !options.quiet {
+    let color = terminal_color_enabled(options.no_color, false)
     println(
-      "\{loaded.snapshot.units.length()} modules; \{loaded.changesets.length()} changesets; \{plan.releases.length()} releases",
+      style_title("\{loaded.snapshot.units.length()} modules", color) +
+      "; \{loaded.changesets.length()} changesets; " +
+      style_success("\{plan.releases.length()} releases", color),
     )
     for release in plan.releases {
       println(
-        release.unit_id +
+        style_pkg(release.unit_id, color) +
         ": " +
-        release.old_version +
+        style_dim(release.old_version, color) +
         " -> " +
-        release.new_version,
+        style_success(release.new_version, color),
       )
       if options.verbose {
         println("  " + release.reasons.join(", "))
@@ -157,10 +164,10 @@ async fn status_or_plan_command(options : Options) -> Int32 {
     }
     if options.verbose {
       for path in loaded.snapshot.unmanaged {
-        println("unmanaged: " + path)
+        println(style_warn_soft("unmanaged: ", color) + style_pkg(path, color))
       }
       for path in loaded.snapshot.changed_files {
-        println("changed: " + path)
+        println(style_accent("changed: ", color) + style_pkg(path, color))
       }
     }
   }
@@ -168,7 +175,8 @@ async fn status_or_plan_command(options : Options) -> Int32 {
     status is { "errors": Array(errors), .. } &&
     !errors.is_empty() {
     stderr(
-      "missing-changeset: Relevant committed files changed without a changeset",
+      style_warn("missing-changeset", warning_color) +
+      ": Relevant committed files changed without a changeset",
     )
     1
   } else {

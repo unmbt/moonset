@@ -36,11 +36,15 @@ static void moonset_tty_restore_atexit(void) {
   if (!g_raw_active) return;
   HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
   HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (hOut != INVALID_HANDLE_VALUE && hOut != NULL) {
+    DWORD written = 0;
+    const WCHAR reset_seq[] = L"\x1b[0m\x1b[?25h";
+    WriteConsoleW(hOut, reset_seq, (DWORD)(sizeof(reset_seq) / sizeof(WCHAR) - 1),
+                  &written, NULL);
+    SetConsoleMode(hOut, g_orig_out_mode);
+  }
   if (hIn != INVALID_HANDLE_VALUE && hIn != NULL) {
     SetConsoleMode(hIn, g_orig_in_mode);
-  }
-  if (hOut != INVALID_HANDLE_VALUE && hOut != NULL) {
-    SetConsoleMode(hOut, g_orig_out_mode);
   }
   if (g_orig_in_cp != 0) SetConsoleCP(g_orig_in_cp);
   if (g_orig_out_cp != 0) SetConsoleOutputCP(g_orig_out_cp);
@@ -62,6 +66,21 @@ int moonset_tty_is_tty(void) {
     return 0;
   }
   return 1;
+}
+
+int moonset_tty_enable_color(int is_stderr) {
+  int fd = is_stderr ? _fileno(stderr) : _fileno(stdout);
+  if (!_isatty(fd)) return 0;
+  HANDLE h = GetStdHandle(is_stderr ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+  if (h == INVALID_HANDLE_VALUE || h == NULL) return 0;
+  DWORD mode = 0;
+  if (!GetConsoleMode(h, &mode)) return 0;
+  if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) return 1;
+  if (SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                            ENABLE_PROCESSED_OUTPUT)) {
+    return 1;
+  }
+  return 0;
 }
 
 int moonset_tty_enter_raw(void) {
@@ -164,16 +183,17 @@ int moonset_tty_read_event(uint8_t *out_buf, int max_len) {
     WORD vk = ke->wVirtualKeyCode;
     WCHAR wc = ke->uChar.UnicodeChar;
     DWORD ctrl = ke->dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED);
+    DWORD alt = ke->dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED);
 
-    if (ctrl && (vk == 'C' || wc == 0x03)) {
+    if (ctrl && !alt && (vk == 'C' || wc == 0x03)) {
       g_pending_high_surrogate = 0;
       return emit_bytes(out_buf, max_len, "\x03", 1);
     }
-    if (ctrl && (vk == 'E' || wc == 0x05)) {
+    if (ctrl && !alt && (vk == 'E' || wc == 0x05)) {
       g_pending_high_surrogate = 0;
       return emit_bytes(out_buf, max_len, "\x05", 1);
     }
-    if (ctrl && (vk == 'A' || wc == 0x01)) {
+    if (ctrl && !alt && (vk == 'A' || wc == 0x01)) {
       g_pending_high_surrogate = 0;
       return emit_bytes(out_buf, max_len, "\x01", 1);
     }
@@ -255,12 +275,19 @@ static struct termios g_orig_termios;
 
 static void moonset_tty_restore_atexit(void) {
   if (!g_raw_active) return;
+  const char reset_seq[] = "\x1b[0m\x1b[?25h";
+  ssize_t ignored = write(STDOUT_FILENO, reset_seq, sizeof(reset_seq) - 1);
+  (void)ignored;
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_orig_termios);
   g_raw_active = 0;
 }
 
 int moonset_tty_is_tty(void) {
   return (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) ? 1 : 0;
+}
+
+int moonset_tty_enable_color(int is_stderr) {
+  return isatty(is_stderr ? STDERR_FILENO : STDOUT_FILENO) ? 1 : 0;
 }
 
 int moonset_tty_enter_raw(void) {

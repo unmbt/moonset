@@ -2,6 +2,9 @@
 extern "C" fn moonset_tty_is_tty_ffi() -> Int32 = "moonset_tty_is_tty"
 
 ///|
+extern "C" fn moonset_tty_enable_color_ffi(is_stderr : Int32) -> Int32 = "moonset_tty_enable_color"
+
+///|
 extern "C" fn moonset_tty_enter_raw_ffi() -> Int32 = "moonset_tty_enter_raw"
 
 ///|
@@ -27,6 +30,11 @@ extern "C" fn moonset_tty_read_event_ffi(
 ///|
 fn tty_is_tty() -> Bool {
   moonset_tty_is_tty_ffi() != 0
+}
+
+///|
+fn tty_enable_color(is_stderr : Bool) -> Bool {
+  moonset_tty_enable_color_ffi(if is_stderr { 1 } else { 0 }) != 0
 }
 
 ///|

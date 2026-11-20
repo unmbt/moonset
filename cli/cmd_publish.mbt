@@ -1,5 +1,6 @@
 ///|
 async fn tag_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
   let result = @executor.create_tags(
     loaded,
@@ -15,16 +16,22 @@ async fn tag_command(options : Options) -> Int32 {
     print_json(result.to_json(), options.pretty)
   } else if !options.quiet {
     if result.dry_run {
-      println("Planned tags: " + result.tags.join(", "))
+      println(style_title("Planned tags: ", color) + result.tags.join(", "))
     } else {
       if !result.created.is_empty() {
-        println("Created " + result.created.join(", "))
+        println(
+          style_success("Created ", color) +
+          style_pkg(result.created.join(", "), color),
+        )
       }
       if !result.skipped.is_empty() {
-        println("Skipped existing tags: " + result.skipped.join(", "))
+        println(
+          style_warn_soft("Skipped existing tags: ", color) +
+          result.skipped.join(", "),
+        )
       }
       if !result.pushed.is_empty() {
-        println("Pushed " + result.pushed.join(", "))
+        println(style_success("Pushed ", color) + result.pushed.join(", "))
       }
     }
   }
@@ -34,6 +41,7 @@ async fn tag_command(options : Options) -> Int32 {
 ///|
 /// Execute the native pack adapter and return a machine-readable result.
 async fn pack_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
   if options.verify_artifacts {
     let report = @executor.verify_artifacts(
@@ -44,15 +52,20 @@ async fn pack_command(options : Options) -> Int32 {
       print_json(report.to_json(), options.pretty)
     } else if !options.quiet {
       if report.ok {
-        println("Verified " + report.checked.to_string() + " artifact intents")
+        println(
+          style_success("Verified ", color) +
+          report.checked.to_string() +
+          " artifact intents",
+        )
       } else {
         println(
-          "Artifact verification failed with " +
+          style_error("Artifact verification failed", color) +
+          " with " +
           report.issues.length().to_string() +
           " issue(s)",
         )
         for issue in report.issues {
-          println("  [" + issue.code + "] " + issue.message)
+          println("  [" + style_warn(issue.code, color) + "] " + issue.message)
         }
       }
     }
@@ -79,7 +92,11 @@ async fn pack_command(options : Options) -> Int32 {
   if options.json {
     print_json(output, options.pretty)
   } else if !options.quiet {
-    println("Packed " + results.length().to_string() + " artifacts")
+    println(
+      style_success("Packed ", color) +
+      results.length().to_string() +
+      " artifacts",
+    )
   }
   0
 }
@@ -87,6 +104,7 @@ async fn pack_command(options : Options) -> Int32 {
 ///|
 /// Publish versioned units with durable per-target status.
 async fn publish_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
   let result = @executor.publish_release(
     loaded,
@@ -108,28 +126,39 @@ async fn publish_command(options : Options) -> Int32 {
     print_json(result.to_json(), options.pretty)
   } else if !options.quiet {
     for status in result.statuses {
+      let state_label = match status.state {
+        @model.Published => style_success(status.state.text(), color)
+        @model.Failed | @model.Blocked | @model.Unknown =>
+          style_error(status.state.text(), color)
+        @model.Pending | @model.Preflighted | @model.Skipped =>
+          style_warn(status.state.text(), color)
+      }
       let detail = match status.message {
         Some(m) if m != "" => " (" + m + ")"
         _ => ""
       }
       println(
         "  [" +
-        status.state.text() +
+        state_label +
         "] " +
-        status.unit_id +
+        style_pkg(status.unit_id, color) +
         "@" +
-        status.version +
+        style_dim(status.version, color) +
         " -> " +
-        status.registry +
+        style_accent(status.registry, color) +
         detail,
       )
     }
     if options.dry_run {
-      println("Publish preflight complete")
+      println(style_success("Publish preflight complete", color))
     } else if result.complete {
-      println("Publish complete")
+      println(style_success("Publish complete", color))
     } else {
-      println("Publish incomplete; see .moonset/publish-state.json")
+      println(
+        style_error("Publish incomplete", color) +
+        "; see " +
+        style_pkg(".moonset/publish-state.json", color),
+      )
     }
   }
   let has_failed = result.statuses.any(s => {
@@ -337,6 +366,7 @@ async fn release_notes_command(options : Options) -> Int32 {
 
 ///|
 async fn doctor_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   let report = @executor.run_doctor(
     options.cwd,
     config_path?=options.config,
@@ -347,10 +377,16 @@ async fn doctor_command(options : Options) -> Int32 {
     print_json(report.to_json(), options.pretty)
   } else if !options.quiet {
     for check in report.checks {
-      let badge = if check.ok { "PASS" } else { "FAIL" }
-      println("[" + badge + "] " + check.name + ": " + check.message)
+      let badge = if check.ok {
+        style_success("PASS", color)
+      } else {
+        style_error("FAIL", color)
+      }
+      println(
+        "[" + badge + "] " + style_pkg(check.name, color) + ": " + check.message,
+      )
       if check.suggestion is Some(tip) {
-        println("  hint: " + tip)
+        println(style_warn_soft("  hint: ", color) + tip)
       }
     }
   }

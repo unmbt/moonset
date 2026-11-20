@@ -62,11 +62,12 @@ async fn init_command(options : Options) -> Int32 {
       options.pretty,
     )
   } else if !options.quiet {
+    let color = terminal_color_enabled(options.no_color, false)
     println(
       if created.is_empty() {
-        "Changeset configuration already exists"
+        style_warn("Changeset configuration already exists", color)
       } else {
-        "Initialized " + dir
+        style_success("Initialized ", color) + style_pkg(dir, color)
       },
     )
   }

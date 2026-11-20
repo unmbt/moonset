@@ -11,3 +11,4 @@ ADR 文件记录影响多个阶段的设计选择。修改已接受决策时新�
 - [ADR-007：以模块化 GitHub Action 替代 GitHub App 服务端](007-pr-bot-as-action.md)
 - [ADR-008：v0.3.0 公共 API、Adapter 与轻量原生 TUI 收敛](008-v030-api-and-adapter-convergence.md)
 - [ADR-009：向 Changesets v3 极简预发布与统一快照模型靠拢](009-changesets-v3-pre-and-snapshot-model.md)
+- [ADR-010：内联 TUI 与终端颜色策略](010-inline-tui-and-terminal-color.md)

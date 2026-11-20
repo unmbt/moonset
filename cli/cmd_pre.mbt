@@ -1,5 +1,6 @@
 ///|
 async fn pre_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
   let path = resolve_cli_path(
     loaded.snapshot.root,
@@ -37,7 +38,10 @@ async fn pre_command(options : Options) -> Int32 {
     if options.json {
       print_json(updated.to_json(), options.pretty)
     } else if !options.quiet {
-      println("Exited prerelease mode; run `moonset version` to graduate")
+      println(
+        style_success("Exited prerelease mode", color) +
+        "; run `moonset version` to graduate",
+      )
     }
     return 0
   }
@@ -54,8 +58,13 @@ async fn pre_command(options : Options) -> Int32 {
     )
   }
   if options.initial_version && !options.quiet {
+    let warning_color = terminal_color_enabled(
+      options.no_color || options.json || options.markdown,
+      true,
+    )
     stderr(
-      "note: --initial-version is deprecated in v0.3.0 (Changesets v3 derives prerelease versions directly from manifests)",
+      style_warn("note", warning_color) +
+      ": --initial-version is deprecated in v0.3.0 (Changesets v3 derives prerelease versions directly from manifests)",
     )
   }
   if @fs.exists(path) {
@@ -86,7 +95,12 @@ async fn pre_command(options : Options) -> Int32 {
   if options.json {
     print_json(state.to_json(), options.pretty)
   } else if !options.quiet {
-    println("Entered prerelease mode with tag '" + tag + "'")
+    println(
+      style_success("Entered prerelease mode", color) +
+      " with tag '" +
+      style_pkg(tag, color) +
+      "'",
+    )
   }
   0
 }

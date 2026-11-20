@@ -92,6 +92,7 @@ async fn resolve_recovery_root(options : Options) -> String {
 
 ///|
 async fn version_command(options : Options) -> Int32 {
+  let color = terminal_color_enabled(options.no_color, false)
   if options.markdown && !options.dry_run {
     usage_error("version --output markdown requires --dry-run")
   }
@@ -105,9 +106,10 @@ async fn version_command(options : Options) -> Int32 {
       )
     } else if !options.quiet {
       println(
-        "Recovered " +
+        style_success("Recovered ", color) +
         recovered.length().to_string() +
-        " files from .moonset/version-journal.json",
+        " files from " +
+        style_pkg(".moonset/version-journal.json", color),
       )
     }
     return 0
@@ -277,20 +279,26 @@ async fn version_command(options : Options) -> Int32 {
       @stdio.stdout.write(@utf8.encode(body))
     } else if !options.quiet {
       println(
-        "Dry run: \{enriched.analysis.releases.length()} releases, \{enriched.edits.length()} planned edits",
+        style_title("Dry run", color) +
+        ": \{enriched.analysis.releases.length()} releases, \{enriched.edits.length()} planned edits",
       )
       for release in enriched.analysis.releases {
         println(
           "  " +
-          release.unit_id +
+          style_pkg(release.unit_id, color) +
           ": " +
-          release.old_version +
+          style_dim(release.old_version, color) +
           " -> " +
-          release.new_version,
+          style_success(release.new_version, color),
         )
       }
       for edit in enriched.edits {
-        println("  [" + edit.kind + "] " + edit.path)
+        println(
+          "  [" +
+          style_kind(edit.kind, color) +
+          "] " +
+          style_pkg(edit.path, color),
+        )
       }
     }
     return 0
@@ -301,9 +309,11 @@ async fn version_command(options : Options) -> Int32 {
       print_json(plan.to_json(), options.pretty)
     } else if !options.quiet {
       if options.empty {
-        println("No releases (acknowledged with --empty)")
+        println(
+          style_warn("No releases", color) + " (acknowledged with --empty)",
+        )
       } else {
-        println("No releases")
+        println(style_warn("No releases", color))
       }
     }
     return 0
@@ -338,9 +348,13 @@ async fn version_command(options : Options) -> Int32 {
   if options.json {
     print_json(plan.to_json(), options.pretty)
   } else if !options.quiet {
-    println("Applied " + plan.edits.length().to_string() + " version edits")
+    println(
+      style_success("Applied ", color) +
+      plan.edits.length().to_string() +
+      " version edits",
+    )
     if committed {
-      println("Committed release changes")
+      println(style_success("Committed release changes", color))
     }
   }
   0

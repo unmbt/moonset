@@ -254,6 +254,32 @@ fn wants_markdown_output(raw_args : Array[String]) -> Bool {
 }
 
 ///|
+fn has_no_color_flag(raw_args : Array[String]) -> Bool {
+  let args = normalize_cli_args(raw_args)
+  let subcommand = detect_subcommand(args)
+  let mut i = 0
+  while i < args.length() {
+    let arg = args[i]
+    i += 1
+    if arg == "--" {
+      break
+    }
+    if arg == "--no-color" {
+      return true
+    }
+    if is_value_flag(arg, subcommand) && i < args.length() {
+      i += 1
+    } else if arg == "--snapshot" &&
+      i < args.length() &&
+      !args[i].has_prefix("-") &&
+      !is_known_subcommand(args[i]) {
+      i += 1
+    }
+  }
+  false
+}
+
+///|
 fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
   let args = normalize_cli_args(raw_args)
   let detected_subcommand = detect_subcommand(args)
@@ -277,7 +303,7 @@ fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
   let mut quiet = false
   let mut verbose = false
   let mut force = false
-  let mut no_color = @env.get_env_var("NO_COLOR") is Some(_)
+  let mut no_color = @env.get_env_var("NO_COLOR") is Some(v) && v != ""
   let mut format = "human"
   let packages : Array[String] = []
   let ignore_packages : Array[String] = []
