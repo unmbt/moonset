@@ -56,7 +56,7 @@ moonset add [--package name ...] [--type major|minor|patch|none | --major | --mi
 改动摘要，说明用户可见行为和迁移方式。
 ```
 
-成功输出 changeset ID 和绝对路径。写入前检查 ID、包名和版本类型；不会自动提交 Git。
+成功输出 changeset ID 和绝对路径。省略 `--id` 时默认按 Changesets 风格生成小写 `adjective-noun-verb.md`（如 `brave-lions-dance.md`）并自动避让重名文件。写入前检查 ID、包名和版本类型；默认不会自动提交 Git。
 
 混合模式 `--package` 及 front matter 键必须使用 UnitId（例如 `npm:@acme/engine`）；选择一个单元不代表自动选择同目录的其他清单。交互模式同时显示生态、版本和发布策略。
 

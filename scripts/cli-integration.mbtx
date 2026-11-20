@@ -337,6 +337,8 @@ async fn main {
   assert_true(!@fs.exists(@path.Path(v030_root).join(@path.Path(".changeset/.gitignore")).to_string()))
   assert_true(@fs.read_text(@path.Path(v030_root).join(@path.Path(".moonset/.gitignore")).to_string()).contains("pack-results-*.json"))
   ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--patch", "--summary=bad", "--id=../evil", "--json"], 2))
+  let auto_added = invoke(binary, v030_root, ["add", "--package=acme/v030", "--patch", "--summary=auto human id", "--json"], 0)
+  assert_true(auto_added is { "id": String(auto_id), .. } && !auto_id.has_prefix("change-") && auto_id.split("-").count() == 3)
   ignore(invoke(binary, v030_root, ["add", "--package=acme/v030", "--major", "--summary=v030 major", "--id=v030-maj", "--json"], 0))
   let ignored_ver = invoke(binary, v030_root, ["version", "--ignore=acme/v030", "--dry-run", "--json"], 0)
   assert_true(ignored_ver is { "analysis": { "releases": [], .. }, .. })

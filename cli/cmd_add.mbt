@@ -5,13 +5,22 @@ async fn write_unique_changeset(
   preferred_id : String?,
   text : String,
 ) -> (String, String) {
-  let original = match preferred_id {
-    Some(raw) => validate_changeset_id(raw)
-    None => "change-" + @env.now().to_string()
+  let explicit = match preferred_id {
+    Some(raw) => Some(validate_changeset_id(raw))
+    None => None
   }
-  let mut stem = original
+  let entropy = root + "\u{0000}" + base + "\u{0000}" + text
   let mut attempt = 0
   for ;; {
+    let stem = match explicit {
+      Some(original) =>
+        if attempt == 0 {
+          original
+        } else {
+          original + "-" + attempt.to_string()
+        }
+      None => next_human_id(entropy, attempt)
+    }
     let path = @path.Path(root)
       .join(@path.Path(base))
       .join(@path.Path(stem + ".md"))
@@ -28,7 +37,6 @@ async fn write_unique_changeset(
       return (stem, path)
     }
     attempt += 1
-    stem = original + "-" + attempt.to_string()
   }
 }
 

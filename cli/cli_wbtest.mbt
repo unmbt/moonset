@@ -411,6 +411,18 @@ test "v0.3.0 CLI argument parser: --flag=value, --major, tagless --snapshot, --o
     }
     assert_true(rejected)
   }
+
+  // Changesets-compatible human-id (`adjective-noun-verb` lowercase kebab-case)
+  let h1 = generate_human_id(1UL)
+  let h2 = generate_human_id(2UL)
+  let parts1 = h1.split("-").map(x => x.to_owned()).collect()
+  assert_eq(parts1.length(), 3)
+  assert_true(human_id_adjectives.contains(parts1[0]))
+  assert_true(human_id_nouns.contains(parts1[1]))
+  assert_true(human_id_verbs.contains(parts1[2]))
+  assert_eq(validate_changeset_id(h1), h1)
+  assert_true(h1 != h2)
+  assert_true(next_human_id("sample", 0) != next_human_id("sample", 1))
 }
 
 ///|
