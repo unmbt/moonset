@@ -3,6 +3,9 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -21,15 +24,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: moon update
+      - run: moon run scripts/embed-schema.mbtx --check
+      - run: moon run scripts/gen-version.mbtx --check
+      - run: moon run scripts/lint-workflows.mbtx
       - run: moon check --target native --deny-warn
       - run: moon test --target native
       - run: moon check --target wasm-gc --deny-warn
       - run: moon test --target wasm-gc
       - run: moon build --target native --release
       - run: moon package
-      - run: moon run scripts/embed-schema.mbtx --check
-      - run: moon run scripts/gen-version.mbtx --check
-      - run: moon run scripts/lint-workflows.mbtx
       - run: moon run scripts/cli-integration.mbtx
       - run: moon info
       - run: moon fmt --check
@@ -40,6 +43,7 @@ jobs:
           git diff --exit-code
           if [ -n "$(git status --porcelain)" ]; then
             git status --short
+            git ls-files --eol --modified
             exit 1
           fi
 

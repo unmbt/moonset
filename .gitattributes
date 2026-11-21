@@ -1,0 +1,5 @@
+# Enforce LF line endings across all platforms so generated MoonBit files
+# (.mbti, .mbt) and shell scripts never trigger spurious CRLF diffs on Windows.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf

@@ -253,7 +253,37 @@ async fn check_markdown_links(path : String) -> Unit {
   }
 }
 
+async fn check_gitattributes() -> Unit {
+  let path = ".gitattributes"
+  if !@fs.exists(path) {
+    fail_lint(
+      path,
+      "missing .gitattributes (must enforce eol=lf to prevent Windows CRLF CI failures)",
+    )
+  }
+  let text = @fs.read_text(path).replace_all(old="\r\n", new="\n")
+  let mut has_lf_rule = false
+  for raw in text.split("\n") {
+    let line = raw.trim().to_owned()
+    if line == "" || line.has_prefix("#") {
+      continue
+    }
+    if line.has_prefix("* ") && line.contains("eol=lf") {
+      has_lf_rule = true
+      break
+    }
+  }
+  if !has_lf_rule {
+    fail_lint(
+      path,
+      "must contain a `* ... eol=lf` rule to keep generated .mbti/.mbt files LF on Windows",
+    )
+  }
+}
+
 async fn main {
+  check_gitattributes()
+
   let actions = [
     "action.yml",
     "setup/action.yml",
