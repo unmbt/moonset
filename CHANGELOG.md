@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 - 2026-11-21
+
+### Minor Changes
+
+- [`4cef5cf`](https://github.com/unmbt/moonset/commit/4cef5cf7b3ad967424e139fac7775276b36ad13f) Thanks [@Wyatex](https://github.com/Wyatex)! - Replicate @changesets/cli v3.0.3 (@clack/prompts) interactive `init` and `add` TUI workflows with the `🌙` banner, `-m`/`--message` alias, and pure `VERSION` constant generation (`scripts/gen-version.mbtx`) with release-PR auto-sync.
+- [`cec87e3`](https://github.com/unmbt/moonset/commit/cec87e35d472e3ecf5dd04e1a5add7991b40f7a0) Thanks [@Wyatex](https://github.com/Wyatex)! - Converge architecture and API (`api_version = "2.0.0"`, ADR-008 & ADR-009), replace `mizchi/tui` with a built-in lightweight UTF-8 native TUI fixing Windows Chinese mojibake and IME input, align prerelease and snapshot flows with Changesets v3, harden Cargo/npm/pnpm workspace discovery and publishing, and fix GitHub Actions/installer reliability bugs.
+
 ## 0.2.0 - 2026-11-19
 
 ### Minor Changes
@@ -20,5 +27,3 @@
 ### Fixes
 
 - Fix Phase 4 release workflow artifact invocation and status argument handling. ([1dabf990](https://github.com/unmbt/moonset/commit/1dabf990e31ddc789911f3196b46de974535e487))
-
-
