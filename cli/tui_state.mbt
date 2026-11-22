@@ -184,16 +184,8 @@ fn ConfirmState::new(initial~ : Bool = false) -> ConfirmState {
 ///|
 fn reduce_confirm(state : ConfirmState, key : TuiKey) -> ConfirmState {
   match key {
-    Left
-    | Right
-    | Up
-    | Down
-    | Tab
-    | Space
-    | Char("h")
-    | Char("l")
-    | Char("j")
-    | Char("k") => { ..state, value: !state.value, }
+    Left | Right | Tab | Space | Char("h") | Char("l") =>
+      { ..state, value: !state.value, }
     Char("y") | Char("Y") => { ..state, value: true, }
     Char("n") | Char("N") => { ..state, value: false, }
     Enter => { ..state, confirmed: true, }

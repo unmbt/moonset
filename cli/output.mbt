@@ -42,7 +42,11 @@ fn terminal_color_enabled(no_color : Bool, stderr_stream : Bool) -> Bool {
 ///|
 fn style_text(text : String, sgr : String, enabled : Bool) -> String {
   if enabled && text != "" {
-    "\u{001b}[\{sgr}m" + text + ANSI_RESET
+    let nested = text.replace_all(
+      old=ANSI_RESET,
+      new=ANSI_RESET + "\u{001b}[\{sgr}m",
+    )
+    "\u{001b}[\{sgr}m" + nested + ANSI_RESET
   } else {
     text
   }

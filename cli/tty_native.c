@@ -1,9 +1,10 @@
 /*
  * Minimal cross-platform UTF-8 TTY native stub for moonset TUI.
  *
- * Windows: Uses SetConsoleCP/SetConsoleOutputCP(CP_UTF8), ENABLE_VIRTUAL_TERMINAL_PROCESSING,
- * WriteConsoleW (eliminating Chinese GBK/CP936 mojibake), and blocking ReadConsoleInputW
- * (0% idle CPU, full UTF-16 -> UTF-8 Chinese IME & surrogate pair support).
+ * Windows: Uses ENABLE_VIRTUAL_TERMINAL_PROCESSING, WriteConsoleW (eliminating
+ * Chinese GBK/CP936 mojibake), and blocking ReadConsoleInputW (0% idle CPU,
+ * full UTF-16 -> UTF-8 Chinese IME & surrogate pair support) while preserving
+ * QuickEdit / native scrollback and never capturing mouse input.
  *
  * POSIX: Uses termios (preserving OPOST, blocking VMIN=1/VTIME=0), 20ms select() for
  * Esc vs CSI sequence disambiguation, and full multi-byte UTF-8 input assembly.
@@ -23,13 +24,24 @@
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
+#ifndef ENABLE_INSERT_MODE
+#define ENABLE_INSERT_MODE 0x0020
+#endif
+#ifndef ENABLE_QUICK_EDIT_MODE
+#define ENABLE_QUICK_EDIT_MODE 0x0040
+#endif
+#ifndef ENABLE_EXTENDED_FLAGS
+#define ENABLE_EXTENDED_FLAGS 0x0080
+#endif
+#ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
+#define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
+#endif
 
 static int g_raw_active = 0;
 static int g_atexit_registered = 0;
+static int g_ctrl_handler_registered = 0;
 static DWORD g_orig_in_mode = 0;
 static DWORD g_orig_out_mode = 0;
-static UINT g_orig_in_cp = 0;
-static UINT g_orig_out_cp = 0;
 static WCHAR g_pending_high_surrogate = 0;
 
 static void moonset_tty_restore_atexit(void) {
@@ -44,11 +56,19 @@ static void moonset_tty_restore_atexit(void) {
     SetConsoleMode(hOut, g_orig_out_mode);
   }
   if (hIn != INVALID_HANDLE_VALUE && hIn != NULL) {
-    SetConsoleMode(hIn, g_orig_in_mode);
+    DWORD restore_in = g_orig_in_mode;
+    if (restore_in & (ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE)) {
+      restore_in |= ENABLE_EXTENDED_FLAGS;
+    }
+    SetConsoleMode(hIn, restore_in);
   }
-  if (g_orig_in_cp != 0) SetConsoleCP(g_orig_in_cp);
-  if (g_orig_out_cp != 0) SetConsoleOutputCP(g_orig_out_cp);
   g_raw_active = 0;
+}
+
+static BOOL WINAPI moonset_tty_ctrl_handler(DWORD ctrl_type) {
+  (void)ctrl_type;
+  moonset_tty_restore_atexit();
+  return FALSE;
 }
 
 int moonset_tty_is_tty(void) {
@@ -90,20 +110,29 @@ int moonset_tty_enter_raw(void) {
   if (hIn == INVALID_HANDLE_VALUE || hOut == INVALID_HANDLE_VALUE) return -1;
   if (!GetConsoleMode(hIn, &g_orig_in_mode)) return -1;
   if (!GetConsoleMode(hOut, &g_orig_out_mode)) return -1;
-  g_orig_in_cp = GetConsoleCP();
-  g_orig_out_cp = GetConsoleOutputCP();
-  SetConsoleCP(CP_UTF8);
-  SetConsoleOutputCP(CP_UTF8);
   DWORD new_out = g_orig_out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
                   ENABLE_PROCESSED_OUTPUT;
   SetConsoleMode(hOut, new_out);
-  DWORD new_in = ENABLE_WINDOW_INPUT | ENABLE_EXTENDED_FLAGS;
+  /*
+   * Preserve QuickEdit/Insert/Extended flags from g_orig_in_mode so native
+   * terminal mouse selection and viewport scrolling remain untouched; only
+   * disable cooked line processing, window/mouse events, and VT input mode.
+   */
+  DWORD new_in = g_orig_in_mode &
+                 ~(DWORD)(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT |
+                          ENABLE_PROCESSED_INPUT | ENABLE_WINDOW_INPUT |
+                          ENABLE_MOUSE_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
   SetConsoleMode(hIn, new_in);
   g_pending_high_surrogate = 0;
   g_raw_active = 1;
   if (!g_atexit_registered) {
     atexit(moonset_tty_restore_atexit);
     g_atexit_registered = 1;
+  }
+  if (!g_ctrl_handler_registered) {
+    if (SetConsoleCtrlHandler(moonset_tty_ctrl_handler, TRUE)) {
+      g_ctrl_handler_registered = 1;
+    }
   }
   return 0;
 }

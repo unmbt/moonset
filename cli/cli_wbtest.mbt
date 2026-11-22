@@ -125,6 +125,89 @@ test "TUI state reducers and deterministic clack views support group multiselect
   assert_true(active_group_view.contains("◼ changed packages"))
   assert_true(active_group_view.contains("◼ @cs-demo/ui"))
   assert_true(active_group_view.contains("◻ @cs-demo/utils"))
+  assert_true(
+    active_group_view.contains(
+      "│  ↑/↓ to navigate • Space: select • Enter: confirm",
+    ),
+  )
+
+  // Colored group multiselect: tree guides (`│ ` / `└ `), active vs selected-dimming, and footer hints
+  let multi_rows = [
+    GroupHeader("unchanged packages", [0, 1, 2]),
+    GroupItem(0),
+    GroupItem(1),
+    GroupItem(2),
+  ]
+  let multi_labels = ["@pkg/a", "@pkg/b", "@pkg/c"]
+  // Cursor on group header: header bright, items have bright tree guides + cyan checkboxes + dimmed labels
+  let m0 = GroupMultiselectState::new(3)
+  let header_view = render_group_multiselect_prompt(
+    "Which packages were affected by the changes you made?",
+    multi_rows,
+    multi_labels,
+    m0,
+    color=true,
+  )
+  assert_true(
+    header_view.contains("\u{001b}[36m◻\u{001b}[0m unchanged packages"),
+  )
+  assert_true(
+    header_view.contains(
+      "│ \u{001b}[36m◻\u{001b}[0m \u{001b}[2m@pkg/a\u{001b}[0m",
+    ),
+  )
+  assert_true(
+    header_view.contains(
+      "└ \u{001b}[36m◻\u{001b}[0m \u{001b}[2m@pkg/c\u{001b}[0m",
+    ),
+  )
+  assert_true(
+    header_view.contains(
+      "\u{001b}[2m↑/↓\u{001b}[0m to navigate • \u{001b}[2mSpace:\u{001b}[0m select • \u{001b}[2mEnter:\u{001b}[0m confirm",
+    ),
+  )
+  // Select @pkg/a then move cursor down to @pkg/b: @pkg/a keeps green ◼ but text dims; only @pkg/b stays bright
+  let m1 = reduce_group_multiselect(m0, multi_rows, Down, required=true)
+  let m2 = reduce_group_multiselect(m1, multi_rows, Space, required=true)
+  let m3 = reduce_group_multiselect(m2, multi_rows, Down, required=true)
+  let moved_view = render_group_multiselect_prompt(
+    "Which packages were affected by the changes you made?",
+    multi_rows,
+    multi_labels,
+    m3,
+    color=true,
+  )
+  assert_true(
+    moved_view.contains(
+      "\u{001b}[2m│ \u{001b}[0m\u{001b}[32m◼\u{001b}[0m \u{001b}[2m@pkg/a\u{001b}[0m",
+    ),
+  )
+  assert_true(
+    moved_view.contains(
+      "\u{001b}[2m│ \u{001b}[0m\u{001b}[36m◻\u{001b}[0m @pkg/b",
+    ),
+  )
+  assert_true(!moved_view.contains("\u{001b}[2m@pkg/b\u{001b}[0m"))
+  assert_true(
+    moved_view.contains(
+      "\u{001b}[2m└ \u{001b}[0m\u{001b}[2m◻\u{001b}[0m \u{001b}[2m@pkg/c\u{001b}[0m",
+    ),
+  )
+  // Dimming/gray preserves outer SGR attribute across nested style_bold resets (for pkg@version labels & patch summary)
+  let bold_ver = style_bold("@pkg/a", true) + "@" + style_bold("1.0.0", true)
+  let dimmed_ver = style_dim(bold_ver, true)
+  assert_true(dimmed_ver.contains("\u{001b}[0m\u{001b}[2m@\u{001b}[1m1.0.0"))
+  let patch_line = style_gray(
+    bold_ver +
+    ", " +
+    style_bold("@pkg/b", true) +
+    "@" +
+    style_bold("0.1.0", true),
+    true,
+  )
+  assert_true(patch_line.contains("\u{001b}[0m\u{001b}[90m@\u{001b}[1m1.0.0"))
+  assert_true(patch_line.contains("\u{001b}[0m\u{001b}[90m, \u{001b}[1m@pkg/b"))
+  assert_true(patch_line.contains("\u{001b}[0m\u{001b}[90m@\u{001b}[1m0.1.0"))
   let err_group_view = render_group_multiselect_prompt(
     "Which packages were affected by the changes you made?", rows, labels, g1,
   )
@@ -146,6 +229,9 @@ test "TUI state reducers and deterministic clack views support group multiselect
   // Confirm state machine (`init` default No, `0.x` major default Yes)
   let c0 = ConfirmState::new(initial=false)
   assert_true(!c0.value)
+  // Up/Down must not toggle horizontal Yes / No confirm prompts
+  assert_true(!reduce_confirm(c0, Up).value)
+  assert_true(!reduce_confirm(c0, Down).value)
   let c1 = reduce_confirm(c0, Left)
   assert_true(c1.value)
   let c2 = reduce_confirm(c1, Char("n"))

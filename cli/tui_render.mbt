@@ -334,6 +334,16 @@ fn render_group_multiselect_prompt(
   if start > 0 {
     lines.push(bar + style_dim("...", color))
   }
+  let active_group_active = state.cursor >= 0 &&
+    state.cursor < rows.length() &&
+    rows[state.cursor] is GroupHeader(_, _)
+  let mut active_group_end = state.cursor + 1
+  if active_group_active {
+    while active_group_end < rows.length() &&
+          !(rows[active_group_end] is GroupHeader(_, _)) {
+      active_group_end += 1
+    }
+  }
   for r in start..<end {
     let is_cur = r == state.cursor
     let cur_marker = if !color { if is_cur { "> " } else { "  " } } else { "" }
@@ -349,7 +359,7 @@ fn render_group_multiselect_prompt(
           style_dim("◻", color)
         }
         let text = if is_cur {
-          style_bold(group_name, color)
+          group_name
         } else {
           style_dim(group_name, color)
         }
@@ -358,19 +368,26 @@ fn render_group_multiselect_prompt(
       GroupItem(idx) => {
         let is_sel = state.selected.get(idx).unwrap_or(false)
         let label = item_labels.get(idx).unwrap_or("")
+        let is_last = r + 1 >= rows.length() || rows[r + 1] is GroupHeader(_, _)
+        let raw_tree = if is_last { "└ " } else { "│ " }
+        let in_active_group = !is_cur &&
+          active_group_active &&
+          r > state.cursor &&
+          r < active_group_end
+        let tree_prefix = if in_active_group {
+          raw_tree
+        } else {
+          style_dim(raw_tree, color)
+        }
         let box = if is_sel {
           style_green("◼", color)
-        } else if is_cur {
+        } else if is_cur || in_active_group {
           style_cyan("◻", color)
         } else {
           style_dim("◻", color)
         }
-        let text = if is_cur || is_sel {
-          label
-        } else {
-          style_dim(label, color)
-        }
-        lines.push(bar + "  " + cur_marker + box + " " + text)
+        let text = if is_cur { label } else { style_dim(label, color) }
+        lines.push(bar + tree_prefix + cur_marker + box + " " + text)
       }
     }
   }
@@ -384,8 +401,17 @@ fn render_group_multiselect_prompt(
       style_yellow("▲  ", color)
     }
     lines.push(err_prefix + style_yellow(state.error, color))
-  } else if with_guide {
-    lines.push(style_cyan("└", color))
+  } else {
+    let footer_hint = style_dim("↑/↓", color) +
+      " to navigate • " +
+      style_dim("Space:", color) +
+      " select • " +
+      style_dim("Enter:", color) +
+      " confirm"
+    lines.push(bar + footer_hint)
+    if with_guide {
+      lines.push(style_cyan("└", color))
+    }
   }
   lines.join("\n")
 }
