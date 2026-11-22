@@ -24,7 +24,7 @@ jobs:
       published: ${{ steps.release.outputs.published }}
       tags: ${{ steps.release.outputs.tags }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Check for pending release state
@@ -71,7 +71,7 @@ jobs:
           mooncakes-credentials: ${{ secrets.MOONCAKES_CREDENTIALS }}
       - name: Upload publish status artifact
         if: always() && steps.check-state.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: moonset-publish-state
           path: .moonset/publish-state.json
@@ -88,7 +88,7 @@ jobs:
       has-changesets: ${{ steps.release.outputs.has-changesets }}
       pull-request-number: ${{ steps.release.outputs.pull-request-number }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: hustcer/setup-moonbit@v1

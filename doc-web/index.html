@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>moonset — 月升则潮起，版本有序，更迭有据</title>
+    <meta
+      name="description"
+      content="月升则潮起，版本有序，更迭有据 — 为 MoonBit workspace 而生的版本规划、Changelog 生成与多生态发布工具文档官网。"
+    />
+    <meta property="og:title" content="moonset — MoonBit Workspace Versioning & Release Companion" />
+    <meta
+      property="og:description"
+      content="为 MoonBit workspace 而生的版本规划、Changelog 生成与多生态发布工具，支持纯规划器、混合 workspace 与零运维 GitHub Action PR Bot。"
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230B0D14'/%3E%3Cpath d='M19.5 7.2a8.8 8.8 0 1 0 5.3 15.8A7.2 7.2 0 0 1 19.5 7.2z' fill='%23A5B4FC'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem('moonset-theme');
+          var systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = pref === 'dark' || (pref !== 'light' && systemDark);
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#FAFAFC] text-[#11131B] dark:bg-[#08090E] dark:text-[#EEF0F7] antialiased selection:bg-indigo-500/20 selection:text-indigo-700 dark:selection:text-indigo-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

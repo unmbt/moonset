@@ -2,7 +2,7 @@ name: moonset PR Bot
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [ opened, synchronize, reopened, ready_for_review ]
 
 concurrency:
   group: moonset-pr-bot-${{ github.event.pull_request.number }}
@@ -22,13 +22,13 @@ jobs:
       should-comment: ${{ steps.check.outputs.should-comment }}
     steps:
       - name: Checkout trusted base branch for building CLI
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: trusted
           persist-credentials: false
       - name: Checkout PR head for read-only inspection (Fork-safe)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
@@ -70,7 +70,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout trusted base action runner
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           sparse-checkout: pr-comment

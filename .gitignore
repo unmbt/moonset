@@ -9,3 +9,7 @@ target
 .moonset/publish-state.json
 .moonset/pack-results.json
 .moonset/pack-results-*.json
+node_modules/
+doc-web/dist/
+.playwright-cli/
+
