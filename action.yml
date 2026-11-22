@@ -72,17 +72,33 @@ runs:
   using: composite
   steps:
     - id: setup
+      name: Setup moonset CLI
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
         INPUT_VERSION: ${{ inputs.version }}
         INPUT_BINARY_PATH: ${{ inputs.binary-path }}
         ACTION_REF: ${{ github.action_ref }}
         GH_TOKEN: ${{ inputs.github-token }}
         GITHUB_ACTION_REPOSITORY: ${{ github.action_repository || 'unmbt/moonset' }}
       run: |
-        bash "${{ github.action_path }}/setup/install.sh"
+        set -euo pipefail
+        action_dir="${ACTION_PATH//\\//}"
+        while [ "$action_dir" != "/" ]; do
+          case "$action_dir" in
+            */|*/.)
+              action_dir="${action_dir%/}"
+              action_dir="${action_dir%/.}"
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
+        bash "${action_dir}/setup/install.sh"
 
     - id: run
+      name: Run moonset action
       shell: bash
       env:
         MOONSET_BIN: ${{ steps.setup.outputs.path }}
@@ -161,6 +177,15 @@ runs:
           rm -rf "$tmp_dir" || true
           if [ "$rc" -ne 0 ] && [ "$audit_emitted" = "false" ]; then
             emit_audit "$audit_cmd" "$plan_fp" "error" "exit-${rc}" || true
+          fi
+        }
+
+        ensure_git_identity() {
+          if [ -z "$(git -C "$WORK_DIR" config --get user.name 2>/dev/null || true)" ]; then
+            git -C "$WORK_DIR" config user.name "github-actions[bot]"
+          fi
+          if [ -z "$(git -C "$WORK_DIR" config --get user.email 2>/dev/null || true)" ]; then
+            git -C "$WORK_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           fi
         }
 
@@ -262,8 +287,7 @@ runs:
           plan_fp="$(jq -r '.fingerprint // empty' "$tmp_dir/applied.json" | tr -d '\r')"
 
           branch="${INPUT_BRANCH:-moonset-release/${BASE_REF}}"
-          git -C "$WORK_DIR" config user.name "github-actions[bot]"
-          git -C "$WORK_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ensure_git_identity
           git -C "$WORK_DIR" checkout -B "$branch"
 
           staged_paths=()
@@ -354,6 +378,7 @@ runs:
           fi
 
           "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json "${extra_publish_args[@]}" > "$tmp_dir/publish.json"
+          ensure_git_identity
           "$MOONSET_BIN" --cwd "$WORK_DIR" tag --push --yes --json > "$tmp_dir/pushed-tags.json"
           pushed_list="$(jq -r '(.pushed // .created // []) | join(" ")' "$tmp_dir/pushed-tags.json" | tr -d '\r')"
           created_releases="$(ensure_github_releases)"
