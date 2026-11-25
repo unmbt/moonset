@@ -10,7 +10,7 @@ import {
 ----
 async fn write(root : String, path : String, text : String) -> Unit {
   let file = @path.Path(root).join(@path.Path(path)).to_string()
-  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_exist=true)
+  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_existing=true)
   @fs.write_text(file, text)
 }
 
@@ -34,7 +34,7 @@ async fn main {
   let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
   let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
   let root = @fs.tmpdir(prefix="moonset-cli-")
-  defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(root, recursive=true) catch { _ => () } }
   ignore(git(root, ["init", "-b", "main"]))
   ignore(git(root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(root, ["config", "user.email", "moonset@example.invalid"]))
@@ -109,7 +109,7 @@ async fn main {
   if replaced.exit_code() != 0 { fail(replaced.stderr()) }
   // Markdown PR Bot output: missing (exit 1), release (exit 0), and error (exit 2)
   let md_root = @fs.tmpdir(prefix="moonset-md-")
-  defer { @fs.rmdir(md_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(md_root, recursive=true) catch { _ => () } }
   ignore(git(md_root, ["init", "-b", "main"]))
   ignore(git(md_root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(md_root, ["config", "user.email", "moonset@example.invalid"]))
@@ -190,7 +190,7 @@ async fn main {
 
   // Full lifecycle integration: init -> add -> pre enter -> version -> pre exit -> version -> commit -> tag -> doctor
   let workflow_root = @fs.tmpdir(prefix="moonset-lifecycle-")
-  defer { @fs.rmdir(workflow_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(workflow_root, recursive=true) catch { _ => () } }
   ignore(git(workflow_root, ["init", "-b", "main"]))
   ignore(git(workflow_root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(workflow_root, ["config", "user.email", "moonset@example.invalid"]))
@@ -231,7 +231,7 @@ async fn main {
   assert_true(pub_no_yes is { "ok": False, "command": "publish", "errors": [{ "code": "confirmation-required", .. }], .. })
 
   let fix_root = @fs.tmpdir(prefix="moonset-docfix-")
-  defer { @fs.rmdir(fix_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(fix_root, recursive=true) catch { _ => () } }
   ignore(git(fix_root, ["init", "-b", "main"]))
   ignore(git(fix_root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(fix_root, ["config", "user.email", "moonset@example.invalid"]))
@@ -256,7 +256,7 @@ async fn main {
   assert_true(rn_state is { "notes": [{ "tag": "v0.2.0", "found": True, .. }], .. })
 
   let dag_root = @fs.tmpdir(prefix="moonset-dag-")
-  defer { @fs.rmdir(dag_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(dag_root, recursive=true) catch { _ => () } }
   ignore(git(dag_root, ["init", "-b", "main"]))
   ignore(git(dag_root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(dag_root, ["config", "user.email", "moonset@example.invalid"]))
@@ -273,7 +273,7 @@ async fn main {
   assert_true(verified_ok is { "ok": True, "checked": 1, .. })
 
   let meta_root = @fs.tmpdir(prefix="moonset-prbody-")
-  defer { @fs.rmdir(meta_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(meta_root, recursive=true) catch { _ => () } }
   ignore(git(meta_root, ["init", "-b", "main"]))
   ignore(git(meta_root, ["config", "user.name", "Moonset Tests"]))
   ignore(git(meta_root, ["config", "user.email", "moonset@example.invalid"]))
@@ -296,7 +296,7 @@ async fn main {
 
   // FR-026/028/029 CLI end-to-end: snapshot gate + template, pre.directory isolation, and --no-format
   let v020_root = @fs.tmpdir(prefix="moonset-v020-")
-  defer { @fs.rmdir(v020_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(v020_root, recursive=true) catch { _ => () } }
   write(v020_root, "moon.mod", "name = \"acme/v020\"\nversion = \"0.1.0\"\n")
   write(v020_root, ".changeset/config.json", "{\"schemaVersion\":1,\"formatter\":\"prettier\",\"snapshot\":{\"enabled\":false}}")
   // --no-format allows add even when prettier is not invoked
@@ -331,7 +331,7 @@ async fn main {
 
   // v0.3.0 security & UX checks: --id traversal blocked, --ignore, init omits pre.json gitignore, mixed npm+Cargo e2e
   let v030_root = @fs.tmpdir(prefix="moonset-v030-")
-  defer { @fs.rmdir(v030_root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(v030_root, recursive=true) catch { _ => () } }
   write(v030_root, "moon.mod", "name = \"acme/v030\"\nversion = \"0.1.0\"\n")
   ignore(invoke(binary, v030_root, ["init", "--json"], 0))
   assert_true(!@fs.exists(@path.Path(v030_root).join(@path.Path(".changeset/.gitignore")).to_string()))

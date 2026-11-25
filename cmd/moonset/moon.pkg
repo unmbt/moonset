@@ -7,11 +7,6 @@ pkgtype(kind: "executable")
 import {
   "unmbt/moonset/cli",
   "moonbitlang/core/env",
-  "moonbitlang/core/async",
 }
 
 supported_targets = "native"
-
-options(
-  "allow-experimental-packages": [ "moonbitlang/core/async" ],
-)

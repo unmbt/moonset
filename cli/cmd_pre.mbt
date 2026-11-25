@@ -89,7 +89,7 @@ async fn pre_command(options : Options) -> Int32 {
   @fs.mkdir(
     @path.Path(path).dirname().to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(path, text)
   if options.json {

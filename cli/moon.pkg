@@ -1,5 +1,6 @@
 import {
   "moonbitlang/core/json",
+  "unmbt/cac",
   "unmbt/moonset/model",
   "unmbt/moonset/engine",
   "unmbt/moonset/workspace",

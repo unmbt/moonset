@@ -4,7 +4,7 @@ async fn write(root : String, path : String, content : String) -> Unit {
   @fs.mkdir(
     @path.Path(absolute).dirname().to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(absolute, content)
 }
@@ -21,7 +21,7 @@ async fn run_git(root : String, args : Array[String]) -> String {
 ///|
 async test "discover explicit workspace members and same-directory JS without writes" {
   let root = @fs.tmpdir(prefix="moonset-discovery-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   let a = "name = \"acme/a\"\r\nversion = \"0.1.0\"\r\nprivate = true\r\n"
   write(root, "moon.work", "members = [\"./a\", \"./b\"]")
   write(root, "a/moon.mod", a)
@@ -49,7 +49,7 @@ async test "discover explicit workspace members and same-directory JS without wr
 ///|
 async test "HEAD snapshot excludes dirty input and merge-base excludes base-only changesets" {
   let root = @fs.tmpdir(prefix="moonset-git-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   ignore(run_git(root, ["init", "-b", "main"]))
   ignore(run_git(root, ["config", "user.email", "test@example.invalid"]))
   ignore(run_git(root, ["config", "user.name", "Moonset Test"]))
@@ -81,7 +81,7 @@ async test "HEAD snapshot excludes dirty input and merge-base excludes base-only
 ///|
 async test "workspace escape duplicate ownership and unsupported adapter fail before writes" {
   let root = @fs.tmpdir(prefix="moonset-invalid-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   write(root, "moon.work", "members = [\"../outside\"]")
   let rejected = try {
     ignore(@workspace.discover(root))
@@ -118,7 +118,7 @@ async test "workspace escape duplicate ownership and unsupported adapter fail be
 ///|
 async test "coexist uses a separate changeset directory and excludes nested checkout" {
   let root = @fs.tmpdir(prefix="moonset-coexist-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   write(root, "moon.work", "members = [\"packages/a\", \"vendor\"]")
   write(root, "packages/a/moon.mod", "name = \"acme/a\"\nversion = \"0.1.0\"")
   write(root, "vendor/.git", "gitdir: ../other")
@@ -168,7 +168,7 @@ async test "coexist uses a separate changeset directory and excludes nested chec
 ///|
 async test "mixed publisher overrides, custom changelog.file preload, and --since npm/cargo glob isolation" {
   let root = @fs.tmpdir(prefix="moonset-mixed-since-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   ignore(run_git(root, ["init", "-b", "main"]))
   ignore(run_git(root, ["config", "user.email", "test@example.invalid"]))
   ignore(run_git(root, ["config", "user.name", "Moonset Test"]))
@@ -214,7 +214,7 @@ async test "mixed publisher overrides, custom changelog.file preload, and --sinc
 ///|
 async test "Cargo publish=[], inline version span with path, ** glob, pnpm comments, and Git changeset commits" {
   let root = @fs.tmpdir(prefix="moonset-cargo-pnpm-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   ignore(run_git(root, ["init", "-b", "main"]))
   ignore(run_git(root, ["config", "user.email", "test@example.invalid"]))
   ignore(run_git(root, ["config", "user.name", "Moonset Test"]))
@@ -310,7 +310,7 @@ async test "SDD minimal fixtures discover and validate expected plans" {
 ///|
 async test "FR-029 workspace discovery loads pre.directory changesets across active and exit pre modes" {
   let root = @fs.tmpdir(prefix="moonset-pre-dir-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   write(
     root, "moon.mod", "name = \"acme/preiso\"\nversion = \"0.2.0-alpha.0\"\n",
   )
@@ -372,7 +372,7 @@ async test "FR-029 workspace discovery loads pre.directory changesets across act
 ///|
 async test "v0.3.0 npm includeRoot, pnpm precedence, publishConfig, packages/build, AGENTS.md ignore" {
   let root = @fs.tmpdir(prefix="moonset-npm-v030-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   write(
     root, ".changeset/config.json", "{\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"pnpm\",\"includeRoot\":true}]}}}",
   )

@@ -1,30 +1,16 @@
 ///|
 fn render_help(topic : String?) -> String {
+  let cli = build_cli()
   match topic {
-    Some("init") =>
-      "moonset init [--force] [--config path] [--yes] [--json]\n  Initialize .changeset/config.json, .changeset/README.md, and .moonset/.gitignore."
-    Some("add") =>
-      "moonset add [--package unit[,unit]] [--type major|minor|patch|none | --major | --minor | --patch] [-m|--message|--summary text] [--empty] [--id stem] [--open] [--no-format] [--no-commit] [--json]\n  Create a changeset interactively (TUI) or non-interactively via flags."
-    Some("pre") =>
-      "moonset pre enter <tag> | exit | status [--json]\n  Manage Changesets v3 minimal prerelease mode (.changeset/pre.json + .changeset/pre/)."
-    Some("status") =>
-      "moonset status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  Read-only workspace & changeset analysis."
-    Some("publish-plan") =>
-      "moonset publish-plan [--since ref] [--output path|-] [--pretty]\n  Emit deterministic analysis JSON and execution DAG."
-    Some("version") =>
-      "moonset version [--dry-run] [--empty] [--ignore unit] [--no-changelog] [--no-commit] [--no-format] [--output human|json|markdown] [--commit-metadata path] [--snapshot [tag]] [--recover]\n  Compute and atomically apply version bumps, changelogs, and lockfiles."
-    Some("pack") =>
-      "moonset pack [--package unit] [--target name] [--manifest-out path] [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]\n  Pack release archives or verify multi-platform artifact manifests."
-    Some("publish") =>
-      "moonset publish [--dry-run] [--only unit] [--registry name|scope=name] [--tag dist-tag|scope=tag] [--otp code] [--reconcile] [--artifacts-dir dir] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  Publish versioned units in dependency order with durable state recovery."
-    Some("tag" | "git-tag") =>
-      "moonset tag [--dry-run] [--push] [--force --yes] [--tag-format template] [--json]\n  Create (annotated) and optionally push Git release tags from .moonset/release-state.json."
-    Some("release-notes") =>
-      "moonset release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json]\n  Extract release notes from CHANGELOG.md."
-    Some("doctor") =>
-      "moonset doctor [--fix] [--registry] [--output human|json]\n  Check toolchain, workspace config, recovery journal, worktree, and registry preflight."
-    _ =>
-      "moonset \{cli_version()}\n  init [--force] [--config path]\n  add [--package unit[,unit]] [--type major|minor|patch|none|--major|--minor|--patch] [--summary text] [--empty] [--open] [--no-format]\n  pre enter <tag> | pre exit | pre status\n  status [--since ref] [--verbose] [--output human|json|markdown] [--head-repo owner/name] [--head-ref branch]\n  publish-plan [--since ref] [--output path|-] [--pretty]\n  version [--dry-run] [--empty] [--ignore unit] [--no-changelog] [--no-commit] [--no-format] [--output human|json|markdown] [--commit-metadata path] [--snapshot [tag]] [--recover]\n  pack [--package unit] [--target name] [--manifest-out path] [--verify] [--artifacts-dir dir] [--frozen] [--dry-run] [--json]\n  publish [--dry-run] [--only unit] [--registry name|scope=name] [--tag dist-tag|scope=tag] [--otp code] [--reconcile] [--artifacts-dir dir] [--retry n] [--allow-uncommitted] [--no-tag] [--yes] [--json]\n  tag|git-tag [--dry-run] [--push] [--force --yes] [--tag-format template]\n  release-notes [--version ver] [--file path] [--package unit] [--from-state] [--json]\n  doctor [--fix] [--registry] [--output human|json]\n  Global: --cwd path --config path --json --pretty --quiet --no-color -h/--help [cmd] -V/--version"
+    None => cli.render_help()
+    Some(t) =>
+      match
+        (cli.parse(argv=[t, "--help"], run=false) catch {
+          _ => Help(cli.render_help())
+        }) {
+        Help(text) => text
+        _ => cli.render_help()
+      }
   }
 }
 
@@ -38,7 +24,9 @@ async fn execute(options : Options) -> Int32 {
   }
   match options.command {
     "help" => {
-      println(render_help(options.help_topic))
+      println(
+        options.help_text.unwrap_or_else(() => render_help(options.help_topic)),
+      )
       0
     }
     "version-info" => {

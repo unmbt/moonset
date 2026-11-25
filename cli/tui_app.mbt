@@ -67,7 +67,7 @@ async fn edit_summary_in_editor(
   let tmp = @fs.tmpdir(prefix="moonset-summary-") catch {
     _ => return EditorError
   }
-  defer (@fs.rmdir(tmp, recursive=true) catch { _ => () })
+  defer (@fs.remove(tmp, recursive=true) catch { _ => () })
   let draft_path = @path.Path(tmp).join(@path.Path("SUMMARY.md")).to_string()
   let header = if initial.trim() != "" {
     initial + "\n"

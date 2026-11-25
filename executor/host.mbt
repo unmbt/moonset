@@ -127,7 +127,7 @@ pub impl ExecutionHost for NativeHost with fn readdir(_self, path) {
 
 ///|
 pub impl ExecutionHost for NativeHost with fn mkdir(_self, path) {
-  @fs.mkdir(path, recursive=true, allow_exist=true) catch {
+  @fs.mkdir(path, recursive=true, allow_existing=true) catch {
     error => raise @model.Io(error.to_string())
   }
 }
@@ -155,7 +155,7 @@ pub impl ExecutionHost for NativeHost with fn tmpdir(_self, prefix) {
 
 ///|
 pub impl ExecutionHost for NativeHost with fn rmdir(_self, path) {
-  @fs.rmdir(path, recursive=true, allow_missing=true) catch {
+  @fs.remove(path, recursive=true, allow_missing=true) catch {
     _ => ()
   }
 }

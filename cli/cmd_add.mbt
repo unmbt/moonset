@@ -29,7 +29,7 @@ async fn write_unique_changeset(
       @fs.mkdir(
         @path.Path(path).dirname().to_string(),
         recursive=true,
-        allow_exist=true,
+        allow_existing=true,
       )
       let file = @fs.create(path, allow_existing=false)
       defer file.close()

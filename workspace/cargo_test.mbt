@@ -1,11 +1,11 @@
 ///|
 async test "discover cargo workspace members and inherited versions" {
   let root = @fs.tmpdir(prefix="moonset-cargo-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   @fs.mkdir(
     @path.Path(root).join(@path.Path(".changeset")).to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(
     @path.Path(root).join(@path.Path(".changeset/config.json")).to_string(),
@@ -17,7 +17,7 @@ async test "discover cargo workspace members and inherited versions" {
   )
   for name in ["a", "b"] {
     let path = @path.Path(root).join(@path.Path("crates/" + name)).to_string()
-    @fs.mkdir(path, recursive=true, allow_exist=true)
+    @fs.mkdir(path, recursive=true, allow_existing=true)
     @fs.write_text(
       @path.Path(path).join(@path.Path("Cargo.toml")).to_string(),
       if name == "a" {
@@ -91,11 +91,11 @@ async test "discover cargo workspace members and inherited versions" {
 ///|
 async test "v0.3.0 Cargo TOML parser: multiline strings, publish.workspace, subtables, compound inline ranges, exclude, single-crate" {
   let root = @fs.tmpdir(prefix="moonset-cargo-toml-")
-  defer (@fs.rmdir(root, recursive=true) catch { _ => () })
+  defer (@fs.remove(root, recursive=true) catch { _ => () })
   @fs.mkdir(
     @path.Path(root).join(@path.Path(".changeset")).to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(
     @path.Path(root).join(@path.Path(".changeset/config.json")).to_string(),
@@ -107,7 +107,7 @@ async test "v0.3.0 Cargo TOML parser: multiline strings, publish.workspace, subt
   )
   for name in ["core", "app", "excluded"] {
     let dir = @path.Path(root).join(@path.Path("crates/" + name)).to_string()
-    @fs.mkdir(dir, recursive=true, allow_exist=true)
+    @fs.mkdir(dir, recursive=true, allow_existing=true)
     @fs.write_text(
       @path.Path(dir).join(@path.Path("Cargo.toml")).to_string(),
       if name == "core" {
@@ -148,11 +148,11 @@ async test "v0.3.0 Cargo TOML parser: multiline strings, publish.workspace, subt
 
   // Single-crate Cargo repository without [workspace]
   let single = @fs.tmpdir(prefix="moonset-cargo-single-")
-  defer (@fs.rmdir(single, recursive=true) catch { _ => () })
+  defer (@fs.remove(single, recursive=true) catch { _ => () })
   @fs.mkdir(
     @path.Path(single).join(@path.Path(".changeset")).to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(
     @path.Path(single).join(@path.Path(".changeset/config.json")).to_string(),

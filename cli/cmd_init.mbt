@@ -228,7 +228,7 @@ async fn write_init_file(path : String, content : String, force : Bool) -> Bool 
   @fs.mkdir(
     @path.Path(path).dirname().to_string(),
     recursive=true,
-    allow_exist=true,
+    allow_existing=true,
   )
   @fs.write_text(path, content)
   true

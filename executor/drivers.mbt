@@ -49,7 +49,7 @@ fn parse_npm_pack_filename(stdout : String) -> (String, String) {
   let parsed = @json.parse(stdout) catch { _ => Json::null() }
   match parsed {
     Array(
-      [{ "filename": String(filename), "integrity": String(integrity), .. }, ..]
+      [{ "filename": String(filename), "integrity": String(integrity), .. }, ..],
     ) => return (filename, integrity)
     Array([{ "filename": String(filename), .. }, ..]) => return (filename, "")
     { "filename": String(filename), "integrity": String(integrity), .. } =>

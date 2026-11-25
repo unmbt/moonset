@@ -10,7 +10,7 @@ import {
 ----
 async fn write(root : String, path : String, text : String) -> Unit {
   let file = @path.Path(root).join(@path.Path(path)).to_string()
-  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_exist=true)
+  @fs.mkdir(@path.Path(file).dirname().to_string(), recursive=true, allow_existing=true)
   @fs.write_text(file, text)
 }
 
@@ -42,7 +42,7 @@ async fn main {
   let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
 
   let root = @fs.tmpdir(prefix="moonset-bench-")
-  defer { @fs.rmdir(root, recursive=true) catch { _ => () } }
+  defer { @fs.remove(root, recursive=true) catch { _ => () } }
 
   ignore(git(root, ["init", "-b", "main"]))
   ignore(git(root, ["config", "user.name", "Moonset Bench"]))

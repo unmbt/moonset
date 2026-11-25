@@ -691,3 +691,41 @@ test "v0.3.0 built-in TUI supports Space, UTF-8 Chinese editing, cursor movement
     "moon.mod:3:5: invalid-json: bad token",
   )
 }
+
+///|
+test "cac-backed CLI parsing edge cases: stdout dash, git-tag alias, no-format, shadowed release-notes --version, and error rejections" {
+  let plan_stdout = arguments(["publish-plan", "--output", "-"])
+  assert_eq(plan_stdout.command, "publish-plan")
+  assert_eq(plan_stdout.output, "-")
+  assert_true(plan_stdout.json)
+
+  let gtag = arguments(["git-tag", "--dry-run", "--push"])
+  assert_eq(gtag.command, "git-tag")
+  assert_true(gtag.dry_run)
+  assert_true(gtag.tag_push)
+
+  let ver_fmt = arguments(["version", "--format", "json", "--no-format"])
+  assert_eq(ver_fmt.command, "version")
+  assert_true(ver_fmt.json)
+  assert_true(ver_fmt.no_format)
+
+  let rn_help = render_help(Some("release-notes"))
+  assert_true(rn_help.contains("--version <ver>"))
+
+  for
+    bad_args in [
+      ["nonexistent"],
+      ["init", "--bogus"],
+      ["pre", "exit", "extra"],
+      ["status", "--", "--no-color"],
+    ] {
+    let rejected = try {
+      ignore(arguments(bad_args))
+      false
+    } catch {
+      @model.Invalid(d) => d.code == "usage"
+      _ => false
+    }
+    assert_true(rejected)
+  }
+}
