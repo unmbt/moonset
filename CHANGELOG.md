@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 - 2026-11-25
+
+### Patch Changes
+
+- [`e0c99af`](https://github.com/unmbt/moonset/commit/e0c99afb7fff44119627a79c3c6004914aed716b) Thanks [@Wyatex](https://github.com/Wyatex)! - Adopt unmbt/cac@0.1.1 for declarative CLI command, subcommand, option, and help parsing, and adapt moonbitlang/core/async/fs calls (allow_existing and @fs.remove) to the latest MoonBit toolchain.
+- [`62b9e73`](https://github.com/unmbt/moonset/commit/62b9e730649ddef707555a5d23ca473d7e63ee35) Thanks [@Wyatex](https://github.com/Wyatex)! - Upgrade doc-web design and UX: add double-Shift global search palette (with section-anchor deep links), View Transition navigation with scroll restoration, heading anchor copy, colored GitHub callouts, TOC sliding indicator and reading progress bar, and homepage entrance/scroll-reveal/beam-link/spotlight animations; include `skills/moonset` as an Agent Skills documentation section with a top-bar Skills entry; auto-sync version from `moon.mod`; self-host Latin fonts and lazy-load docs and terminal components to significantly reduce initial bundle size.
+
 ## 0.3.0 - 2026-11-22
 
 ### Minor Changes
