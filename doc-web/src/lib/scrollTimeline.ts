@@ -24,6 +24,21 @@ export function computeSectionProgress(
 }
 
 /**
+ * Reading progress through an article: 0 when its top reaches the sticky header,
+ * 1 when its bottom reaches the bottom of the viewport.
+ */
+export function computeReadingProgress(
+  articleTop: number,
+  articleHeight: number,
+  viewportHeight: number,
+  headerOffset = 64,
+): number {
+  const readable = articleHeight - (viewportHeight - headerOffset);
+  if (readable <= 0) return articleTop <= headerOffset ? 1 : 0;
+  return clamp01((headerOffset - articleTop) / readable);
+}
+
+/**
  * Maps continuous [0, 1] progress into an active chapter index and per-chapter
  * illumination weights for scroll-driven typography and timeline styling.
  */

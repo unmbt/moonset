@@ -23,6 +23,16 @@ export interface ChangelogRelease {
 }
 
 /**
+ * Strips leading YAML front matter (`---\n...\n---`) from Markdown documents
+ * such as Agent Skill files (`SKILL.md`).
+ */
+export function stripFrontMatter(markdown: string): string {
+  const normalized = markdown.replace(/^\uFEFF/, '');
+  const match = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(normalized);
+  return match ? normalized.slice(match[0].length).replace(/^\r?\n/, '') : markdown;
+}
+
+/**
  * Deterministically converts a heading (Chinese or English) into an HTML id.
  */
 export function slugifyHeading(text: string): string {
@@ -195,6 +205,13 @@ export function resolveRelativeDocSlug(
   }
   if (resolvedPath === 'docs/changelog.md') {
     return { route: '/docs/changelog-spec', hash };
+  }
+  if (resolvedPath === 'skills/moonset/SKILL.md') {
+    return { route: '/docs/skills/moonset', hash };
+  }
+  if (resolvedPath.startsWith('skills/moonset/references/') && resolvedPath.endsWith('.md')) {
+    const file = resolvedPath.slice('skills/moonset/references/'.length, -3);
+    return { route: `/docs/skills/${file}`, hash };
   }
   if (resolvedPath.startsWith('docs/decisions/') && resolvedPath.endsWith('.md')) {
     const file = resolvedPath.slice('docs/decisions/'.length, -3);

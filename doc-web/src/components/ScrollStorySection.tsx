@@ -3,6 +3,7 @@ import {
   computeSectionProgress,
   computeTimelineState,
 } from '../lib/scrollTimeline';
+import { Phrases, Reveal, SpotlightCard } from './motion';
 
 interface StoryChapter {
   index: string;
@@ -66,15 +67,51 @@ interface ScrollStorySectionProps {
 }
 
 function StageArtifact({ activeIndex }: { activeIndex: number }) {
+  const counter = String(activeIndex + 1).padStart(2, '0');
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-900/[0.08] bg-white/85 p-6 backdrop-blur-sm transition-colors sm:p-8 dark:border-white/[0.09] dark:bg-[#10121C]/90">
+    <SpotlightCard
+      reveal={false}
+      className="overflow-hidden rounded-2xl border border-slate-900/[0.08] bg-white/85 p-6 shadow-[0_24px_60px_-36px_rgba(15,23,42,0.25)] backdrop-blur-sm sm:p-8 dark:border-white/[0.09] dark:bg-[#10121C]/90 dark:shadow-[0_28px_70px_-36px_rgba(0,0,0,0.8)]"
+    >
       {/* Subtle top metadata line */}
       <div className="mb-6 flex items-center justify-between border-b border-slate-900/[0.07] pb-4 text-xs text-slate-500 dark:border-white/[0.07] dark:text-slate-400">
-        <span className="font-mono">{CHAPTERS[activeIndex].command}</span>
+        <span key={`cmd-${activeIndex}`} className="moonset-fade-in font-mono">
+          {CHAPTERS[activeIndex].command}
+        </span>
         <span className="font-mono tabular-nums">
-          {String(activeIndex + 1).padStart(2, '0')} / {String(CHAPTERS.length).padStart(2, '0')}
+          <span className="inline-block overflow-hidden align-bottom">
+            <span key={`n-${activeIndex}`} className="moonset-digit-in text-indigo-600 dark:text-indigo-400">
+              {counter}
+            </span>
+          </span>{' '}
+          / {String(CHAPTERS.length).padStart(2, '0')}
         </span>
       </div>
+
+      <div key={`stage-${activeIndex}`} className="moonset-stage-in min-h-[300px]">
+        <StageBody activeIndex={activeIndex} />
+      </div>
+
+      {/* Chapter progress pips */}
+      <div aria-hidden="true" className="mt-6 flex gap-1.5">
+        {CHAPTERS.map((chapter, idx) => (
+          <span
+            key={chapter.index}
+            className={`h-1 flex-1 rounded-full transition-colors duration-500 ${
+              idx <= activeIndex
+                ? 'bg-indigo-500/80 dark:bg-indigo-400/80'
+                : 'bg-slate-900/[0.07] dark:bg-white/[0.07]'
+            }`}
+          />
+        ))}
+      </div>
+    </SpotlightCard>
+  );
+}
+
+function StageBody({ activeIndex }: { activeIndex: number }) {
+  return (
+    <>
 
       {/* Stage 0: Changeset markdown */}
       {activeIndex === 0 && (
@@ -235,7 +272,7 @@ function StageArtifact({ activeIndex }: { activeIndex: number }) {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -302,17 +339,14 @@ export function ScrollStorySection({ onNavigate }: ScrollStorySectionProps) {
     >
       <div className="mx-auto max-w-6xl px-6">
         {/* Section opening */}
-        <div className="mb-16 max-w-2xl">
+        <Reveal className="mb-16 max-w-2xl">
           <p className="text-xs font-medium tracking-wide text-indigo-600 dark:text-indigo-400">
             从一次提交到全生态发布
           </p>
-          <h2
-            className="font-display mt-3 text-[clamp(1.85rem,3.4vw,2.75rem)] font-bold leading-[1.15] tracking-[-0.025em] text-slate-950 dark:text-white"
-            style={{ textWrap: 'balance' }}
-          >
-            把发版的复杂性，收束为五段清澈的节律。
+          <h2 className="moonset-cjk-heading font-display mt-3 text-[clamp(1.85rem,3.4vw,2.75rem)] font-bold leading-[1.15] tracking-[-0.025em] text-slate-950 dark:text-white">
+            <Phrases text="把发版的复杂性，收束为五段清澈的节律。" />
           </h2>
-        </div>
+        </Reveal>
 
         {/* 2-column sticky stage + scroll-illuminated timeline */}
         <div className="grid grid-cols-1 items-start gap-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
@@ -341,12 +375,13 @@ export function ScrollStorySection({ onNavigate }: ScrollStorySectionProps) {
               }}
             />
 
-            <ol className="space-y-12 sm:space-y-20">
+            <ol className="space-y-8 sm:space-y-10">
               {CHAPTERS.map((chapter, idx) => {
                 const isActive = idx === activeIndex;
                 const weight = weights[idx] ?? 0.35;
-                // Keep text always readable (>= 0.42 opacity) while illuminating smoothly on scroll
-                const textOpacity = 0.42 + weight * 0.58;
+                // Dimmed chapters stay comfortably legible (>= 0.58 opacity) while the
+                // active one illuminates smoothly on scroll
+                const textOpacity = 0.58 + weight * 0.42;
                 const shiftY = (1 - weight) * 6;
 
                 return (
@@ -355,7 +390,7 @@ export function ScrollStorySection({ onNavigate }: ScrollStorySectionProps) {
                     ref={(el) => {
                       itemRefs.current[idx] = el;
                     }}
-                    className="relative py-4 lg:py-8"
+                    className="relative py-3 lg:py-6"
                   >
                     {/* Timeline node (14px circle, x: 1px..15px, center: 8.0px) */}
                     <button

@@ -1,5 +1,8 @@
 import { useEffect, useRef } from 'react';
 
+const GRAIN_TEXTURE =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+
 interface AmbientBackgroundProps {
   /** Whether to enable scroll-reactive phase drift (home page) */
   reactive?: boolean;
@@ -71,7 +74,7 @@ export function AmbientBackground({ reactive = true }: AmbientBackgroundProps) {
       {/* Subtle top-center lunar aura */}
       <div
         ref={primaryGlowRef}
-        className="absolute -top-48 left-1/2 h-[540px] w-[780px] -translate-x-1/2 rounded-full opacity-55 blur-[120px] transition-opacity duration-500 will-change-transform dark:opacity-35"
+        className="absolute -top-48 left-1/2 h-[540px] w-[780px] -translate-x-1/2 rounded-full opacity-55 blur-[120px] transition-opacity duration-500 will-change-transform dark:opacity-70"
         style={{
           background:
             'radial-gradient(ellipse at center, rgba(99, 102, 241, 0.22) 0%, rgba(129, 140, 248, 0.08) 48%, transparent 74%)',
@@ -81,7 +84,7 @@ export function AmbientBackground({ reactive = true }: AmbientBackgroundProps) {
       {/* Subtle warm moonlight horizon counterbalance */}
       <div
         ref={secondaryGlowRef}
-        className="absolute right-[-12%] bottom-[-18%] h-[460px] w-[560px] rounded-full opacity-40 blur-[130px] will-change-transform dark:opacity-22"
+        className="absolute right-[-12%] bottom-[-18%] h-[460px] w-[560px] rounded-full opacity-40 blur-[130px] will-change-transform dark:opacity-40"
         style={{
           background:
             'radial-gradient(ellipse at center, rgba(245, 158, 11, 0.14) 0%, rgba(99, 102, 241, 0.06) 52%, transparent 74%)',
@@ -108,6 +111,12 @@ export function AmbientBackground({ reactive = true }: AmbientBackgroundProps) {
         <line x1="600" y1="10" x2="600" y2="1190" stroke="currentColor" strokeWidth="0.5" />
         <line x1="10" y1="600" x2="1190" y2="600" stroke="currentColor" strokeWidth="0.5" />
       </svg>
+
+      {/* Ultra-fine film grain adds tactile depth to the flat canvas (esp. dark mode) */}
+      <div
+        className="absolute inset-0 opacity-[0.025] mix-blend-multiply dark:opacity-[0.045] dark:mix-blend-screen"
+        style={{ backgroundImage: GRAIN_TEXTURE, backgroundSize: '160px 160px' }}
+      />
     </div>
   );
 }

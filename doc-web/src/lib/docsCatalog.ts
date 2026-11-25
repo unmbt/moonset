@@ -148,6 +148,48 @@ export const DOC_SECTIONS: DocNavSection[] = [
     ],
   },
   {
+    id: 'skills',
+    title: 'Agent Skills',
+    defaultOpen: true,
+    items: [
+      {
+        slug: 'skills/moonset',
+        title: 'moonset Agent 指南',
+        subtitle: 'AI Agent 使用 moonset 的核心规则与工作流',
+        repoPath: 'skills/moonset/SKILL.md',
+        sectionId: 'skills',
+      },
+      {
+        slug: 'skills/cli-reference',
+        title: 'CLI 速查手册',
+        subtitle: '全局参数、退出码与 JSON 错误信封',
+        repoPath: 'skills/moonset/references/cli-reference.md',
+        sectionId: 'skills',
+      },
+      {
+        slug: 'skills/configuration-and-mixed',
+        title: '配置与混合仓库速查',
+        subtitle: '配置优先级、常用字段与跨生态 UnitId',
+        repoPath: 'skills/moonset/references/configuration-and-mixed.md',
+        sectionId: 'skills',
+      },
+      {
+        slug: 'skills/github-actions',
+        title: 'GitHub Actions 速查',
+        subtitle: 'PR Bot 与自动发布模板及安全红线',
+        repoPath: 'skills/moonset/references/github-actions.md',
+        sectionId: 'skills',
+      },
+      {
+        slug: 'skills/troubleshooting',
+        title: '故障排查指南',
+        subtitle: '状态文件、journal 恢复与发布排障',
+        repoPath: 'skills/moonset/references/troubleshooting.md',
+        sectionId: 'skills',
+      },
+    ],
+  },
+  {
     id: 'decisions',
     title: '架构决策 (ADR)',
     defaultOpen: false,

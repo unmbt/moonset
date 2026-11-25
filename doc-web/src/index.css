@@ -4,9 +4,23 @@
 @layer base {
   :root {
     color-scheme: light;
-    --font-display: 'Bricolage Grotesque', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
-    --font-sans: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    /*
+     * Latin faces are self-hosted via @fontsource (no Google Fonts round-trip, which is
+     * frequently blocked or slow in mainland China). CJK falls back to high-quality
+     * system faces first, so no multi-megabyte Chinese webfont is ever downloaded.
+     */
+    --font-cjk: 'PingFang SC', 'HarmonyOS Sans SC', 'MiSans', 'Hiragino Sans GB',
+      'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC',
+      'Noto Sans CJK SC';
+    --font-display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', var(--font-cjk),
+      system-ui, -apple-system, sans-serif;
+    --font-sans: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', var(--font-cjk), system-ui,
+      -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo,
+      Consolas, var(--font-cjk), monospace;
+
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-out-soft: cubic-bezier(0.22, 0.8, 0.24, 1);
 
     --surface-canvas: #fafafc;
     --surface-elevated: #ffffff;
@@ -76,6 +90,7 @@
     font-family: var(--font-sans);
     background-color: var(--surface-canvas);
     color: var(--ink-primary);
+    -webkit-tap-highlight-color: transparent;
   }
 
   h1, h2, h3, .font-display {
@@ -89,9 +104,258 @@
   .dark body {
     letter-spacing: 0.008em;
   }
+
+  /* Consistent, visible keyboard focus ring for every interactive element */
+  :where(a, button, [role='tab'], [role='option'], summary, input, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
 }
 
-/* Whisper-quiet scrollbar for docs sidebar & TOC: nearly invisible at rest, subtle on hover */
+/* CJK headline typography: compress full-width punctuation & never orphan glyphs */
+.moonset-cjk-heading,
+.moonset-prose h1,
+.moonset-prose h2 {
+  text-spacing-trim: trim-start;
+  font-feature-settings: 'halt';
+  line-break: strict;
+}
+
+/* Hero headline accent: quiet ink → moonlight gradient */
+.moonset-hero-gradient {
+  background-image: linear-gradient(100deg, #0b0d14 0%, #312e81 55%, #4f46e5 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.dark .moonset-hero-gradient {
+  background-image: linear-gradient(100deg, #ffffff 0%, #c7d2fe 55%, #a5b4fc 100%);
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion primitives                                                  */
+/* ------------------------------------------------------------------ */
+
+@keyframes moonset-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes moonset-enter-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 32px, 0) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes moonset-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes moonset-stage-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes moonset-digit-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 60%, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes moonset-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@keyframes moonset-core-ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 18px color-mix(in srgb, var(--accent-primary) 0%, transparent);
+  }
+}
+
+@keyframes moonset-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+.moonset-enter {
+  animation: moonset-enter 820ms var(--ease-out-expo) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+.moonset-enter-up {
+  animation: moonset-enter-up 1100ms var(--ease-out-expo) both;
+  animation-delay: var(--enter-delay, 0ms);
+}
+
+.moonset-fade-in {
+  animation: moonset-fade 280ms ease-out both;
+}
+
+.moonset-stage-in {
+  animation: moonset-stage-in 420ms var(--ease-out-soft) both;
+}
+
+.moonset-digit-in {
+  display: inline-block;
+  animation: moonset-digit-in 360ms var(--ease-out-expo) both;
+}
+
+/* Scroll-triggered reveal (toggled by IntersectionObserver via data-reveal) */
+.moonset-reveal {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+  transition:
+    opacity 760ms var(--ease-out-soft) var(--enter-delay, 0ms),
+    transform 900ms var(--ease-out-expo) var(--enter-delay, 0ms);
+}
+
+.moonset-reveal[data-reveal='in'] {
+  opacity: 1;
+  transform: none;
+}
+
+/* Small "live" status dot with a soft ping */
+.moonset-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: #10b981;
+}
+
+.moonset-live-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: inherit;
+  animation: moonset-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Cursor-following spotlight + luminous border for cards */
+.moonset-spotlight {
+  isolation: isolate;
+  transition:
+    opacity 760ms var(--ease-out-soft) var(--enter-delay, 0ms),
+    transform 600ms var(--ease-out-expo),
+    border-color 300ms ease,
+    box-shadow 400ms ease;
+}
+
+.moonset-spotlight::before,
+.moonset-spotlight::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 360ms ease;
+}
+
+.moonset-spotlight::before {
+  z-index: -1;
+  background: radial-gradient(
+    480px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    color-mix(in srgb, var(--accent-primary) 9%, transparent),
+    transparent 62%
+  );
+}
+
+.moonset-spotlight::after {
+  padding: 1px;
+  background: radial-gradient(
+    280px circle at var(--spot-x, 50%) var(--spot-y, 50%),
+    color-mix(in srgb, var(--accent-primary) 60%, transparent),
+    transparent 70%
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.moonset-spotlight[data-reveal='in']:hover,
+.moonset-spotlight:not(.moonset-reveal):hover {
+  transform: translate3d(0, -3px, 0);
+  box-shadow: 0 22px 48px -28px rgba(15, 23, 42, 0.28);
+}
+
+.dark .moonset-spotlight[data-reveal='in']:hover,
+.dark .moonset-spotlight:not(.moonset-reveal):hover {
+  box-shadow: 0 26px 56px -30px rgba(0, 0, 0, 0.85);
+}
+
+.moonset-spotlight:hover::before,
+.moonset-spotlight:hover::after {
+  opacity: 1;
+}
+
+/* Skeleton shimmer */
+.moonset-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--ink-primary) 6%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  animation: moonset-shimmer 1.6s linear infinite;
+}
+
+/* ------------------------------------------------------------------ */
+/* Quiet scrollbars                                                   */
+/* ------------------------------------------------------------------ */
+
 .moonset-quiet-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -118,7 +382,10 @@
   background-color: var(--scrollbar-thumb-hover);
 }
 
-/* Editorial prose styling for VitePress-like documentation reader */
+/* ------------------------------------------------------------------ */
+/* Editorial prose                                                    */
+/* ------------------------------------------------------------------ */
+
 .moonset-prose {
   font-size: 0.96875rem;
   line-height: 1.78;
@@ -172,6 +439,58 @@
   scroll-margin-top: 5.5rem;
 }
 
+/* Hover-revealed "#" permalink on h2 / h3 */
+.moonset-prose .moonset-heading {
+  position: relative;
+}
+
+.moonset-prose .moonset-heading-anchor {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0 0.3rem;
+  border-radius: 0.375rem;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-decoration: none;
+  opacity: 0;
+  transform: translate3d(-4px, 0, 0);
+  transition:
+    opacity 160ms ease,
+    transform 200ms var(--ease-out-soft),
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+.moonset-prose .moonset-heading:hover .moonset-heading-anchor,
+.moonset-prose .moonset-heading-anchor:focus-visible,
+.moonset-prose .moonset-heading-anchor[data-copied='true'] {
+  opacity: 1;
+  transform: none;
+}
+
+.moonset-prose .moonset-heading-anchor:hover {
+  color: var(--accent-primary);
+  background-color: var(--accent-soft);
+}
+
+.moonset-prose .moonset-heading-anchor[data-copied='true'] {
+  color: #059669;
+}
+
+.dark .moonset-prose .moonset-heading-anchor[data-copied='true'] {
+  color: #34d399;
+}
+
+@media (hover: none) {
+  .moonset-prose .moonset-heading-anchor {
+    opacity: 0.45;
+    transform: none;
+  }
+}
+
 .moonset-prose p {
   margin-bottom: 1.1rem;
 }
@@ -181,7 +500,7 @@
   font-weight: 600;
 }
 
-.moonset-prose a {
+.moonset-prose a:not(.moonset-heading-anchor) {
   color: var(--accent-primary);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -189,7 +508,7 @@
   transition: text-decoration-color 160ms ease;
 }
 
-.moonset-prose a:hover {
+.moonset-prose a:not(.moonset-heading-anchor):hover {
   text-decoration-color: var(--accent-primary);
 }
 
@@ -228,14 +547,96 @@
   margin-bottom: 0;
 }
 
+/* GitHub-style alerts rendered as typed callouts */
+.moonset-prose .moonset-callout {
+  --callout-color: #4f46e5;
+  position: relative;
+  margin: 1.5rem 0;
+  padding: 0.9rem 1.15rem 0.95rem 1.2rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--callout-color) 22%, transparent);
+  background-color: color-mix(in srgb, var(--callout-color) 6%, transparent);
+  color: var(--ink-secondary);
+  overflow: hidden;
+}
+
+.moonset-prose .moonset-callout::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background-color: var(--callout-color);
+}
+
+.moonset-prose .moonset-callout-title {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--callout-color);
+}
+
+.moonset-prose .moonset-callout p:last-child {
+  margin-bottom: 0;
+}
+
+.moonset-prose .moonset-callout[data-kind='note'] {
+  --callout-color: #4f46e5;
+}
+.moonset-prose .moonset-callout[data-kind='tip'] {
+  --callout-color: #059669;
+}
+.moonset-prose .moonset-callout[data-kind='important'] {
+  --callout-color: #7c3aed;
+}
+.moonset-prose .moonset-callout[data-kind='warning'] {
+  --callout-color: #d97706;
+}
+.moonset-prose .moonset-callout[data-kind='caution'] {
+  --callout-color: #e11d48;
+}
+.dark .moonset-prose .moonset-callout[data-kind='note'] {
+  --callout-color: #818cf8;
+}
+.dark .moonset-prose .moonset-callout[data-kind='tip'] {
+  --callout-color: #34d399;
+}
+.dark .moonset-prose .moonset-callout[data-kind='important'] {
+  --callout-color: #a78bfa;
+}
+.dark .moonset-prose .moonset-callout[data-kind='warning'] {
+  --callout-color: #fbbf24;
+}
+.dark .moonset-prose .moonset-callout[data-kind='caution'] {
+  --callout-color: #fb7185;
+}
+
+/* Inline code: lighter chip, wraps cleanly across lines */
 .moonset-prose :not(pre) > code {
   font-family: var(--font-mono);
   font-size: 0.84em;
-  padding: 0.16em 0.42em;
+  padding: 0.12em 0.4em;
   border-radius: 0.375rem;
   background-color: var(--surface-subtle);
   border: 1px solid var(--border-hairline);
   color: var(--ink-primary);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  overflow-wrap: anywhere;
+}
+
+.dark .moonset-prose :not(pre) > code {
+  background-color: rgba(255, 255, 255, 0.055);
+  border-color: transparent;
+  color: #dfe3f0;
+}
+
+.moonset-prose code.moonset-code-nowrap {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .moonset-prose hr {
@@ -268,6 +669,10 @@
   padding: 0.65rem 0.9rem;
   border-bottom: 1px solid var(--border-hairline);
   vertical-align: top;
+}
+
+.moonset-prose tbody tr {
+  transition: background-color 140ms ease;
 }
 
 .moonset-prose tbody tr:hover {
@@ -303,7 +708,10 @@
   scrollbar-width: thin;
 }
 
-/* Animated pipeline pulse for Vite-style SVG flow */
+/* ------------------------------------------------------------------ */
+/* Ecosystem pipeline beams                                           */
+/* ------------------------------------------------------------------ */
+
 @keyframes pulseDash {
   0% {
     stroke-dashoffset: 240;
@@ -316,14 +724,147 @@
 .pipeline-flow-line {
   stroke-dasharray: 64 176;
   animation: pulseDash 3.6s linear infinite;
+  transition:
+    opacity 420ms ease,
+    stroke-width 420ms ease;
 }
 
 .pipeline-flow-line-slow {
   stroke-dasharray: 48 192;
   animation: pulseDash 4.8s linear infinite;
+  transition:
+    opacity 420ms ease,
+    stroke-width 420ms ease;
 }
 
-/* View Transition API circular theme reveal */
+.pipeline-guide {
+  transition:
+    opacity 420ms ease,
+    stroke 420ms ease;
+}
+
+[data-pipeline-focus] .pipeline-flow-line:not(.is-active),
+[data-pipeline-focus] .pipeline-flow-line-slow:not(.is-active) {
+  opacity: 0.18;
+}
+
+.pipeline-flow-line.is-active,
+.pipeline-flow-line-slow.is-active {
+  stroke-width: 2.4;
+  animation-duration: 1.6s;
+}
+
+.pipeline-guide.is-active {
+  stroke: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+}
+
+.moonset-core-ping {
+  animation: moonset-core-ping 900ms ease-out;
+}
+
+@keyframes moonset-flow-v {
+  from {
+    transform: translate3d(0, -100%, 0);
+  }
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+
+.moonset-flow-v {
+  animation: moonset-flow-v 1.6s ease-in-out infinite;
+}
+
+/* ------------------------------------------------------------------ */
+/* Dialogs: command palette & mobile drawer                           */
+/* ------------------------------------------------------------------ */
+
+dialog.moonset-dialog {
+  margin: 0;
+  padding: 0;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  transition:
+    display 240ms allow-discrete,
+    overlay 240ms allow-discrete;
+}
+
+dialog.moonset-dialog::backdrop {
+  background-color: rgba(8, 10, 18, 0.42);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  transition:
+    opacity 220ms ease,
+    overlay 220ms allow-discrete,
+    display 220ms allow-discrete;
+}
+
+dialog.moonset-dialog[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  dialog.moonset-dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+dialog.moonset-palette {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+dialog.moonset-palette .moonset-palette-panel {
+  opacity: 0;
+  transform: translate3d(0, -10px, 0) scale(0.98);
+  transition:
+    opacity 200ms ease,
+    transform 260ms var(--ease-out-expo);
+}
+
+dialog.moonset-palette[open] .moonset-palette-panel {
+  opacity: 1;
+  transform: none;
+}
+
+@starting-style {
+  dialog.moonset-palette[open] .moonset-palette-panel {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.98);
+  }
+}
+
+dialog.moonset-drawer {
+  inset: 0 auto 0 0;
+  height: 100%;
+  width: min(20rem, 84vw);
+}
+
+dialog.moonset-drawer .moonset-drawer-panel {
+  transform: translate3d(-100%, 0, 0);
+  transition: transform 320ms var(--ease-out-expo);
+}
+
+dialog.moonset-drawer[open] .moonset-drawer-panel {
+  transform: none;
+}
+
+@starting-style {
+  dialog.moonset-drawer[open] .moonset-drawer-panel {
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* View Transitions                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Theme toggle: surging ocean wave & seafoam particles driven from JS */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;
@@ -338,12 +879,78 @@
   z-index: 9999;
 }
 
+html[data-vt='theme'] .moonset-theme-wave {
+  view-transition-name: theme-wave;
+}
+
+html[data-vt='theme']::view-transition-group(root) {
+  z-index: 1;
+}
+
+html[data-vt='theme']::view-transition-group(theme-wave) {
+  z-index: 10;
+  animation: none;
+}
+
+html[data-vt='theme']::view-transition-old(theme-wave) {
+  display: none;
+}
+
+html[data-vt='theme']::view-transition-new(theme-wave) {
+  animation: none;
+}
+
+/* Route change: quick cross-fade with a hint of lift; header stays perfectly still */
+@keyframes moonset-vt-out {
+  to {
+    opacity: 0;
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes moonset-vt-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+}
+
+html[data-vt='route'] .moonset-site-header {
+  view-transition-name: site-header;
+}
+
+html[data-vt='route']::view-transition-old(root) {
+  animation: moonset-vt-out 160ms ease-in both;
+}
+
+html[data-vt='route']::view-transition-new(root) {
+  animation: moonset-vt-in 320ms var(--ease-out-expo) both;
+}
+
+html[data-vt='route']::view-transition-group(site-header) {
+  animation: none;
+}
+
+/* Hide the frozen old header snapshot so the nav underline doesn't double up while sliding */
+html[data-vt='route']::view-transition-old(site-header) {
+  animation: none;
+  opacity: 0;
+}
+
+html[data-vt='route']::view-transition-new(site-header) {
+  animation: none;
+}
+
 /* Freeze element-level CSS color transitions while capturing & sweeping View Transition snapshots */
 html.theme-transitioning *,
 html.theme-transitioning *::before,
 html.theme-transitioning *::after {
   transition: none !important;
 }
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion                                                     */
+/* ------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
   .pipeline-flow-line,
@@ -353,5 +960,29 @@ html.theme-transitioning *::after {
   }
   html {
     scroll-behavior: auto;
+  }
+  .moonset-enter,
+  .moonset-enter-up,
+  .moonset-fade-in,
+  .moonset-stage-in,
+  .moonset-digit-in,
+  .moonset-core-ping {
+    animation: none;
+  }
+  .moonset-reveal,
+  .moonset-spotlight {
+    opacity: 1;
+    transform: none !important;
+    transition: none;
+  }
+  .moonset-live-dot::after,
+  .moonset-shimmer,
+  .moonset-flow-v {
+    animation: none;
+  }
+  dialog.moonset-dialog .moonset-palette-panel,
+  dialog.moonset-dialog .moonset-drawer-panel,
+  dialog.moonset-dialog::backdrop {
+    transition: none;
   }
 }

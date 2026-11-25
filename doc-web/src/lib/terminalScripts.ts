@@ -1,3 +1,5 @@
+import { MOONSET_VERSION } from './version';
+
 export type TerminalScenarioId = 'add' | 'status' | 'version' | 'publish';
 
 export interface TerminalStep {
@@ -143,7 +145,7 @@ export function evaluateInteractiveCommand(rawInput: string): {
   if (input === 'help' || input === 'moonset --help' || input === 'moonset -h') {
     return {
       lines: [
-        `${BOLD}moonset${R} v0.2.0 — MoonBit workspace release & changelog companion`,
+        `${BOLD}moonset${R} v${MOONSET_VERSION} — MoonBit workspace release & changelog companion`,
         '',
         `  ${CYAN}moonset add${R}              交互式创建 changeset (播放 TUI 演示)`,
         `  ${CYAN}moonset status${R}           只读预览待发布计划 (播放规划演示)`,
@@ -158,7 +160,7 @@ export function evaluateInteractiveCommand(rawInput: string): {
 
   if (input === 'moonset -V' || input === 'moonset --version') {
     return {
-      lines: [`moonset 0.2.0 (native · pure-core wasm-gc compatible)`],
+      lines: [`moonset ${MOONSET_VERSION} (native · pure-core wasm-gc compatible)`],
     };
   }
 

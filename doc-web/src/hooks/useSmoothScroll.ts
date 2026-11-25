@@ -6,6 +6,7 @@ import {
   softLimitWheelDelta,
   stepInertialScroll,
 } from '../lib/smoothScroll';
+import { classifyWheelInput } from '../lib/interaction';
 
 function canElementScrollVertically(el: HTMLElement, deltaY: number): boolean {
   const style = window.getComputedStyle(el);
@@ -54,6 +55,7 @@ export function useSmoothScroll() {
     let lastAppliedY = window.scrollY;
     let rafId = 0;
     let lastTimestamp = 0;
+    let lastFineAt = Number.NEGATIVE_INFINITY;
 
     const stopLoop = () => {
       if (rafId) {
@@ -109,6 +111,18 @@ export function useSmoothScroll() {
         window.innerHeight,
       );
       if (rawDelta === 0) return;
+
+      // Precision touchpads / Magic Mouse already have OS inertia: leave them native
+      const classification = classifyWheelInput(e.deltaY, e.deltaMode, e.timeStamp, lastFineAt);
+      lastFineAt = classification.lastFineAt;
+      if (!classification.discrete) {
+        if (rafId) {
+          stopLoop();
+          currentY = window.scrollY;
+          targetY = window.scrollY;
+        }
+        return;
+      }
 
       // Let inner scrollable panels (sidebar, xterm, modals) scroll natively
       if (hasScrollableAncestor(e.target, rawDelta)) {

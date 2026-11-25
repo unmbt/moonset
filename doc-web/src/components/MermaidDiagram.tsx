@@ -28,6 +28,9 @@ interface MermaidDiagramProps {
 
 type MermaidThemeMode = 'light' | 'dark';
 
+const MERMAID_FONT =
+  "'Plus Jakarta Sans Variable', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif";
+
 let renderQueue: Promise<unknown> = Promise.resolve();
 let renderCounter = 0;
 
@@ -41,7 +44,7 @@ function getMermaidThemeVariables(mode: MermaidThemeMode) {
     return {
       darkMode: true,
       background: 'transparent',
-      fontFamily: "'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif",
+      fontFamily: MERMAID_FONT,
       fontSize: '14px',
       primaryColor: '#171B2B',
       primaryTextColor: '#EEF0F7',
@@ -63,7 +66,7 @@ function getMermaidThemeVariables(mode: MermaidThemeMode) {
   return {
     darkMode: false,
     background: 'transparent',
-    fontFamily: "'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif",
+    fontFamily: MERMAID_FONT,
     fontSize: '14px',
     primaryColor: '#FFFFFF',
     primaryTextColor: '#10131C',
@@ -615,16 +618,25 @@ export function MermaidDiagram({ source }: MermaidDiagramProps) {
               if (svgMarkup) setLightboxOpen(true);
             }}
             title="点击展开交互预览"
-            className="flex min-h-[120px] cursor-zoom-in items-center justify-center overflow-x-auto p-5 sm:p-6"
+            className={`flex cursor-zoom-in items-center justify-center overflow-x-auto p-5 sm:p-6 ${
+              svgMarkup ? 'min-h-[120px]' : 'min-h-[220px]'
+            }`}
           >
             {!svgMarkup ? (
-              <span className="font-mono text-xs text-slate-400 dark:text-slate-500">
-                正在渲染流程图…
-              </span>
+              <div aria-busy="true" className="flex w-full max-w-md flex-col items-center gap-3">
+                <div className="flex w-full items-center justify-center gap-4">
+                  <div className="moonset-shimmer h-10 w-24 rounded-lg border border-slate-900/[0.06] bg-white/60 dark:border-white/[0.06] dark:bg-white/[0.03]" />
+                  <div className="h-px w-10 bg-slate-900/[0.1] dark:bg-white/[0.1]" />
+                  <div className="moonset-shimmer h-10 w-28 rounded-lg border border-slate-900/[0.06] bg-white/60 dark:border-white/[0.06] dark:bg-white/[0.03]" />
+                  <div className="h-px w-10 bg-slate-900/[0.1] dark:bg-white/[0.1]" />
+                  <div className="moonset-shimmer h-10 w-20 rounded-lg border border-slate-900/[0.06] bg-white/60 dark:border-white/[0.06] dark:bg-white/[0.03]" />
+                </div>
+                <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500">正在渲染流程图…</span>
+              </div>
             ) : (
               <div
                 ref={inlineHostRef}
-                className="moonset-mermaid-inline flex w-full justify-center"
+                className="moonset-mermaid-inline moonset-fade-in flex w-full justify-center"
               />
             )}
           </div>

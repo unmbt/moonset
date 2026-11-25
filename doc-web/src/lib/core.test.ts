@@ -17,9 +17,11 @@ import {
   rehypeHeadingIds,
   resolveRelativeDocSlug,
   slugifyHeading,
+  stripFrontMatter,
 } from './markdown';
 import {
   ALL_DOCS,
+  DOC_SECTIONS,
   getDocBySlug,
   getDocNeighbors,
   searchDocs,
@@ -186,6 +188,20 @@ test('relative doc link resolution maps markdown paths to SPA routes', () => {
     resolveRelativeDocSlug('docs/README.md', 'https://github.com/unmbt/moonset'),
     null,
   );
+  assert.deepEqual(
+    resolveRelativeDocSlug('skills/moonset/SKILL.md', './references/cli-reference.md'),
+    { route: '/docs/skills/cli-reference', hash: undefined },
+  );
+  assert.deepEqual(
+    resolveRelativeDocSlug('skills/moonset/references/cli-reference.md', '../SKILL.md'),
+    { route: '/docs/skills/moonset', hash: undefined },
+  );
+
+  assert.equal(
+    stripFrontMatter('---\nname: moonset\ndescription: test\n---\n\n# moonset Agent Guide\n'),
+    '# moonset Agent Guide\n',
+  );
+  assert.equal(stripFrontMatter('# No front matter\n'), '# No front matter\n');
 });
 
 test('changelog parser extracts versions, dates, groups, and commit links', () => {
@@ -214,8 +230,13 @@ test('changelog parser extracts versions, dates, groups, and commit links', () =
 });
 
 test('docs catalog search and neighbor navigation work accurately', () => {
-  assert.ok(ALL_DOCS.length >= 20);
+  assert.ok(ALL_DOCS.length >= 25);
   assert.equal(getDocBySlug('commands')?.repoPath, 'docs/commands.md');
+  assert.equal(getDocBySlug('skills/moonset')?.repoPath, 'skills/moonset/SKILL.md');
+
+  const sectionIds = DOC_SECTIONS.map((s) => s.id);
+  assert.equal(sectionIds.indexOf('skills'), sectionIds.indexOf('ecosystem') + 1);
+  assert.equal(sectionIds.indexOf('decisions'), sectionIds.indexOf('skills') + 1);
 
   const neighbors = getDocNeighbors('commands');
   assert.ok(neighbors.prev);
