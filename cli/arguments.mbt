@@ -446,7 +446,10 @@ fn build_cli() -> @cac.CAC {
   |> ignore
 
   cli
-  .command("pre [action] [tag]", description="Manage prerelease mode")
+  .command(
+    "pre <enter|exit> [tag]",
+    description="Enter or exit prerelease mode (tag required for enter)",
+  )
   .option("--initial-version", "Deprecated no-op flag kept for compatibility")
   |> ignore
 
@@ -662,12 +665,25 @@ fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
         usage_error("Unexpected argument: " + ctx.raw_rest[0])
       }
       let command = ctx.command_name
-      let pre_action = if command == "pre" { ctx.arg("action") } else { None }
+      let pre_action = if command == "pre" {
+        ctx.arg("enter|exit")
+      } else {
+        None
+      }
       let pre_tag = if command == "pre" { ctx.arg("tag") } else { None }
-      if command == "pre" &&
-        pre_tag is Some(extra) &&
-        pre_action != Some("enter") {
-        usage_error("Unexpected argument: " + extra)
+      if command == "pre" {
+        if pre_action != Some("enter") && pre_action != Some("exit") {
+          usage_error("Only `enter` or `exit` is accepted after `pre`")
+        }
+        if pre_action == Some("enter") &&
+          (pre_tag is None || pre_tag == Some("")) {
+          usage_error(
+            "A tag must be passed when using `pre enter`, e.g. `pre enter alpha`",
+          )
+        }
+        if pre_tag is Some(extra) && pre_action != Some("enter") {
+          usage_error("Unexpected argument: " + extra)
+        }
       }
       let cwd = ctx.string("cwd").unwrap_or_else(default_cwd)
       let config = match ctx.string("config") {

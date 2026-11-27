@@ -122,8 +122,21 @@ impl @executor.ExecutionHost for FakeHost with fn tmpdir(self, prefix) {
 }
 
 ///|
-impl @executor.ExecutionHost for FakeHost with fn rmdir(_self, _path) {
-  ()
+impl @executor.ExecutionHost for FakeHost with fn rmdir(self, path) {
+  let target = norm(path)
+  let prefix = target + "/"
+  let dir_keys = self.dirs.keys().collect()
+  for k in dir_keys {
+    if k == target || k.has_prefix(prefix) {
+      ignore(self.dirs.remove(k))
+    }
+  }
+  let file_keys = self.files.keys().collect()
+  for k in file_keys {
+    if k.has_prefix(prefix) {
+      ignore(self.files.remove(k))
+    }
+  }
 }
 
 ///|

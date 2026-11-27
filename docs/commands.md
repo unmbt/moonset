@@ -112,10 +112,9 @@ moonset version [--snapshot tag] [--since ref] [--dry-run]
 ```text
 moonset pre enter <tag> [--initial-version]
 moonset pre exit
-moonset pre status
 ```
 
-状态文件默认为 `.changeset/pre.json`，记录 `mode`、`tag`、已发布预版本计数和进入时版本。进入 active pre 模式时拒绝第二次 `enter`；`exit` 后允许下一次稳定版本；`status` 不改盘。
+状态文件默认为 `.changeset/pre.json`，记录 `mode` 和 `tag`。仅接受 `enter` 与 `exit`（缺少参数或传入未知动作时报错退出）；进入 `pre` 模式时拒绝第二次 `enter`，`exit` 后允许下一次 `moonset version` 毕业至稳定版本。
 
 ## `pack`
 
@@ -191,7 +190,7 @@ moonset release-notes [--version ver] [--file path] [--package unit] [--from-sta
 `moonset init` creates `.changeset/config.json`, `README.md`, and `.gitignore`
 without overwriting existing files. `moonset add --package moonbit:org/name
 --type patch --summary "..."` writes a stable Markdown changeset; pass
-`--json` for machine readable output. `moonset pre enter|exit|status` manages
-the Moonset `active`/`exit` pre-release state.
+`--json` for machine readable output. `moonset pre <enter|exit> [tag]` manages
+the Moonset `pre`/`exit` pre-release state.
 
 `pack` and `publish` route through the selected ecosystem adapter. npm and pnpm use their workspace manager, while Cargo stages the root `Cargo.lock`, packages `.crate` archives, and keeps credentials in Cargo's native configuration.

@@ -218,8 +218,13 @@ async fn[H : ExecutionHost] prepare_publish_context(
             if pack_ver != target_ver {
               raise invalid_error(
                 "stale-artifact",
-                "Packed artifact version does not match release state for " +
-                unit.id,
+                "Packed artifact version (" +
+                pack_ver +
+                ") does not match release state (" +
+                target_ver +
+                ") for " +
+                unit.id +
+                "; re-run `moonset pack` or remove stale .moonset/pack-results.json",
                 path=pack_state_path,
               )
             }
@@ -241,7 +246,9 @@ async fn[H : ExecutionHost] prepare_publish_context(
                 bytes_fingerprint(host.read_binary(resolved_arch)) != ch {
                 raise invalid_error(
                   "stale-artifact",
-                  "Packed artifact hash mismatch on disk for " + unit.id,
+                  "Packed artifact hash mismatch on disk for " +
+                  unit.id +
+                  "; re-run `moonset pack` to refresh archives",
                   path=resolved_arch,
                 )
               }
@@ -252,8 +259,13 @@ async fn[H : ExecutionHost] prepare_publish_context(
               pack_commit != head {
               raise invalid_error(
                 "stale-artifact",
-                "Packed artifact commit does not match current HEAD for " +
-                unit.id,
+                "Packed artifact commit (" +
+                pack_commit +
+                ") does not match current HEAD (" +
+                head +
+                ") for " +
+                unit.id +
+                "; re-run `moonset pack` or remove stale .moonset/pack-results.json",
                 path=pack_state_path,
               )
             }

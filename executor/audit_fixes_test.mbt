@@ -772,3 +772,132 @@ async test "npm/pnpm/yarn pack writes tarballs into .moonset/pack and dirty work
   )
   assert_true(pub_res.complete)
 }
+
+///|
+async test "apply_version_plan cleans stale pack artifacts and publish reports detailed stale-artifact diagnostics" {
+  let host = fake_host()
+  host.dirs["/repo/.moonset"] = true
+  host.dirs["/repo/.moonset/pack"] = true
+  host.files["/repo/.moonset/.gitignore"] = @utf8.encode("pack/\n")
+  host.files["/repo/.moonset/pack-results.json"] = @utf8.encode(
+    "{\"results\":[]}",
+  )
+  host.files["/repo/.moonset/pack-results-linux-x64.json"] = @utf8.encode(
+    "{\"results\":[]}",
+  )
+  host.files["/repo/.moonset/pack/acme-cli-0.1.1.tgz"] = b"old-tgz"
+
+  let new_state = (
+    {
+      "planFingerprint": "fp-next",
+      "sourceHead": Json::null(),
+      "releases": [
+        {
+          "unitId": "npm:@acme/cli",
+          "oldVersion": "0.1.1",
+          "newVersion": "0.1.2",
+          "level": "patch",
+          "reasons": [],
+          "changesets": [],
+          "publish": true,
+        },
+      ],
+      "tags": [],
+      "consumedChangesets": [],
+    } : Json).stringify()
+  let plan : @model.VersionPlan = {
+    schema_version: 1,
+    stage: "version",
+    executable: true,
+    fingerprint: "fp-next",
+    edits: [
+      {
+        path: ".moonset/release-state.json",
+        kind: "state",
+        owner: "moonset",
+        before_hash: @model.fingerprint(Json::string("")),
+        after_text: new_state,
+        atomic_write: true,
+      },
+    ],
+    changelogs: [],
+    tags: [],
+    consumed_changesets: [],
+    analysis: {
+      fingerprint: "fp-next",
+      releases: [],
+      dependency_updates: [],
+      affected_paths: [],
+      changesets: [],
+      next_pre_state: None,
+      is_snapshot: false,
+      warnings: [],
+      generated_at: None,
+    },
+    generated_at: None,
+  }
+  let applied = @executor.apply_version_plan_with(host, "/repo", plan)
+  assert_true(applied.applied)
+  assert_true(host.files.contains("/repo/.moonset/release-state.json"))
+  assert_true(host.files.contains("/repo/.moonset/.gitignore"))
+  assert_false(host.files.contains("/repo/.moonset/pack-results.json"))
+  assert_false(
+    host.files.contains("/repo/.moonset/pack-results-linux-x64.json"),
+  )
+  assert_false(host.dirs.contains("/repo/.moonset/pack"))
+
+  // Verify stale-artifact error includes concrete version mismatch and remediation hint
+  host.files["/repo/.moonset/pack-results.json"] = @utf8.encode(
+    (
+      {
+        "schemaVersion": 1,
+        "target": "source",
+        "results": [
+          {
+            "unitId": "npm:@acme/cli",
+            "version": "0.1.1",
+            "verified": true,
+            "archivePath": "/repo/.moonset/pack/acme-cli-0.1.1.tgz",
+          },
+        ],
+      } : Json).stringify(),
+  )
+  let cli_unit = mk_unit(
+    "npm:@acme/cli",
+    "@acme/cli",
+    @model.Npm,
+    "ws-npm",
+    "packages/cli",
+    "packages/cli/package.json",
+    Some("0.1.2"),
+  )
+  let base_loaded = sample_loaded(units=[cli_unit])
+  let loaded : @workspace.LoadedWorkspace = {
+    ..base_loaded,
+    snapshot: {
+      ..base_loaded.snapshot,
+      workspaces: [
+        { id: "ws-npm", root: "", ecosystem: @model.Npm, manager: @model.Npm, },
+      ],
+    },
+  }
+  let stale_msg = try {
+    ignore(
+      @executor.publish_release_with(
+        host,
+        loaded,
+        @executor.PublishOptions::new(yes=true, no_tag=true),
+      ),
+    )
+    ""
+  } catch {
+    @model.Invalid(d) => {
+      assert_eq(d.code, "stale-artifact")
+      d.message
+    }
+    _ => ""
+  }
+  assert_true(stale_msg.contains("0.1.1"))
+  assert_true(stale_msg.contains("0.1.2"))
+  assert_true(stale_msg.contains("moonset pack"))
+}

@@ -41,6 +41,37 @@ fn parse_release_state_from_edits(
 }
 
 ///|
+async fn[H : ExecutionHost] cleanup_stale_pack_artifacts(
+  host : H,
+  root : String,
+) -> Unit {
+  let moonset_dir = absolute_path(root, ".moonset")
+  let pack_results = absolute_path(moonset_dir, "pack-results.json")
+  if host.exists(pack_results) {
+    host.remove(pack_results) catch {
+      _ => ()
+    }
+  }
+  if host.is_dir(moonset_dir) {
+    let entries = host.readdir(moonset_dir) catch { _ => [] }
+    for entry in entries {
+      if entry == "pack-results.json" ||
+        (entry.has_prefix("pack-results-") && entry.has_suffix(".json")) {
+        host.remove(absolute_path(moonset_dir, entry)) catch {
+          _ => ()
+        }
+      }
+    }
+  }
+  let pack_dir = absolute_path(moonset_dir, "pack")
+  if host.is_dir(pack_dir) {
+    host.rmdir(pack_dir) catch {
+      _ => ()
+    }
+  }
+}
+
+///|
 pub async fn[H : ExecutionHost] recover_version_with(
   host : H,
   root : String,
@@ -231,11 +262,15 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
       _ => Some(".moonset/version-journal.json")
     }
   }
+  let next_state = parse_release_state_from_edits(plan)
+  if next_state is Some(_) {
+    cleanup_stale_pack_artifacts(host, root)
+  }
   {
     applied: true,
     rolled_back: false,
     journal: remaining_journal,
-    state: parse_release_state_from_edits(plan),
+    state: next_state,
   }
 }
 

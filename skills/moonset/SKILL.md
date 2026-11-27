@@ -123,12 +123,9 @@ moonset version --recover
 ### 4. Prereleases (`pre`) & Snapshots (`--snapshot`)
 
 ```bash
-# Enter prerelease mode (pass --initial-version to record baseline)
-moonset pre enter alpha --initial-version
+# Enter prerelease mode
+moonset pre enter alpha
 moonset version
-
-# Check prerelease state
-moonset pre status
 
 # Graduate back to stable
 moonset pre exit

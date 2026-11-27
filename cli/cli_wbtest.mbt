@@ -712,10 +712,31 @@ test "cac-backed CLI parsing edge cases: stdout dash, git-tag alias, no-format, 
   let rn_help = render_help(Some("release-notes"))
   assert_true(rn_help.contains("--version <ver>"))
 
+  let pre_exit = arguments(["pre", "exit"])
+  assert_eq(pre_exit.command, "pre")
+  assert_eq(pre_exit.pre_action, Some("exit"))
+  assert_eq(pre_exit.pre_tag, None)
+
+  let pre_missing_msg = try {
+    ignore(arguments(["pre"]))
+    ""
+  } catch {
+    @model.Invalid(d) => d.message
+    _ => ""
+  }
+  assert_true(
+    pre_missing_msg.contains(
+      "Missing required args for command `pre <enter|exit> [tag]`",
+    ),
+  )
+
   for
     bad_args in [
       ["nonexistent"],
       ["init", "--bogus"],
+      ["pre"],
+      ["pre", "status"],
+      ["pre", "enter"],
       ["pre", "exit", "extra"],
       ["status", "--", "--no-color"],
     ] {

@@ -6,19 +6,12 @@ async fn pre_command(options : Options) -> Int32 {
     loaded.snapshot.root,
     loaded.snapshot.config.pre.file,
   )
-  let action = options.pre_action.unwrap_or("status")
-  if action == "status" {
-    let raw_state : Json = if @fs.exists(path) {
-      @engine.parse_pre_state(@fs.read_text(path), path~).to_json()
-    } else {
-      Json::null()
-    }
-    if options.json {
-      print_json(raw_state, options.pretty)
-    } else if !options.quiet {
-      println(raw_state.stringify(indent=2))
-    }
-    return 0
+  guard options.pre_action is Some(action) else {
+    raise @model.Invalid(
+      @model.diagnostic(
+        "usage", "Missing required args for command `pre <enter|exit> [tag]`",
+      ),
+    )
   }
   if action == "exit" {
     if !@fs.exists(path) {
@@ -47,7 +40,9 @@ async fn pre_command(options : Options) -> Int32 {
   }
   if action != "enter" {
     raise @model.Invalid(
-      @model.diagnostic("usage", "pre expects enter, exit, or status"),
+      @model.diagnostic(
+        "usage", "Only `enter` or `exit` is accepted after `pre`",
+      ),
     )
   }
   guard options.pre_tag is Some(tag) && tag != "" else {
