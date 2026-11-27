@@ -185,11 +185,81 @@ fn default_command_timeout_ms() -> Int32 {
 }
 
 ///|
+fn is_windows_batch_program(program : String) -> Bool {
+  let lower = program.to_lower()
+  lower.has_suffix(".cmd") || lower.has_suffix(".bat")
+}
+
+///|
+fn windows_comspec(extra_env? : Map[String, String]) -> String? {
+  if extra_env is Some(env) {
+    for k, v in env {
+      if k.to_lower() == "comspec" && v.trim() != "" {
+        return Some(v.trim().to_owned())
+      }
+    }
+  }
+  match @env.get_env_var("ComSpec") {
+    Some(v) if v.trim() != "" => Some(v.trim().to_owned())
+    _ =>
+      match @env.get_env_var("COMSPEC") {
+        Some(v) if v.trim() != "" => Some(v.trim().to_owned())
+        _ => None
+      }
+  }
+}
+
+///|
+fn resolve_windows_exec(
+  program : String,
+  args : Array[String],
+  extra_env? : Map[String, String],
+) -> (String, Array[String]) raise @model.MoonsetError {
+  if is_windows_batch_program(program) {
+    if windows_comspec(extra_env?) is Some(comspec) {
+      if program.contains("\r") ||
+        program.contains("\n") ||
+        program.contains("\u{0000}") {
+        raise invalid_error(
+          "invalid-input", "Illegal control character in Windows batch program",
+        )
+      }
+      for arg in args {
+        if arg.contains("\r") || arg.contains("\n") || arg.contains("\u{0000}") {
+          raise invalid_error(
+            "invalid-input", "Illegal control character in Windows batch command argument",
+          )
+        }
+      }
+      return (comspec, ["/d", "/c", program] + args)
+    }
+  }
+  (program, args)
+}
+
+///|
 pub impl ExecutionHost for NativeHost with fn run(_self, program, args, cwd) {
-  let cmd = @process.Cmd(program, args, cwd?=cwd.map(dir => dir[:]))
+  let (eff_program, eff_args) = resolve_windows_exec(program, args)
+  let cmd = @process.Cmd(eff_program, eff_args, cwd?=cwd.map(dir => dir[:]))
   let timeout_ms = default_command_timeout_ms()
   @async.with_timeout(timeout_ms, () => run_cmd_capture(cmd, None)) catch {
-    error => raise @model.Io(error.to_string())
+    error => {
+      let lower = program.to_lower()
+      if !is_windows_batch_program(program) &&
+        !lower.has_suffix(".exe") &&
+        windows_comspec() is Some(_) {
+        let (fb_prog, fb_args) = resolve_windows_exec(program + ".cmd", args)
+        let fb_cmd = @process.Cmd(fb_prog, fb_args, cwd?=cwd.map(dir => dir[:]))
+        @async.with_timeout(timeout_ms, () => run_cmd_capture(fb_cmd, None)) catch {
+          _ =>
+            raise @model.Io(
+              "Failed to run '" + program + "': " + error.to_string(),
+            )
+        }
+      } else {
+        raise @model.Io("Failed to run '" + program + "': " + error.to_string())
+      }
+    }
   }
 }
 
@@ -260,9 +330,14 @@ pub impl ExecutionHost for NativeHost with fn run_with_env(
   stdin_text,
   timeout_ms,
 ) {
-  let cmd = @process.Cmd(
+  let (eff_program, eff_args) = resolve_windows_exec(
     program,
     args,
+    extra_env=environment,
+  )
+  let cmd = @process.Cmd(
+    eff_program,
+    eff_args,
     cwd?=cwd.map(dir => dir[:]),
     inherit_env=false,
     extra_env=environment,
@@ -271,9 +346,18 @@ pub impl ExecutionHost for NativeHost with fn run_with_env(
   match timeout_ms {
     Some(ms) =>
       @async.with_timeout(ms, run_fn) catch {
-        error => raise @model.Io(error.to_string())
+        error =>
+          raise @model.Io(
+            "Failed to run '" + program + "': " + error.to_string(),
+          )
       }
-    None => run_fn() catch { error => raise @model.Io(error.to_string()) }
+    None =>
+      run_fn() catch {
+        error =>
+          raise @model.Io(
+            "Failed to run '" + program + "': " + error.to_string(),
+          )
+      }
   }
 }
 
@@ -467,6 +551,8 @@ fn is_ephemeral_moonset_state_path(path : String) -> Bool {
     unquoted.has_prefix(".moonset/pack-results-") &&
     unquoted.has_suffix(".json")
   ) ||
+  unquoted == ".moonset/pack" ||
+  unquoted.has_prefix(".moonset/pack/") ||
   unquoted == ".moonset/version-journal.json"
 }
 

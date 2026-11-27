@@ -28,6 +28,7 @@ priv struct PublishPreflightOutcome {
   to_publish : Array[
     (@model.ReleaseUnit, String, @model.PackageManager, String),
   ]
+  deferred_preflight : Map[String, Bool]
 }
 
 ///|
@@ -418,6 +419,86 @@ async fn[H : ExecutionHost] prepare_publish_context(
 }
 
 ///|
+async fn[H : ExecutionHost] preflight_single_unit(
+  host : H,
+  loaded : @workspace.LoadedWorkspace,
+  options : PublishOptions,
+  ctx : PublishPlanContext,
+  unit : @model.ReleaseUnit,
+  version : String,
+  effective_manager : @model.PackageManager,
+  cwd : String,
+  registry : String,
+  unit_reg_override : String?,
+  unit_tag_override : String?,
+  unit_access : @model.Access,
+  unit_archive : String?,
+) -> (Bool, Bool, String) {
+  let mut ok = true
+  let mut preflight_already_published = false
+  let mut preflight_err_detail = "Registry preflight failed"
+  match ctx.unit_api_map.get(unit.id) {
+    Some((pub_name, api_pub)) => {
+      let target = make_publish_target(
+        unit.id,
+        version,
+        registry,
+        pub_name,
+        unit_tag_override,
+      )
+      (api_pub.preflight)(target) catch {
+        err => {
+          ok = false
+          preflight_err_detail = error_message(err)
+        }
+      }
+    }
+    None =>
+      if ctx.use_command_publisher {
+        let payload = build_command_payload(
+          unit, version, registry, unit_tag_override, unit_access, unit_archive,
+        )
+        ignore(
+          run_command_publisher(
+            host,
+            loaded.snapshot.root,
+            ctx.command_cmd,
+            ctx.command_env,
+            "preflight",
+            payload,
+          ),
+        ) catch {
+          err => {
+            ok = false
+            preflight_err_detail = error_message(err)
+          }
+        }
+      } else {
+        let (pf_ok, pf_dup, detail) = driver_preflight(
+          host,
+          unit,
+          effective_manager,
+          cwd,
+          {
+            registry: unit_reg_override,
+            dist_tag: unit_tag_override,
+            access: unit_access,
+            otp: options.otp,
+            archive_path: unit_archive,
+            ignore_scripts: options.ignore_scripts,
+          },
+        )
+        ok = pf_ok
+        preflight_already_published = pf_dup
+        if detail != "" {
+          preflight_err_detail = detail
+        }
+      }
+  }
+  (ok, preflight_already_published, preflight_err_detail)
+}
+
+///|
 async fn[H : ExecutionHost] run_publish_preflight(
   host : H,
   loaded : @workspace.LoadedWorkspace,
@@ -426,6 +507,8 @@ async fn[H : ExecutionHost] run_publish_preflight(
 ) -> PublishPreflightOutcome {
   let mut failed = false
   let failed_units : Map[String, Bool] = Map([])
+  let pending_batch : Map[String, Bool] = Map([])
+  let deferred_preflight : Map[String, Bool] = Map([])
   let to_publish : Array[
     (@model.ReleaseUnit, String, @model.PackageManager, String),
   ] = []
@@ -591,68 +674,50 @@ async fn[H : ExecutionHost] run_publish_preflight(
       }
       Absent => ()
     }
+    let is_registry_resolving_driver = (
+        unit.ecosystem == @model.MoonBit || unit.ecosystem == @model.Cargo
+      ) &&
+      !ctx.use_command_publisher &&
+      !ctx.unit_api_map.contains(unit.id)
+    let unpublished_upstreams = upstream_producers(
+      unit_id,
+      ctx.units_map,
+      loaded.snapshot.config.bridges(),
+      ctx.specs_by_unit,
+    ).filter(p => pending_batch.contains(p))
+    if is_registry_resolving_driver &&
+      !unpublished_upstreams.is_empty() &&
+      (options.dry_run || loaded.snapshot.config.publisher.dry_run_first) {
+      deferred_preflight[unit_id] = true
+      pending_batch[unit_id] = true
+      ctx.status_map[key] = {
+        plan_id: ctx.plan_id,
+        unit_id,
+        version,
+        target: "source",
+        registry,
+        state: @model.Pending,
+        digest: None,
+        external_id: None,
+        message: Some(
+          "Deferred preflight until upstream package is published: " +
+          unpublished_upstreams.join(", "),
+        ),
+      }
+      to_publish.push((unit, version, effective_manager, cwd))
+      continue
+    }
     let mut ok = true
     let mut preflight_already_published = false
     let mut preflight_err_detail = "Registry preflight failed"
     if options.dry_run || loaded.snapshot.config.publisher.dry_run_first {
-      match ctx.unit_api_map.get(unit.id) {
-        Some((pub_name, api_pub)) => {
-          let target = make_publish_target(
-            unit.id,
-            version,
-            registry,
-            pub_name,
-            unit_tag_override,
-          )
-          (api_pub.preflight)(target) catch {
-            err => {
-              ok = false
-              preflight_err_detail = error_message(err)
-            }
-          }
-        }
-        None =>
-          if ctx.use_command_publisher {
-            let payload = build_command_payload(
-              unit, version, registry, unit_tag_override, unit_access, unit_archive,
-            )
-            ignore(
-              run_command_publisher(
-                host,
-                loaded.snapshot.root,
-                ctx.command_cmd,
-                ctx.command_env,
-                "preflight",
-                payload,
-              ),
-            ) catch {
-              err => {
-                ok = false
-                preflight_err_detail = error_message(err)
-              }
-            }
-          } else {
-            let (pf_ok, pf_dup, detail) = driver_preflight(
-              host,
-              unit,
-              effective_manager,
-              cwd,
-              {
-                registry: unit_reg_override,
-                dist_tag: unit_tag_override,
-                access: unit_access,
-                otp: options.otp,
-                archive_path: unit_archive,
-                ignore_scripts: options.ignore_scripts,
-              },
-            )
-            ok = pf_ok
-            preflight_already_published = pf_dup
-            if detail != "" {
-              preflight_err_detail = detail
-            }
-          }
-      }
+      let (pf_ok, pf_dup, pf_detail) = preflight_single_unit(
+        host, loaded, options, ctx, unit, version, effective_manager, cwd, registry,
+        unit_reg_override, unit_tag_override, unit_access, unit_archive,
+      )
+      ok = pf_ok
+      preflight_already_published = pf_dup
+      preflight_err_detail = pf_detail
     }
     if preflight_already_published {
       ctx.status_map[key] = {
@@ -692,8 +757,9 @@ async fn[H : ExecutionHost] run_publish_preflight(
       },
     }
     if ok {
+      pending_batch[unit_id] = true
       to_publish.push((unit, version, effective_manager, cwd))
     }
   }
-  { failed, failed_units, to_publish, }
+  { failed, failed_units, to_publish, deferred_preflight, }
 }

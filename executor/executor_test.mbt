@@ -565,7 +565,7 @@ async test "create_tags uses annotated tags, allows dry-run on dirty tree, and p
 }
 
 ///|
-async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix omits pre.json gitignore, and commit uses --only" {
+async test "pack uses cargo --list dry-run, moon --list --target-dir dry-run, doctor --fix omits pre.json gitignore, and commit uses --only" {
   let host = fake_host()
   let recorded : Array[(String, Array[String])] = []
   host.runner = (program, args, _cwd) => {
@@ -609,7 +609,9 @@ async test "pack uses cargo --list dry-run, moon --dry-run, doctor --fix omits p
   assert_true(
     recorded.any(pair => {
       pair.0 == "moon" &&
-      pair.1.contains("--dry-run") &&
+      pair.1.contains("--list") &&
+      pair.1.contains("--target-dir") &&
+      !pair.1.contains("--dry-run") &&
       pair.1.contains("--frozen")
     }),
   )

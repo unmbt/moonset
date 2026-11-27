@@ -301,6 +301,66 @@ async fn[H : ExecutionHost] execute_publish_units(
       step_idx += 1
       continue
     }
+    if preflight.deferred_preflight.contains(unit_id) &&
+      loaded.snapshot.config.publisher.dry_run_first {
+      let (pf_ok, pf_dup, pf_detail) = preflight_single_unit(
+        host, loaded, options, ctx, unit, version, manager, cwd, registry, effective_registry,
+        unit_tag_override, unit_access, unit_archive,
+      )
+      if pf_dup {
+        published_unit_ids.push(unit_id)
+        ctx.status_map[key] = {
+          plan_id: ctx.plan_id,
+          unit_id,
+          version,
+          target: "source",
+          registry,
+          state: @model.Published,
+          digest: None,
+          external_id: None,
+          message: Some("already published"),
+        }
+        ignore(
+          save_publish_state(
+            host,
+            loaded.snapshot.root,
+            ctx.plan_id,
+            ctx.order_keys,
+            ctx.status_map,
+            "done-" + step_idx.to_string(),
+          ),
+        )
+        step_idx += 1
+        continue
+      }
+      if !pf_ok {
+        failed = true
+        failed_units[unit_id] = true
+        ctx.status_map[key] = {
+          plan_id: ctx.plan_id,
+          unit_id,
+          version,
+          target: "source",
+          registry,
+          state: @model.Failed,
+          digest: None,
+          external_id: None,
+          message: Some(pf_detail),
+        }
+        ignore(
+          save_publish_state(
+            host,
+            loaded.snapshot.root,
+            ctx.plan_id,
+            ctx.order_keys,
+            ctx.status_map,
+            "failed-preflight-" + step_idx.to_string(),
+          ),
+        )
+        step_idx += 1
+        continue
+      }
+    }
     ctx.status_map[key] = {
       plan_id: ctx.plan_id,
       unit_id,

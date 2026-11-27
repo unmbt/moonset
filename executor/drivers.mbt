@@ -32,17 +32,24 @@ fn find_moonbit_archive(
 ) -> String? {
   let clean = unit_name.replace_all(old="/", new="-")
   let expected_prefix = clean + "-" + version
-  for entry in entries {
-    if (
-        entry.has_suffix(".tar.gz") ||
-        entry.has_suffix(".zip") ||
-        entry.has_suffix(".pkg")
-      ) &&
-      (entry.contains(expected_prefix) || entry.contains(version)) {
+  let archives = entries.filter(entry => {
+    entry.has_suffix(".tar.gz") ||
+    entry.has_suffix(".zip") ||
+    entry.has_suffix(".pkg")
+  })
+  // Pass 1: exact `<name>-<version>` match so shared workspace `_build/publish/` never cross-matches siblings.
+  for entry in archives {
+    if entry.contains(expected_prefix) {
       return Some(entry)
     }
   }
-  None
+  // Pass 2: fallback to version-only match only when unambiguous (exactly one candidate).
+  let version_matches = archives.filter(entry => entry.contains(version))
+  if version_matches.length() == 1 {
+    Some(version_matches[0])
+  } else {
+    None
+  }
 }
 
 ///|
@@ -193,10 +200,27 @@ async fn[H : ExecutionHost] driver_pack(
 ) -> (String, String, Bool) {
   match unit.ecosystem {
     @model.MoonBit => {
-      let args = ["package"]
       if dry_run {
-        args.push("--dry-run")
+        // `moon package --dry-run` is not implemented by the MoonBit CLI;
+        // pack into an isolated temporary target-dir with `--list` and clean up.
+        let tmp = host.tmpdir("moonset-moon-pack-")
+        defer @async.protect_from_cancel(() => host.rmdir(tmp) catch { _ => () })
+        let args = ["package", "--list", "--target-dir", tmp]
+        if frozen {
+          args.push("--frozen")
+        }
+        let output = host.run("moon", args, Some(cwd))
+        if output.exit_code != 0 {
+          raise @model.Io(
+            "moon package failed for " +
+            unit.id +
+            ": " +
+            process_failure_detail(output),
+          )
+        }
+        return ("", "", true)
       }
+      let args = ["package"]
       if frozen {
         args.push("--frozen")
       }
@@ -209,20 +233,28 @@ async fn[H : ExecutionHost] driver_pack(
           process_failure_detail(output),
         )
       }
-      if dry_run {
-        return ("", "", true)
+      let workspace_root = workspace_root_for_unit(loaded.snapshot, unit)
+      let ws_abs = absolute_path(loaded.snapshot.root, workspace_root)
+      let search_bases : Array[String] = [cwd]
+      if !search_bases.contains(ws_abs) {
+        search_bases.push(ws_abs)
+      }
+      if !search_bases.contains(loaded.snapshot.root) {
+        search_bases.push(loaded.snapshot.root)
       }
       let mut found_archive : String? = None
-      for rel_dir in ["_build/publish", "_build/package", "target/package"] {
-        if found_archive is None {
-          let pkg_dir = absolute_path(cwd, rel_dir)
-          if host.is_dir(pkg_dir) {
-            let entries = host.readdir(pkg_dir)
-            found_archive = find_moonbit_archive(
-              entries,
-              unit.native_name,
-              version,
-            ).map(name => absolute_path(pkg_dir, name))
+      for base in search_bases {
+        for rel_dir in ["_build/publish", "_build/package", "target/package"] {
+          if found_archive is None {
+            let pkg_dir = absolute_path(base, rel_dir)
+            if host.is_dir(pkg_dir) {
+              let entries = host.readdir(pkg_dir)
+              found_archive = find_moonbit_archive(
+                entries,
+                unit.native_name,
+                version,
+              ).map(name => absolute_path(pkg_dir, name))
+            }
           }
         }
       }
@@ -238,14 +270,37 @@ async fn[H : ExecutionHost] driver_pack(
       }
     }
     @model.Cargo => {
+      let has_internal_workspace_dep = unit.dependencies.any(dep => {
+        dep.kind != @model.Development &&
+        loaded.snapshot.units.any(u => u.id == dep.producer)
+      })
       let args = ["package", "--allow-dirty"]
       if dry_run {
         args.push("--list")
+      } else if has_internal_workspace_dep {
+        // Workspace crates depending on unpublished sibling crates fail Cargo's
+        // isolated registry verification and bundled Cargo.lock resolution before
+        // the sibling is uploaded; skip registry lockfile/verify during local pack.
+        args.push("--no-verify")
+        args.push("--exclude-lockfile")
       }
       if frozen {
         args.push("--frozen")
       }
-      let output = host.run("cargo", args, Some(cwd))
+      let mut output = host.run("cargo", args, Some(cwd))
+      if output.exit_code != 0 &&
+        !dry_run &&
+        has_internal_workspace_dep &&
+        (output.stdout + "\n" + output.stderr)
+        .to_lower()
+        .contains("exclude-lockfile") {
+        // Fallback for older Cargo versions that do not recognize `--exclude-lockfile`.
+        let fallback_args = ["package", "--allow-dirty", "--no-verify"]
+        if frozen {
+          fallback_args.push("--frozen")
+        }
+        output = host.run("cargo", fallback_args, Some(cwd))
+      }
       if output.exit_code != 0 {
         raise @model.Io(
           "cargo package failed for " +
@@ -306,6 +361,7 @@ async fn[H : ExecutionHost] driver_pack(
       let program = package_manager_program(host, manager)
       let is_pnpm = manager == @model.PackageManager::Pnpm
       let is_yarn = manager == @model.PackageManager::Yarn
+      let pack_dir = absolute_path(loaded.snapshot.root, ".moonset/pack")
       if is_yarn {
         let clean = unit.native_name
           .replace_all(old="@", new="")
@@ -335,7 +391,8 @@ async fn[H : ExecutionHost] driver_pack(
           }
           return (tgz_name, "", true)
         }
-        let archive_path = absolute_path(pack_cwd, tgz_name)
+        host.mkdir(pack_dir)
+        let archive_path = absolute_path(pack_dir, tgz_name)
         let output = host.run(
           program,
           ["pack", "--filename", archive_path],
@@ -382,6 +439,11 @@ async fn[H : ExecutionHost] driver_pack(
         return (filename, "", true)
       }
       let args = ["pack"]
+      if !dry_run {
+        host.mkdir(pack_dir)
+        args.push("--pack-destination")
+        args.push(pack_dir)
+      }
       if !is_pnpm {
         if dry_run {
           args.push("--dry-run")
@@ -412,10 +474,23 @@ async fn[H : ExecutionHost] driver_pack(
           path=unit.manifest,
         )
       }
-      let archive_path = if host.exists(filename) {
+      let norm_name = filename.replace_all(old="\\", new="/")
+      let parts = norm_name.split("/").collect()
+      let basename = if parts.length() > 0 {
+        parts[parts.length() - 1].to_owned()
+      } else {
+        filename
+      }
+      let in_pack_dir = absolute_path(pack_dir, basename)
+      let in_pack_cwd = absolute_path(pack_cwd, filename)
+      let archive_path = if host.exists(in_pack_dir) {
+        in_pack_dir
+      } else if host.exists(in_pack_cwd) {
+        in_pack_cwd
+      } else if host.exists(filename) {
         filename
       } else {
-        absolute_path(pack_cwd, filename)
+        in_pack_dir
       }
       if !host.exists(archive_path) {
         raise invalid_error(

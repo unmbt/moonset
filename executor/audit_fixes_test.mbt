@@ -300,4 +300,475 @@ async test "audit fixes: keep_journal protects formatter failure for recover, au
       s.message.unwrap_or("").contains("not allowed by host allowlist")
     }),
   )
+
+  // MoonBit pack --dry-run uses `--list --target-dir <tmp>` (never `--dry-run`)
+  // and real pack locates archives in workspace root `_build/publish/` for `moon.work` members
+  let moon_pack_host = fake_host()
+  moon_pack_host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "mp-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/sub",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let moon_pack_loaded = sample_loaded(units=[
+    mk_unit(
+      "moonbit:acme/sub",
+      "acme/sub",
+      @model.MoonBit,
+      "moon",
+      "sub",
+      "sub/moon.mod",
+      Some("0.1.1"),
+    ),
+  ])
+  let moon_pack_calls : Array[Array[String]] = []
+  moon_pack_host.runner = (program, args, _cwd) => {
+    if program == "moon" {
+      moon_pack_calls.push(args)
+      if !args.contains("--list") {
+        moon_pack_host.dirs["/repo/_build/publish"] = true
+        // Put an alphabetically earlier sibling zip with the same version to verify exact name matching!
+        moon_pack_host.files["/repo/_build/publish/acme-aaa-0.1.1.zip"] = b"otherzip"
+        moon_pack_host.files["/repo/_build/publish/acme-sub-0.1.1.zip"] = b"zipdata"
+      }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let dry_packed = @executor.pack_artifacts_with(
+    moon_pack_host,
+    moon_pack_loaded,
+    @executor.PackOptions::new(dry_run=true),
+  )
+  assert_eq(dry_packed.length(), 1)
+  assert_true(
+    moon_pack_calls.any(a => {
+      a.contains("package") &&
+      a.contains("--list") &&
+      a.contains("--target-dir") &&
+      !a.contains("--dry-run")
+    }),
+  )
+  let real_packed = @executor.pack_artifacts_with(
+    moon_pack_host,
+    moon_pack_loaded,
+    @executor.PackOptions::new(dry_run=false),
+  )
+  assert_eq(real_packed.length(), 1)
+  assert_true(real_packed[0].verified)
+  assert_true(real_packed[0].archive_path.has_suffix("acme-sub-0.1.1.zip"))
+}
+
+///|
+async test "publish defers per-unit preflight for MoonBit/Cargo downstream units with unpublished same-batch upstream" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "defer-pf-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/core",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "moonbit:acme/cli",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let core_unit = mk_unit(
+    "moonbit:acme/core",
+    "acme/core",
+    @model.MoonBit,
+    "moon",
+    "core",
+    "core/moon.mod",
+    Some("0.1.1"),
+  )
+  let cli_unit : @model.ReleaseUnit = {
+    ..mk_unit(
+      "moonbit:acme/cli",
+      "acme/cli",
+      @model.MoonBit,
+      "moon",
+      "cli",
+      "cli/moon.mod",
+      Some("0.1.1"),
+    ),
+    dependencies: [
+      {
+        producer: "moonbit:acme/core",
+        requirement: "0.1.1",
+        kind: @model.Runtime,
+        path: "cli/moon.mod",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let loaded = sample_loaded(units=[cli_unit, core_unit])
+  let events : Array[String] = []
+  host.runner = (program, args, cwd) => {
+    if program == "moon" && args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "404 not found", }
+    }
+    if program == "moon" && args.contains("publish") {
+      let who = if cwd.unwrap_or("").has_suffix("core") {
+        "core"
+      } else {
+        "cli"
+      }
+      let phase = if args.contains("--dry-run") {
+        "preflight"
+      } else {
+        "publish"
+      }
+      events.push(who + ":" + phase)
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  // 1. `--dry-run`: runs preflight on core, defers cli cleanly as Pending
+  let dry_res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(dry_run=true),
+  )
+  assert_eq(events, ["core:preflight"])
+  assert_true(
+    dry_res.statuses.any(s => {
+      s.unit_id == "moonbit:acme/core" && s.state == @model.Preflighted
+    }),
+  )
+  assert_true(
+    dry_res.statuses.any(s => {
+      s.unit_id == "moonbit:acme/cli" &&
+      s.state == @model.Pending &&
+      s.message.unwrap_or("").contains("Deferred preflight")
+    }),
+  )
+
+  // 2. Real publish: core preflight -> core publish -> cli deferred preflight -> cli publish
+  events.clear()
+  let pub_res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
+  assert_true(pub_res.complete)
+  assert_eq(events, [
+    "core:preflight", "core:publish", "cli:preflight", "cli:publish",
+  ])
+}
+
+///|
+async test "cargo pack uses --no-verify --exclude-lockfile for workspace crates with internal deps" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "cargo-ws-pack-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "cargo:acme-core",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "cargo:acme-app",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let rs_core = mk_unit(
+    "cargo:acme-core",
+    "acme-core",
+    @model.Cargo,
+    "rs",
+    "crates/core",
+    "crates/core/Cargo.toml",
+    Some("0.1.1"),
+  )
+  let rs_app : @model.ReleaseUnit = {
+    ..mk_unit(
+      "cargo:acme-app",
+      "acme-app",
+      @model.Cargo,
+      "rs",
+      "crates/app",
+      "crates/app/Cargo.toml",
+      Some("0.1.1"),
+    ),
+    dependencies: [
+      {
+        producer: "cargo:acme-core",
+        requirement: "^0.1.1",
+        kind: @model.Runtime,
+        path: "crates/app/Cargo.toml",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let base_loaded = sample_loaded(units=[rs_core, rs_app])
+  let loaded : @workspace.LoadedWorkspace = {
+    ..base_loaded,
+    snapshot: {
+      ..base_loaded.snapshot,
+      workspaces: [
+        { id: "rs", root: "", ecosystem: @model.Cargo, manager: @model.Cargo, },
+      ],
+    },
+  }
+  let calls : Array[(String, Array[String])] = []
+  host.runner = (program, args, cwd) => {
+    if program == "cargo" {
+      let who = if cwd.unwrap_or("").has_suffix("app") { "app" } else { "core" }
+      calls.push((who, args))
+      host.dirs["/repo/target/package"] = true
+      if who == "core" {
+        host.files["/repo/target/package/acme-core-0.1.1.crate"] = b"corecrate"
+      } else {
+        host.files["/repo/target/package/acme-app-0.1.1.crate"] = b"appcrate"
+      }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let results = @executor.pack_artifacts_with(
+    host,
+    loaded,
+    @executor.PackOptions::new(dry_run=false),
+  )
+  assert_eq(results.length(), 2)
+  assert_true(results.all(r => r.verified))
+  assert_true(
+    calls.any(c => {
+      c.0 == "core" &&
+      !c.1.contains("--no-verify") &&
+      !c.1.contains("--exclude-lockfile")
+    }),
+  )
+  assert_true(
+    calls.any(c => {
+      c.0 == "app" &&
+      c.1.contains("--no-verify") &&
+      c.1.contains("--exclude-lockfile")
+    }),
+  )
+}
+
+///|
+async test "npm/pnpm/yarn pack writes tarballs into .moonset/pack and dirty worktree check ignores .moonset/pack" {
+  assert_true(@executor.default_moonset_gitignore().contains("pack/"))
+
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "js-pack-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "npm:@acme/pnpm-pkg",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "npm:@acme/npm-pkg",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "npm:@acme/yarn-pkg",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let pnpm_unit = mk_unit(
+    "npm:@acme/pnpm-pkg",
+    "@acme/pnpm-pkg",
+    @model.Npm,
+    "ws-pnpm",
+    "packages/pnpm-pkg",
+    "packages/pnpm-pkg/package.json",
+    Some("0.1.1"),
+  )
+  let npm_unit = mk_unit(
+    "npm:@acme/npm-pkg",
+    "@acme/npm-pkg",
+    @model.Npm,
+    "ws-npm",
+    "packages/npm-pkg",
+    "packages/npm-pkg/package.json",
+    Some("0.1.1"),
+  )
+  let yarn_unit = mk_unit(
+    "npm:@acme/yarn-pkg",
+    "@acme/yarn-pkg",
+    @model.Npm,
+    "ws-yarn",
+    "packages/yarn-pkg",
+    "packages/yarn-pkg/package.json",
+    Some("0.1.1"),
+  )
+  let base_loaded = sample_loaded(units=[pnpm_unit, npm_unit, yarn_unit])
+  let loaded : @workspace.LoadedWorkspace = {
+    ..base_loaded,
+    snapshot: {
+      ..base_loaded.snapshot,
+      workspaces: [
+        {
+          id: "ws-pnpm",
+          root: "",
+          ecosystem: @model.Npm,
+          manager: @model.Pnpm,
+        },
+        { id: "ws-npm", root: "", ecosystem: @model.Npm, manager: @model.Npm, },
+        {
+          id: "ws-yarn",
+          root: "",
+          ecosystem: @model.Npm,
+          manager: @model.Yarn,
+        },
+      ],
+    },
+  }
+  let calls : Array[(String, Array[String])] = []
+  host.runner = (program, args, _cwd) => {
+    calls.push((program, args))
+    if program == "pnpm" && args.contains("pack") {
+      host.files["/repo/.moonset/pack/acme-pnpm-pkg-0.1.1.tgz"] = b"pnpmtgz"
+      return {
+        exit_code: 0,
+        stdout: "..\\..\\.moonset\\pack\\acme-pnpm-pkg-0.1.1.tgz\n",
+        stderr: "",
+      }
+    }
+    if program == "npm" && args.contains("pack") {
+      host.files["/repo/.moonset/pack/acme-npm-pkg-0.1.1.tgz"] = b"npmtgz"
+      return {
+        exit_code: 0,
+        stdout: "[{\"filename\":\"acme-npm-pkg-0.1.1.tgz\",\"integrity\":\"sha512-x\"}]",
+        stderr: "",
+      }
+    }
+    if program == "yarn" && args.contains("pack") {
+      host.files["/repo/.moonset/pack/acme-yarn-pkg-0.1.1.tgz"] = b"yarntgz"
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if program == "git" && args == ["status", "--porcelain"] {
+      return {
+        exit_code: 0,
+        stdout: "?? .moonset/pack/\n?? .moonset/pack/acme-pnpm-pkg-0.1.1.tgz\n",
+        stderr: "",
+      }
+    }
+    if args.contains("view") {
+      return { exit_code: 1, stdout: "", stderr: "E404", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let packed = @executor.pack_artifacts_with(
+    host,
+    loaded,
+    @executor.PackOptions::new(dry_run=false),
+  )
+  assert_eq(packed.length(), 3)
+  assert_true(packed.all(r => r.verified))
+  for res in packed {
+    assert_true(
+      res.archive_path.replace_all(old="\\", new="/").contains(".moonset/pack/"),
+    )
+  }
+  assert_true(
+    calls.any(c => {
+      c.0 == "pnpm" &&
+      c.1.contains("--pack-destination") &&
+      c.1.any(a => a.replace_all(old="\\", new="/").has_suffix(".moonset/pack"))
+    }),
+  )
+  assert_true(
+    calls.any(c => {
+      c.0 == "npm" &&
+      c.1.contains("--pack-destination") &&
+      c.1.contains("--json")
+    }),
+  )
+  assert_true(
+    calls.any(c => {
+      c.0 == "yarn" &&
+      c.1.contains("--filename") &&
+      c.1.any(a => {
+        a
+        .replace_all(old="\\", new="/")
+        .has_suffix(".moonset/pack/acme-yarn-pkg-0.1.1.tgz")
+      })
+    }),
+  )
+
+  // Publish dry-run / non-dirty check ignores untracked .moonset/pack/ files
+  let pub_res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
+  assert_true(pub_res.complete)
 }

@@ -214,9 +214,31 @@ pub async fn run_jsonl(
   }
   let stdin_bytes = @utf8.encode(request.to_json().stringify() + "\n")
   let run_once = async fn(program : String) -> ProcessResult {
+    let lower = program.to_lower()
+    let (eff_program, eff_args) = if is_windows_env(spec.environment) &&
+      (lower.has_suffix(".cmd") || lower.has_suffix(".bat")) {
+      let comspec = match @env.get_env_var("ComSpec") {
+        Some(v) if v.trim() != "" => v.trim().to_owned()
+        _ =>
+          match @env.get_env_var("COMSPEC") {
+            Some(v) if v.trim() != "" => v.trim().to_owned()
+            _ => "cmd.exe"
+          }
+      }
+      for part in [program] + spec.args {
+        if part.contains("\r") ||
+          part.contains("\n") ||
+          part.contains("\u{0000}") {
+          fail("Illegal control character in Windows batch command")
+        }
+      }
+      (comspec, ["/d", "/c", program] + spec.args)
+    } else {
+      (program, spec.args)
+    }
     let command = @process.Cmd(
-      program,
-      spec.args,
+      eff_program,
+      eff_args,
       cwd?=spec.cwd.map(dir => dir[:]),
       inherit_env=false,
       extra_env=spec.environment,
