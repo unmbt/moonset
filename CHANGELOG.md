@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 - 2026-11-27
+
+### Minor Changes
+
+- [`1cc035d`](https://github.com/unmbt/moonset/commit/1cc035ded85e339ebf985d539e90aa039717ac73) Thanks [@Wyatex](https://github.com/Wyatex)! - Complete full audit remediation across workspace, engine, changelog, executor, CLI, Actions, and wasm-gc core facade:
+
+  - Fix MoonBit `private = true` visibility mapping to `Private` (governed by `privatePackages`), custom `--config` `pre.json` propagation, `Reader` directory caching across repeated globs, UTF-8 BOM `Cargo.toml` byte spans, journal retention across `format_files`, `NativeHost::run` default timeout, and matrix-mode verified tarball publishing.
+  - Add Yarn workspace/lockfile/pack/publish support, stateless `tag` fallback (`--from-manifests`), `alsoSkipDependentsOfSkipped`, `commit: true` / `commit.skipCI`, real `format: auto` detection + `deno`, line-level changelog hooks (`ChangelogLineHooks` & JSONL `protocol: line`), and empty-release changelog cleanup.
+  - Add CLI flags `--snapshot-prerelease-template`, `--pr-body-out`, `status -o` / `--marker-scope`, `publish --access` / `--ignore-scripts` / `CHANGESETS_OUTPUT`, automatic default branch detection in `init`, and `GITHUB_SERVER_URL` + multi-partition PR bot markers.
+  - Harden GitHub Actions (`pr-check` built-in release PR skip, single-call `version` + empty-commit guard, `commit-mode: github-api`, `published-packages` output, and CI `shellcheck`), add `unmbt/moonset/core` `wasm-gc` pure facade, enforce `MOONSET_ALLOWED_PLUGIN_PROGRAMS` host allowlist, and split `executor/publish.mbt` & `cli/tui_app.mbt`.
+
+### Patch Changes
+
+- [`b47a950`](https://github.com/unmbt/moonset/commit/b47a9507d52c3ea391a508f2cb36e050e914200a) Thanks [@Wyatex](https://github.com/Wyatex)! - Migrate deprecated `@shell.Cmd` to `@process.Cmd` and avoid matching `@json.ParseError` internal constructors for MoonBit 0.1.20261126 compatibility.
+- [`8491a54`](https://github.com/unmbt/moonset/commit/8491a54e19ed54bce6118fbf52db35494ab1e9cf) Thanks [@Wyatex](https://github.com/Wyatex)! - Align 'pre <enter|exit> [tag]' with Changesets v3 (remove 'pre status'), clean stale '.moonset/pack-results*.json' and '.moonset/pack/' when 'version' writes a new release state, and include version/commit details in 'stale-artifact' diagnostics.
+- [`57948ca`](https://github.com/unmbt/moonset/commit/57948ca7a33aed773d075ddd2025f714e2d57a31) Thanks [@Wyatex](https://github.com/Wyatex)! - Harden Windows .cmd/.bat spawning, MoonBit dry-run & moon.work archive matching, deferred same-batch preflight, Cargo workspace sibling packaging, and .moonset/pack tarball output for npm/pnpm/yarn.
+- [`2b2944d`](https://github.com/unmbt/moonset/commit/2b2944dab5a344ce805cf20ac105fd05a37411dd) Thanks [@Wyatex](https://github.com/Wyatex)! - Refresh the MoonBit registry index (`moon update` after polling `moon view`) and retry registry propagation misses between same-batch MoonBit workspace publishes, and print failed/blocked publish target summaries in `action.yml` on non-zero exit.
+
 ## 0.3.1 - 2026-11-25
 
 ### Patch Changes
