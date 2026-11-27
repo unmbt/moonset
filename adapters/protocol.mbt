@@ -173,6 +173,30 @@ fn stderr_detail(stderr : String) -> String {
 }
 
 ///|
+async fn read_bounded_process_stream(
+  reader : @process.ReadFromProcess,
+  captured : Ref[Int32],
+  limit : Int32,
+  stream : String,
+) -> Bytes {
+  let buffer = @buffer.Buffer(capacity=4096)
+  for ;; {
+    match reader.read() {
+      None => break
+      Some(chunk) => {
+        let next_total = captured.val + chunk.length()
+        if next_total > limit {
+          fail("Plugin \{stream} exceeded output limit of \{limit} bytes")
+        }
+        captured.val = next_total
+        buffer.write_bytesview(chunk)
+      }
+    }
+  }
+  buffer.to_bytes()
+}
+
+///|
 /// Execute one request without invoking a shell or inheriting credentials.
 /// Host-side `host_allowed_programs`, when provided, overrides `spec.allowed_programs`.
 pub async fn run_jsonl(
@@ -188,20 +212,60 @@ pub async fn run_jsonl(
       ),
     )
   }
-  let stdin_payload = request.to_json().stringify() + "\n"
-  let run_once = async fn(program : String) {
-    let command = @shell.Cmd(
+  let stdin_bytes = @utf8.encode(request.to_json().stringify() + "\n")
+  let run_once = async fn(program : String) -> ProcessResult {
+    let command = @process.Cmd(
       program,
       spec.args,
-      cwd?=spec.cwd,
+      cwd?=spec.cwd.map(dir => dir[:]),
       inherit_env=false,
-      env=spec.environment,
-      stdin=@shell.Text(stdin_payload),
+      extra_env=spec.environment,
     )
-    command.output(
-      timeout_ms=spec.timeout_ms,
-      max_output_bytes=spec.max_output_bytes,
-    )
+    @async.with_timeout(spec.timeout_ms, () => {
+      let mut exit_code : Int32 = 0
+      let mut stdout_bytes = b""
+      let mut stderr_bytes = b""
+      @async.with_task_group(group => {
+        let child = command.spawn(
+          group,
+          stdin=FeedFromParent,
+          stdout=Collect,
+          stderr=Collect,
+          cancel_handler=@process.hard_cancel(),
+        )
+        let captured : Ref[Int32] = Ref(0)
+        group.spawn_bg(allow_failure=true, () => {
+          defer child.stdin.close()
+          child.stdin.write(stdin_bytes)
+        })
+        let stdout_task = group.spawn(() => {
+          defer child.stdout.close()
+          read_bounded_process_stream(
+            child.stdout,
+            captured,
+            spec.max_output_bytes,
+            "stdout",
+          )
+        })
+        let stderr_task = group.spawn(() => {
+          defer child.stderr.close()
+          read_bounded_process_stream(
+            child.stderr,
+            captured,
+            spec.max_output_bytes,
+            "stderr",
+          )
+        })
+        exit_code = child.wait()
+        stdout_bytes = stdout_task.wait()
+        stderr_bytes = stderr_task.wait()
+      })
+      {
+        exit_code,
+        stdout: @utf8.decode_lossy(stdout_bytes),
+        stderr: @utf8.decode_lossy(stderr_bytes),
+      }
+    })
   }
   let output = run_once(spec.program) catch {
     first_err =>
@@ -227,23 +291,23 @@ pub async fn run_jsonl(
         )
       }
   }
-  if output.exit_code() != 0 {
+  if output.exit_code != 0 {
     raise @model.Invalid(
       @model.diagnostic(
         "plugin-crashed",
         "Plugin exited with code " +
-        output.exit_code().to_string() +
-        stderr_detail(output.stderr()),
+        output.exit_code.to_string() +
+        stderr_detail(output.stderr),
       ),
     )
   }
-  let lines = split_lines(output.stdout())
+  let lines = split_lines(output.stdout)
   if lines.length() != 1 {
     raise @model.Invalid(
       @model.diagnostic(
         "plugin-invalid-output",
         "Plugin must return exactly one JSONL response" +
-        stderr_detail(output.stderr()),
+        stderr_detail(output.stderr),
       ),
     )
   }
@@ -252,7 +316,7 @@ pub async fn run_jsonl(
       raise @model.Invalid(
         @model.diagnostic(
           "plugin-invalid-output",
-          "Plugin output is not JSON" + stderr_detail(output.stderr()),
+          "Plugin output is not JSON" + stderr_detail(output.stderr),
         ),
       )
   }

@@ -14,6 +14,33 @@ fn builtin_config_schema() -> Json raise @model.MoonsetError {
 }
 
 ///|
+fn parse_json_error_position(message : String) -> (Int32, Int32)? {
+  guard message.rev_find(" at line ") is Some(line_prefix) else { return None }
+  let tail = message[line_prefix + 9:].to_owned()
+  guard tail.find(", column ") is Some(col_sep) else { return None }
+  let line_text = tail[:col_sep].to_owned()
+  let col_text = tail[col_sep + 9:].to_owned()
+  fn parse_digits(s : String) -> Int32? {
+    if s == "" {
+      return None
+    }
+    let mut acc : Int32 = 0
+    for ch in s.to_array() {
+      if ch < '0' || ch > '9' {
+        return None
+      }
+      acc = acc * 10 + (ch.to_int() - '0'.to_int())
+    }
+    Some(acc)
+  }
+
+  match (parse_digits(line_text), parse_digits(col_text)) {
+    (Some(line), Some(col)) => Some((line, col + 1))
+    _ => None
+  }
+}
+
+///|
 pub fn parse_json(
   source : String,
   path : String,
@@ -25,25 +52,17 @@ pub fn parse_json(
   }
   @json.parse(input, reject_duplicate_keys=true) catch {
     error => {
-      let (line, column) = match error {
-        @json.DuplicateKey(pos, _)
-        | @json.InvalidChar(pos, _)
-        | @json.InvalidIdentEscape(pos)
-        | @json.InvalidNumber(pos, _) => (pos.line, pos.column + 1)
-        _ =>
+      let message = error.to_string()
+      let (line, column) = match parse_json_error_position(message) {
+        Some(pos) => pos
+        None =>
           (
             source.split("\n").count(),
             source.split("\n").last().map(x => x.length() + 1).unwrap_or(1),
           )
       }
       raise @model.Invalid(
-        @model.diagnostic(
-          "invalid-json",
-          error.to_string(),
-          path~,
-          line~,
-          column~,
-        ),
+        @model.diagnostic("invalid-json", message, path~, line~, column~),
       )
     }
   }

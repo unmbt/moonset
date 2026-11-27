@@ -46,8 +46,14 @@ async fn open_in_external_editor(file_path : String) -> Bool {
     return false
   }
   let args = base_args + [file_path]
-  let out = @shell.Cmd(program, args).output() catch { _ => return false }
-  out.exit_code() == 0
+  let out = @process.Cmd(program, args).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  ) catch {
+    _ => return false
+  }
+  out.exit_code == 0
 }
 
 ///|
@@ -464,11 +470,17 @@ fn sorted_units(
 
 ///|
 async fn git_best_effort(cwd : String, args : Array[String]) -> String? {
-  let out = @shell.Cmd("git", args, cwd~).output() catch { _ => return None }
-  if out.exit_code() != 0 {
+  let out = @process.Cmd("git", args, cwd~).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  ) catch {
+    _ => return None
+  }
+  if out.exit_code != 0 {
     None
   } else {
-    Some(out.stdout())
+    Some(@utf8.decode_lossy(out.stdout_binary()))
   }
 }
 

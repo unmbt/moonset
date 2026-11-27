@@ -162,13 +162,74 @@ pub impl ExecutionHost for NativeHost with fn rmdir(_self, path) {
 
 ///|
 pub impl ExecutionHost for NativeHost with fn run(_self, program, args, cwd) {
-  let output = @shell.Cmd(program, args, cwd?).output() catch {
+  let output = @process.Cmd(program, args, cwd?=cwd.map(dir => dir[:])).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  ) catch {
     error => raise @model.Io(error.to_string())
   }
   {
-    exit_code: output.exit_code(),
-    stdout: output.stdout(),
-    stderr: output.stderr(),
+    exit_code: output.exit_code,
+    stdout: @utf8.decode_lossy(output.stdout_binary()),
+    stderr: @utf8.decode_lossy(output.stderr_binary()),
+  }
+}
+
+///|
+async fn run_cmd_capture(
+  cmd : @process.Cmd,
+  stdin_text : String?,
+) -> @adapters.ProcessResult {
+  match stdin_text {
+    None => {
+      let output = cmd.run(
+        stdin=Empty,
+        stdout=Collect,
+        stderr=Collect,
+        cancel_handler=@process.hard_cancel(),
+      )
+      {
+        exit_code: output.exit_code,
+        stdout: @utf8.decode_lossy(output.stdout_binary()),
+        stderr: @utf8.decode_lossy(output.stderr_binary()),
+      }
+    }
+    Some(text) => {
+      let stdin_bytes = @utf8.encode(text)
+      let mut exit_code : Int32 = 0
+      let mut stdout_bytes = b""
+      let mut stderr_bytes = b""
+      @async.with_task_group(group => {
+        let child = cmd.spawn(
+          group,
+          stdin=FeedFromParent,
+          stdout=Collect,
+          stderr=Collect,
+          cancel_handler=@process.hard_cancel(),
+        )
+        group.spawn_bg(allow_failure=true, () => {
+          defer child.stdin.close()
+          child.stdin.write(stdin_bytes)
+        })
+        let stdout_task = group.spawn(() => {
+          defer child.stdout.close()
+          child.stdout.read_all()
+        })
+        let stderr_task = group.spawn(() => {
+          defer child.stderr.close()
+          child.stderr.read_all()
+        })
+        exit_code = child.wait()
+        stdout_bytes = stdout_task.wait()
+        stderr_bytes = stderr_task.wait()
+      })
+      {
+        exit_code,
+        stdout: @utf8.decode_lossy(stdout_bytes),
+        stderr: @utf8.decode_lossy(stderr_bytes),
+      }
+    }
   }
 }
 
@@ -182,25 +243,20 @@ pub impl ExecutionHost for NativeHost with fn run_with_env(
   stdin_text,
   timeout_ms,
 ) {
-  let cmd = match stdin_text {
-    Some(text) =>
-      @shell.Cmd(
-        program,
-        args,
-        cwd?,
-        inherit_env=false,
-        env=environment,
-        stdin=@shell.Text(text),
-      )
-    None => @shell.Cmd(program, args, cwd?, inherit_env=false, env=environment)
-  }
-  let output = cmd.output(timeout_ms?) catch {
-    error => raise @model.Io(error.to_string())
-  }
-  {
-    exit_code: output.exit_code(),
-    stdout: output.stdout(),
-    stderr: output.stderr(),
+  let cmd = @process.Cmd(
+    program,
+    args,
+    cwd?=cwd.map(dir => dir[:]),
+    inherit_env=false,
+    extra_env=environment,
+  )
+  let run_fn = async fn() { run_cmd_capture(cmd, stdin_text) }
+  match timeout_ms {
+    Some(ms) =>
+      @async.with_timeout(ms, run_fn) catch {
+        error => raise @model.Io(error.to_string())
+      }
+    None => run_fn() catch { error => raise @model.Io(error.to_string()) }
   }
 }
 

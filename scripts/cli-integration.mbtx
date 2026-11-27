@@ -1,8 +1,8 @@
 ----
 import {
-  "moonbitlang/core/async",
   "moonbitlang/core/async/fs",
-  "moonbitlang/core/async/shell",
+  "moonbitlang/core/async/process",
+  "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
   "moonbitlang/core/json",
@@ -14,22 +14,27 @@ async fn write(root : String, path : String, text : String) -> Unit {
   @fs.write_text(file, text)
 }
 
+async fn capture(program : String, args : Array[String], cwd? : String) -> (Int32, String, String) {
+  let res = @process.Cmd(program, args, cwd?=cwd.map(dir => dir[:])).run(stdin=Empty, stdout=Collect, stderr=Collect)
+  (res.exit_code, @utf8.decode_lossy(res.stdout_binary()), @utf8.decode_lossy(res.stderr_binary()))
+}
+
 async fn git(root : String, args : Array[String]) -> String {
-  let result = @shell.Cmd("git", args, cwd=root).output()
-  if result.exit_code() != 0 { fail("git " + args.join(" ") + ": " + result.stderr()) }
-  result.stdout().trim().to_owned()
+  let (code, stdout, stderr) = capture("git", args, cwd=root)
+  if code != 0 { fail("git " + args.join(" ") + ": " + stderr) }
+  stdout.trim().to_owned()
 }
 
 async fn invoke(binary : String, root : String, args : Array[String], expected : Int) -> Json {
-  let result = @shell.Cmd(binary, ["--cwd", root] + args).output()
-  guard result.exit_code() == expected else {
-    fail("Expected exit \{expected}, got \{result.exit_code()}: \{result.stderr()}\n\{result.stdout()}")
+  let (code, stdout, stderr) = capture(binary, ["--cwd", root] + args)
+  guard code == expected else {
+    fail("Expected exit \{expected}, got \{code}: \{stderr}\n\{stdout}")
   }
-  @json.parse(result.stdout())
+  @json.parse(stdout)
 }
 
 async fn main {
-  @shell.Cmd("moon", ["build", "--target", "native", "--release"]).run()
+  ignore(@process.Cmd("moon", ["build", "--target", "native", "--release"], accepted_exit_code=code => code == 0).run())
   let project = @env.current_dir().unwrap()
   let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
   let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }
@@ -56,25 +61,25 @@ async fn main {
   ignore(git(root, ["commit", "-m", "empty changeset"]))
   let passing = invoke(binary, root, ["status", "--since", base, "--output", "json"], 0)
   assert_true(passing is { "hasRelease": False, "errors": [], "changesets": [{ "id": "empty", .. }], .. })
-  let json_output = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--json"]).output()
-  assert_true(!json_output.stdout().contains("\u{001b}["))
-  assert_true(!json_output.stderr().contains("\u{001b}["))
+  let (_, json_stdout, json_stderr) = capture(binary, ["--cwd", root, "status", "--since", base, "--json"])
+  assert_true(!json_stdout.contains("\u{001b}["))
+  assert_true(!json_stderr.contains("\u{001b}["))
   let previous_no_color = @env.get_env_var("NO_COLOR")
   @env.set_env_var("NO_COLOR", "1")
-  let env_no_color = {
+  let (_, env_stdout, env_stderr) = {
     defer {
       match previous_no_color {
         Some(value) => @env.set_env_var("NO_COLOR", value)
         None => @env.unset_env_var("NO_COLOR")
       }
     }
-    @shell.Cmd(binary, ["--cwd", root, "status", "--since", base]).output()
+    capture(binary, ["--cwd", root, "status", "--since", base])
   }
-  assert_true(!env_no_color.stdout().contains("\u{001b}["))
-  assert_true(!env_no_color.stderr().contains("\u{001b}["))
-  let flag_no_color = @shell.Cmd(binary, ["--cwd", root, "status", "--since", base, "--no-color"]).output()
-  assert_true(!flag_no_color.stdout().contains("\u{001b}["))
-  assert_true(!flag_no_color.stderr().contains("\u{001b}["))
+  assert_true(!env_stdout.contains("\u{001b}["))
+  assert_true(!env_stderr.contains("\u{001b}["))
+  let (_, flag_stdout, flag_stderr) = capture(binary, ["--cwd", root, "status", "--since", base, "--no-color"])
+  assert_true(!flag_stdout.contains("\u{001b}["))
+  assert_true(!flag_stderr.contains("\u{001b}["))
   ignore(git(root, ["mv", ".changeset/empty.md", ".changeset/renamed.md"]))
   ignore(git(root, ["commit", "-m", "rename changeset"]))
   ignore(git(root, ["switch", "main"]))
@@ -101,12 +106,12 @@ async fn main {
   ignore(invoke(binary, root, ["publish-plan", "--output", "src/main.mbt"], 2))
   assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("src/main.mbt")).to_string()), "// feature")
   assert_eq(@fs.read_text(@path.Path(root).join(@path.Path("moon.mod")).to_string()), manifest)
-  let exported = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output, "--pretty"]).output()
-  if exported.exit_code() != 0 { fail("export: " + exported.stdout() + exported.stderr()) }
-  assert_eq(exported.stdout(), "")
+  let (exp_code, exp_stdout, exp_stderr) = capture(binary, ["--cwd", root, "publish-plan", "--output", output, "--pretty"])
+  if exp_code != 0 { fail("export: " + exp_stdout + exp_stderr) }
+  assert_eq(exp_stdout, "")
   assert_true(@json.parse(@fs.read_text(output)) is { "stage": "analysis", "executable": False, "schemaVersion": 1, .. })
-  let replaced = @shell.Cmd(binary, ["--cwd", root, "publish-plan", "--output", output]).output()
-  if replaced.exit_code() != 0 { fail(replaced.stderr()) }
+  let (rep_code, _, rep_stderr) = capture(binary, ["--cwd", root, "publish-plan", "--output", output])
+  if rep_code != 0 { fail(rep_stderr) }
   // Markdown PR Bot output: missing (exit 1), release (exit 0), and error (exit 2)
   let md_root = @fs.tmpdir(prefix="moonset-md-")
   defer { @fs.remove(md_root, recursive=true) catch { _ => () } }
@@ -122,26 +127,26 @@ async fn main {
   write(md_root, "lib.mbt", "pub fn x() -> Int { 1 }")
   ignore(git(md_root, ["add", "."]))
   ignore(git(md_root, ["commit", "-m", "code change"]))
-  let md_missing = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown", "--head-repo", "unmbt/moonset", "--head-ref", "feat/bot"]).output()
-  assert_eq(md_missing.exit_code(), 1)
-  assert_true(md_missing.stdout().has_prefix("<!-- moonset-bot:changeset-check -->\n"))
-  assert_true(md_missing.stdout().contains("### ⚠️ No changeset found"))
-  assert_true(md_missing.stdout().contains("moonset add"))
-  assert_true(!md_missing.stdout().contains("\u{001b}["))
+  let (md_missing_code, md_missing_out, _) = capture(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown", "--head-repo", "unmbt/moonset", "--head-ref", "feat/bot"])
+  assert_eq(md_missing_code, 1)
+  assert_true(md_missing_out.has_prefix("<!-- moonset-bot:changeset-check -->\n"))
+  assert_true(md_missing_out.contains("### ⚠️ No changeset found"))
+  assert_true(md_missing_out.contains("moonset add"))
+  assert_true(!md_missing_out.contains("\u{001b}["))
   write(md_root, ".changeset/bot.md", "---\nacme/app: minor\n---\nBot feature")
   ignore(git(md_root, ["add", "."]))
   ignore(git(md_root, ["commit", "-m", "add changeset"]))
-  let md_rel = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"]).output()
-  assert_eq(md_rel.exit_code(), 0)
-  assert_true(md_rel.stdout().contains("### ✅ Changeset detected"))
-  assert_true(md_rel.stdout().contains("| `moonbit:acme/app` | `0.1.0` → `0.2.0` | `minor` |"))
+  let (md_rel_code, md_rel_out, _) = capture(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"])
+  assert_eq(md_rel_code, 0)
+  assert_true(md_rel_out.contains("### ✅ Changeset detected"))
+  assert_true(md_rel_out.contains("| `moonbit:acme/app` | `0.1.0` → `0.2.0` | `minor` |"))
   write(md_root, ".changeset/bad.md", "---\nbad: [unclosed\n---\nBroken")
   ignore(git(md_root, ["add", "."]))
   ignore(git(md_root, ["commit", "-m", "broken changeset"]))
-  let md_err = @shell.Cmd(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"]).output()
-  assert_eq(md_err.exit_code(), 2)
-  assert_true(md_err.stdout().has_prefix("<!-- moonset-bot:changeset-check -->\n"))
-  assert_true(md_err.stdout().contains("### ❌ Failed to inspect changesets"))
+  let (md_err_code, md_err_out, _) = capture(binary, ["--cwd", md_root, "status", "--since", md_base, "--output", "markdown"])
+  assert_eq(md_err_code, 2)
+  assert_true(md_err_out.has_prefix("<!-- moonset-bot:changeset-check -->\n"))
+  assert_true(md_err_out.contains("### ❌ Failed to inspect changesets"))
   let first = invoke(binary, root, ["publish-plan"], 0)
   let second = invoke(binary, root, ["publish-plan"], 0)
   assert_eq(first, second)
@@ -284,11 +289,10 @@ async fn main {
   ignore(git(meta_root, ["commit", "-m", "feat: add pr body"]))
   let head_sha = git(meta_root, ["rev-parse", "HEAD"])
   write(meta_root, "meta.json", "{\"" + head_sha + "\":{\"pr\":\"42\",\"author\":\"alice\"}}")
-  let pr_md_out = @shell.Cmd(binary, [
+  let (pr_md_code, pr_md, _) = capture(binary, [
     "--cwd", meta_root, "version", "--dry-run", "--output", "markdown", "--commit-metadata", "meta.json",
-  ]).output()
-  assert_eq(pr_md_out.exit_code(), 0)
-  let pr_md = pr_md_out.stdout()
+  ])
+  assert_eq(pr_md_code, 0)
   assert_true(pr_md.contains("# Releases"))
   assert_true(pr_md.contains("## acme/prbody@0.2.0"))
   assert_true(pr_md.contains("https://github.com/acme/prbody/pull/42"))

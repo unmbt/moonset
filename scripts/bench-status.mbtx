@@ -1,8 +1,8 @@
 ----
 import {
-  "moonbitlang/core/async",
   "moonbitlang/core/async/fs",
-  "moonbitlang/core/async/shell",
+  "moonbitlang/core/async/process",
+  "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/env",
   "moonbitlang/core/path",
   "moonbitlang/core/json",
@@ -15,9 +15,9 @@ async fn write(root : String, path : String, text : String) -> Unit {
 }
 
 async fn git(root : String, args : Array[String]) -> String {
-  let result = @shell.Cmd("git", args, cwd=root).output()
-  if result.exit_code() != 0 { fail("git " + args.join(" ") + ": " + result.stderr()) }
-  result.stdout().trim().to_owned()
+  let result = @process.Cmd("git", args, cwd=root).run(stdin=Empty, stdout=Collect, stderr=Collect)
+  if result.exit_code != 0 { fail("git " + args.join(" ") + ": " + @utf8.decode_lossy(result.stderr_binary())) }
+  @utf8.decode_lossy(result.stdout_binary()).trim().to_owned()
 }
 
 fn median_sorted(values : Array[Int64]) -> Int64 {
@@ -27,16 +27,16 @@ fn median_sorted(values : Array[Int64]) -> Int64 {
 
 async fn time_cmd(binary : String, args : Array[String]) -> Int64 {
   let t0 = @env.now()
-  let res = @shell.Cmd(binary, args).output()
+  let res = @process.Cmd(binary, args).run(stdin=Empty, stdout=Collect, stderr=Collect)
   let t1 = @env.now()
-  if res.exit_code() != 0 {
-    fail("benchmark command failed: " + args.join(" ") + "\n" + res.stderr())
+  if res.exit_code != 0 {
+    fail("benchmark command failed: " + args.join(" ") + "\n" + @utf8.decode_lossy(res.stderr_binary()))
   }
   (t1 - t0).reinterpret_as_int64()
 }
 
 async fn main {
-  @shell.Cmd("moon", ["build", "--target", "native", "--release"]).run()
+  ignore(@process.Cmd("moon", ["build", "--target", "native", "--release"], accepted_exit_code=code => code == 0).run())
   let project = @env.current_dir().unwrap()
   let artifact = @path.Path(project).join(@path.Path("_build/native/release/build/cmd/moonset/moonset")).to_string()
   let binary = if @fs.exists(artifact + ".exe") { artifact + ".exe" } else { artifact }

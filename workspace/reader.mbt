@@ -73,11 +73,17 @@ fn relative(root : String, path : String) -> String raise {
 
 ///|
 async fn git(root : String, args : Array[String]) -> String {
-  let output = @shell.Cmd("git", args, cwd=root).output()
-  if output.exit_code() != 0 {
-    raise @model.Io("git " + args[0] + ": " + output.stderr())
+  let output = @process.Cmd("git", args, cwd=root).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  )
+  if output.exit_code != 0 {
+    raise @model.Io(
+      "git " + args[0] + ": " + @utf8.decode_lossy(output.stderr_binary()),
+    )
   }
-  output.stdout()
+  @utf8.decode_lossy(output.stdout_binary())
 }
 
 ///|
@@ -132,16 +138,38 @@ async fn Reader::prefetch(self : Reader, paths : Array[String]) -> Unit {
       chunk.push(item)
       lines.push(head + ":" + item.1)
     }
-    let output = @shell.Cmd(
-      "git",
-      ["cat-file", "--batch"],
-      cwd=root,
-      stdin=@shell.Stdin::Text(lines.join("\n") + "\n"),
-    ).output(max_output_bytes=33554432)
-    if output.exit_code() != 0 {
-      raise @model.Io("git cat-file --batch: " + output.stderr())
+    let stdin_data = @utf8.encode(lines.join("\n") + "\n")
+    let mut exit_code : Int32 = 0
+    let mut bytes = b""
+    let mut stderr_bytes = b""
+    @async.with_task_group(group => {
+      let child = @process.Cmd("git", ["cat-file", "--batch"], cwd=root).spawn(
+        group,
+        stdin=FeedFromParent,
+        stdout=Collect,
+        stderr=Collect,
+      )
+      group.spawn_bg(allow_failure=true, () => {
+        defer child.stdin.close()
+        child.stdin.write(stdin_data)
+      })
+      let stdout_task = group.spawn(() => {
+        defer child.stdout.close()
+        child.stdout.read_all()
+      })
+      let stderr_task = group.spawn(() => {
+        defer child.stderr.close()
+        child.stderr.read_all()
+      })
+      exit_code = child.wait()
+      bytes = stdout_task.wait()
+      stderr_bytes = stderr_task.wait()
+    })
+    if exit_code != 0 {
+      raise @model.Io(
+        "git cat-file --batch: " + @utf8.decode_lossy(stderr_bytes),
+      )
     }
-    let bytes = output.stdout_bytes()
     let mut pos = 0
     for item in chunk {
       let domain_path = item.0

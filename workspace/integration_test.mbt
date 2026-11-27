@@ -11,11 +11,15 @@ async fn write(root : String, path : String, content : String) -> Unit {
 
 ///|
 async fn run_git(root : String, args : Array[String]) -> String {
-  let out = @shell.Cmd("git", args, cwd=root).output()
-  if out.exit_code() != 0 {
-    fail(out.stderr())
+  let out = @process.Cmd("git", args, cwd=root).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  )
+  if out.exit_code != 0 {
+    fail(@utf8.decode_lossy(out.stderr_binary()))
   }
-  out.stdout().trim().to_owned()
+  @utf8.decode_lossy(out.stdout_binary()).trim().to_owned()
 }
 
 ///|
