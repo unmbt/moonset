@@ -139,17 +139,36 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
         )
       }
     }
+    let stage_cwd = Some(absolute_path(stage, workspace_root))
+    let is_yarn = workspace.manager == @model.PackageManager::Yarn
+    let mut is_yarn_berry = false
+    if is_yarn {
+      let yver = host.run(manager_program, ["--version"], stage_cwd)
+      let trimmed_ver = yver.stdout.trim().to_owned()
+      is_yarn_berry = trimmed_ver != "" && !trimmed_ver.has_prefix("1.")
+    }
     let offline_args = if workspace.manager == @model.PackageManager::Pnpm {
       ["install", "--lockfile-only", "--ignore-scripts", "--offline"]
+    } else if is_yarn {
+      if is_yarn_berry {
+        ["install", "--mode=update-lockfile"]
+      } else {
+        ["install", "--ignore-scripts", "--offline"]
+      }
     } else {
       ["install", "--package-lock-only", "--ignore-scripts", "--offline"]
     }
-    let stage_cwd = Some(absolute_path(stage, workspace_root))
     let mut install = host.run(manager_program, offline_args, stage_cwd)
     if install.exit_code != 0 {
       // Retry without --offline when local cache does not satisfy lockfile resolution.
       let online_args = if workspace.manager == @model.PackageManager::Pnpm {
         ["install", "--lockfile-only", "--ignore-scripts"]
+      } else if is_yarn {
+        if is_yarn_berry {
+          ["install", "--mode=update-lockfile"]
+        } else {
+          ["install", "--ignore-scripts"]
+        }
       } else {
         ["install", "--package-lock-only", "--ignore-scripts"]
       }
@@ -163,16 +182,15 @@ pub async fn[H : ExecutionHost] stage_lockfiles_with(
         path=package_path,
       )
     }
-    let lock_path = if workspace.manager == @model.PackageManager::Pnpm {
-      if workspace_root == "" {
-        "pnpm-lock.yaml"
-      } else {
-        workspace_root + "/pnpm-lock.yaml"
-      }
-    } else if workspace_root == "" {
-      "package-lock.json"
+    let lock_filename = match workspace.manager {
+      @model.PackageManager::Pnpm => "pnpm-lock.yaml"
+      @model.PackageManager::Yarn => "yarn.lock"
+      _ => "package-lock.json"
+    }
+    let lock_path = if workspace_root == "" {
+      lock_filename
     } else {
-      workspace_root + "/package-lock.json"
+      workspace_root + "/" + lock_filename
     }
     let generated_path = absolute_path(stage, lock_path)
     if !host.exists(generated_path) {

@@ -1,5 +1,7 @@
 import {
+  "unmbt/moonset",
   "unmbt/moonset/api",
+  "unmbt/moonset/core",
   "unmbt/moonset/changelog",
 }
 

@@ -347,5 +347,46 @@ async fn main {
   let ignored_ver = invoke(binary, v030_root, ["version", "--ignore=acme/v030", "--dry-run", "--json"], 0)
   assert_true(ignored_ver is { "analysis": { "releases": [], .. }, .. })
 
-  println("CLI integration (release binary): Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.3.0 pre/snapshot/ignore/id-security, lifecycle, exits, JSON and no-write checks passed")
+  // Wave 1-3 e2e: status -o, --marker-scope, --snapshot-prerelease-template, --pr-body-out, version --recover, stateless tag, mixed npm+Cargo
+  let status_file = @path.Path(v030_root).join(@path.Path("status-out.json")).to_string()
+  let (st_out_code, _, st_out_err) = capture(binary, ["--cwd", v030_root, "status", "-o", status_file])
+  if st_out_code != 0 { fail("status -o failed: " + st_out_err) }
+  assert_true(@json.parse(@fs.read_text(status_file)) is { "hasRelease": True, .. })
+  let (ms_code, ms_out, _) = capture(binary, ["--cwd", v030_root, "status", "--output", "markdown", "--marker-scope", "moon-part"])
+  assert_eq(ms_code, 0)
+  assert_true(ms_out.has_prefix("<!-- moonset-bot:changeset-check:moon-part -->\n"))
+  let tpl_snap = invoke(binary, v030_root, ["version", "--snapshot=next", "--snapshot-prerelease-template={tag}.{timestamp}", "--dry-run", "--json"], 0)
+  assert_true(tpl_snap is { "analysis": { "releases": [{ "newVersion": String(tv2), .. }], .. }, .. } && tv2.has_prefix("0.0.0-next."))
+  let pr_body_file = @path.Path(v030_root).join(@path.Path("pr-body.md")).to_string()
+  ignore(invoke(binary, v030_root, ["version", "--no-commit", "--pr-body-out", pr_body_file, "--json"], 0))
+  assert_true(@fs.read_text(pr_body_file).contains("# Releases"))
+  // Simulate interrupted version journal and verify `version --recover`
+  let rec_root = @fs.tmpdir(prefix="moonset-recover-")
+  defer { @fs.remove(rec_root, recursive=true) catch { _ => () } }
+  write(rec_root, "moon.mod", "name = \"acme/rec\"\nversion = \"0.2.0\"\n")
+  write(rec_root, ".changeset/config.json", "{\"schemaVersion\":1}")
+  write(rec_root, ".moonset/version-journal.json", "{\"planFingerprint\":\"rec-1\",\"entries\":[{\"path\":\"moon.mod\",\"existed\":true,\"content\":\"name = \\\"acme/rec\\\"\\nversion = \\\"0.1.0\\\"\\n\"}]}")
+  let rec_res = invoke(binary, rec_root, ["version", "--recover", "--json"], 0)
+  assert_true(rec_res is { "ok": True, "recovered": ["moon.mod"], .. })
+  assert_true(@fs.read_text(@path.Path(rec_root).join(@path.Path("moon.mod")).to_string()).contains("0.1.0"))
+  // Mixed MoonBit + npm + Cargo e2e + stateless tag
+  let mix_root = @fs.tmpdir(prefix="moonset-mixed-e2e-")
+  defer { @fs.remove(mix_root, recursive=true) catch { _ => () } }
+  ignore(git(mix_root, ["init", "-b", "main"]))
+  ignore(git(mix_root, ["config", "user.name", "Moonset Tests"]))
+  ignore(git(mix_root, ["config", "user.email", "moonset@example.invalid"]))
+  write(mix_root, "moon.mod", "name = \"acme/mix\"\nversion = \"0.1.0\"\n")
+  write(mix_root, "js/package.json", "{\"name\":\"@acme/js-mix\",\"version\":\"1.0.0\"}\n")
+  write(mix_root, "rs/Cargo.toml", "[package]\nname = \"acme-rs-mix\"\nversion = \"0.2.0\"\nedition = \"2021\"\n")
+  write(mix_root, ".changeset/config.json", "{\"schemaVersion\":1,\"experimental\":{\"mixedWorkspaces\":{\"mode\":\"unified\",\"workspaces\":[{\"id\":\"moon\",\"ecosystem\":\"moonbit\",\"root\":\".\",\"manager\":\"moon\",\"includeRoot\":true},{\"id\":\"js\",\"ecosystem\":\"npm\",\"root\":\"js\",\"manager\":\"npm\",\"includeRoot\":true},{\"id\":\"rs\",\"ecosystem\":\"cargo\",\"root\":\"rs\",\"manager\":\"cargo\",\"includeRoot\":true}],\"lockfiles\":\"verify-only\"}}}")
+  write(mix_root, ".changeset/mix1.md", "---\n\"moonbit:acme/mix\": minor\n\"npm:@acme/js-mix\": patch\n\"cargo:acme-rs-mix\": minor\n---\nMixed release\n")
+  let mix_status = invoke(binary, mix_root, ["status", "--json"], 0)
+  assert_true(mix_status is { "releases": [_, _, _], .. })
+  // Stateless tag without release-state.json
+  ignore(git(mix_root, ["add", "."]))
+  ignore(git(mix_root, ["commit", "-m", "initial mixed"]))
+  let mix_tags = invoke(binary, mix_root, ["tag", "--dry-run", "--json"], 0)
+  assert_true(mix_tags is { "tags": [_, _, _], .. })
+
+  println("CLI integration (release binary): Git snapshots, merge-base, rename, empty changesets, release-notes, release PR body, artifact DAG, v0.3.0+audit recover/mixed/stateless-tag/status-o/template, lifecycle, exits, JSON and no-write checks passed")
 }

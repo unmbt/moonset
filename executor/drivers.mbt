@@ -12,6 +12,7 @@ priv struct DriverPublishConfig {
   access : @model.Access
   otp : String?
   archive_path : String?
+  ignore_scripts : Bool
 }
 
 ///|
@@ -146,7 +147,13 @@ async fn[H : ExecutionHost] driver_registry_lookup(
         args.push("--registry")
         args.push(reg)
       }
-      let program = package_manager_program(host, manager)
+      // Yarn v2+ lacks `yarn view`; query registry reliably via `npm view`.
+      let lookup_manager = if manager == @model.PackageManager::Yarn {
+        @model.PackageManager::Npm
+      } else {
+        manager
+      }
+      let program = package_manager_program(host, lookup_manager)
       let output = host.run(program, args, Some(cwd))
       if output.exit_code == 0 {
         let trimmed = output.stdout.trim().to_owned()
@@ -298,6 +305,61 @@ async fn[H : ExecutionHost] driver_pack(
       }
       let program = package_manager_program(host, manager)
       let is_pnpm = manager == @model.PackageManager::Pnpm
+      let is_yarn = manager == @model.PackageManager::Yarn
+      if is_yarn {
+        let clean = unit.native_name
+          .replace_all(old="@", new="")
+          .replace_all(old="/", new="-")
+        let tgz_name = clean + "-" + version + ".tgz"
+        if dry_run {
+          let tmp = host.tmpdir("moonset-yarn-pack-")
+          defer @async.protect_from_cancel(() => {
+            host.rmdir(tmp) catch {
+              _ => ()
+            }
+          })
+          let out_file = absolute_path(tmp, tgz_name)
+          let output = host.run(
+            program,
+            ["pack", "--filename", out_file],
+            Some(pack_cwd),
+          )
+          if output.exit_code != 0 {
+            raise @model.Io(
+              program +
+              " pack failed for " +
+              unit.id +
+              ": " +
+              process_failure_detail(output),
+            )
+          }
+          return (tgz_name, "", true)
+        }
+        let archive_path = absolute_path(pack_cwd, tgz_name)
+        let output = host.run(
+          program,
+          ["pack", "--filename", archive_path],
+          Some(pack_cwd),
+        )
+        if output.exit_code != 0 {
+          raise @model.Io(
+            program +
+            " pack failed for " +
+            unit.id +
+            ": " +
+            process_failure_detail(output),
+          )
+        }
+        if !host.exists(archive_path) {
+          raise invalid_error(
+            "artifact-missing",
+            program + " pack tarball not found on disk: " + archive_path,
+            path=archive_path,
+          )
+        }
+        let hash = bytes_fingerprint(host.read_binary(archive_path))
+        return (archive_path, hash, true)
+      }
       if is_pnpm && dry_run {
         // pnpm pack does not support --dry-run; pack to a temp destination and remove it.
         let tmp = host.tmpdir("moonset-pnpm-pack-")
@@ -394,6 +456,9 @@ fn build_npm_publish_args(
     args.push("--tag")
     args.push(dist_tag)
   }
+  if cfg.ignore_scripts {
+    args.push("--ignore-scripts")
+  }
   if cfg.otp is Some(otp) && otp.trim() != "" {
     args.push("--otp")
     args.push(otp.trim().to_owned())
@@ -468,8 +533,14 @@ async fn[H : ExecutionHost] driver_preflight(
       }
     }
     @model.Npm => {
-      let program = package_manager_program(host, manager)
-      let args = build_npm_publish_args(manager, cfg, true)
+      // Yarn v1/v2 publish flags diverge widely; npm publish supports tarballs, --access, --tag, --otp, --ignore-scripts uniformly.
+      let publish_manager = if manager == @model.PackageManager::Yarn {
+        @model.PackageManager::Npm
+      } else {
+        manager
+      }
+      let program = package_manager_program(host, publish_manager)
+      let args = build_npm_publish_args(publish_manager, cfg, true)
       let effective_cwd = npm_effective_cwd(host, unit, cwd, cfg.archive_path)
       let output = host.run(program, args, Some(effective_cwd))
       if output.exit_code == 0 {
@@ -519,8 +590,13 @@ async fn[H : ExecutionHost] driver_publish(
       }
     }
     @model.Npm => {
-      let program = package_manager_program(host, manager)
-      let args = build_npm_publish_args(manager, cfg, false)
+      let publish_manager = if manager == @model.PackageManager::Yarn {
+        @model.PackageManager::Npm
+      } else {
+        manager
+      }
+      let program = package_manager_program(host, publish_manager)
+      let args = build_npm_publish_args(publish_manager, cfg, false)
       let effective_cwd = npm_effective_cwd(host, unit, cwd, cfg.archive_path)
       let output = host.run(program, args, Some(effective_cwd))
       if output.exit_code == 0 {

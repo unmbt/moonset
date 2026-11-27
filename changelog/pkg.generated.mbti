@@ -17,6 +17,8 @@ pub fn generator_kind(String) -> GeneratorKind
 
 pub fn render(GeneratorKind, ChangelogContext) -> String
 
+pub fn render_with_line_hooks(ChangelogContext, ChangelogLineHooks) -> String
+
 pub fn splice_changelog_entry(String, String) -> String
 
 // Errors
@@ -35,6 +37,11 @@ pub(all) struct ChangelogContext {
   server_url : String
 }
 pub fn ChangelogContext::to_json(Self) -> @json.Json
+
+pub(all) struct ChangelogLineHooks {
+  get_release_line : (ReleaseLineContext, ChangelogContext) -> String
+  get_dependency_release_line : (Array[String], ChangelogContext) -> String
+}
 
 pub(all) enum GeneratorKind {
   Builtin

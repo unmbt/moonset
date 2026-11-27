@@ -117,6 +117,7 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
   host : H,
   root : String,
   plan : @model.VersionPlan,
+  keep_journal~ : Bool = false,
 ) -> @model.ApplyResult {
   if plan.edits.is_empty() {
     return { applied: false, rolled_back: false, journal: None, state: None, }
@@ -220,11 +221,15 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
     }
   }
   // Remove journal outside the edit try-block so a cleanup error never rolls back applied edits.
-  let remaining_journal = try {
-    host.remove(journal_path)
-    None
-  } catch {
-    _ => Some(".moonset/version-journal.json")
+  let remaining_journal = if keep_journal {
+    Some(".moonset/version-journal.json")
+  } else {
+    try {
+      host.remove(journal_path)
+      None
+    } catch {
+      _ => Some(".moonset/version-journal.json")
+    }
   }
   {
     applied: true,
@@ -235,11 +240,28 @@ pub async fn[H : ExecutionHost] apply_version_plan_with(
 }
 
 ///|
+pub async fn[H : ExecutionHost] finalize_version_journal_with(
+  host : H,
+  root : String,
+) -> Unit {
+  let journal_path = absolute_path(root, ".moonset/version-journal.json")
+  host.remove(journal_path) catch {
+    _ => ()
+  }
+}
+
+///|
+pub async fn finalize_version_journal(root : String) -> Unit {
+  finalize_version_journal_with(native_host(), root)
+}
+
+///|
 pub async fn apply_version_plan(
   root : String,
   plan : @model.VersionPlan,
+  keep_journal~ : Bool = false,
 ) -> @model.ApplyResult {
-  apply_version_plan_with(native_host(), root, plan)
+  apply_version_plan_with(native_host(), root, plan, keep_journal~)
 }
 
 ///|

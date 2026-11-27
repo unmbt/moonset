@@ -91,6 +91,56 @@ async fn resolve_recovery_root(options : Options) -> String {
 }
 
 ///|
+fn host_allowed_plugin_programs() -> Array[String]? {
+  match @env.get_env_var("MOONSET_ALLOWED_PLUGIN_PROGRAMS") {
+    Some(raw) => {
+      let allowed : Array[String] = []
+      for item in raw.split(",") {
+        let trimmed = item.trim().to_owned()
+        if trimmed != "" && !allowed.contains(trimmed) {
+          allowed.push(trimmed)
+        }
+      }
+      Some(allowed)
+    }
+    None => None
+  }
+}
+
+///|
+fn build_version_commit_message(
+  config : @model.CommitConfig,
+  releases : Array[@model.Release],
+) -> String {
+  let base = if config.version_message == "chore: release" &&
+    !releases.is_empty() {
+    let lines = ["chore: version packages", ""]
+    for rel in releases {
+      lines.push("- " + rel.unit_id + "@" + rel.new_version)
+    }
+    lines.join("\n")
+  } else {
+    config.version_message
+  }
+  if config.skip_ci && !base.to_lower().contains("[skip ci]") {
+    base + "\n\n[skip ci]"
+  } else {
+    base
+  }
+}
+
+///|
+async fn write_pr_body_file(cwd : String, path : String, body : String) -> Unit {
+  let resolved = resolve_cli_path(cwd, path)
+  @fs.mkdir(
+    @path.Path(resolved).dirname().to_string(),
+    recursive=true,
+    allow_existing=true,
+  )
+  @fs.write_text(resolved, body)
+}
+
+///|
 async fn version_command(options : Options) -> Int32 {
   let color = terminal_color_enabled(options.no_color, false)
   if options.markdown && !options.dry_run {
@@ -123,23 +173,36 @@ async fn version_command(options : Options) -> Int32 {
     config_path?=options.config,
     since?=options.since,
   )
-  // Apply CLI `--ignore` flags onto the loaded snapshot config without mutating disk config.
-  let loaded : @workspace.LoadedWorkspace = if options.ignore_packages.is_empty() {
-    raw_loaded
+  // Apply CLI `--ignore` and `--snapshot-prerelease-template` overrides without mutating disk config.
+  let base_config = raw_loaded.snapshot.config
+  let merged_ignore = if options.ignore_packages.is_empty() {
+    base_config.ignore
   } else {
-    let merged_ignore = raw_loaded.snapshot.config.ignore.copy()
+    let copy = base_config.ignore.copy()
     for pat in options.ignore_packages {
-      if !merged_ignore.contains(pat) {
-        merged_ignore.push(pat)
+      if !copy.contains(pat) {
+        copy.push(pat)
       }
     }
-    {
-      ..raw_loaded,
-      snapshot: {
-        ..raw_loaded.snapshot,
-        config: { ..raw_loaded.snapshot.config, ignore: merged_ignore, },
-      },
+    copy
+  }
+  let merged_snapshot = match options.snapshot_prerelease_template {
+    Some(template) => {
+      @engine.validate_snapshot_template(template)
+      { ..base_config.snapshot, prerelease_template: template, }
     }
+    None => base_config.snapshot
+  }
+  let loaded : @workspace.LoadedWorkspace = {
+    ..raw_loaded,
+    snapshot: {
+      ..raw_loaded.snapshot,
+      config: {
+        ..base_config,
+        ignore: merged_ignore,
+        snapshot: merged_snapshot,
+      },
+    },
   }
   let generators = @changelog.GeneratorRegistry::new()
   let generator_name = loaded.snapshot.config.changelog.generator
@@ -196,31 +259,110 @@ async fn version_command(options : Options) -> Int32 {
       commit_metadata~,
       server_url~,
     )
+    let host_allowlist = host_allowed_plugin_programs()
+    let spec : @adapters.PluginSpec = {
+      program: plugin.program,
+      args: plugin.args,
+      cwd: Some(loaded.snapshot.root),
+      timeout_ms: plugin.timeout_ms,
+      max_output_bytes: plugin.max_output_bytes,
+      allowed_programs: plugin.allowed_programs,
+      environment,
+    }
     for context in contexts {
-      let response = @adapters.run_jsonl(
-        {
-          program: plugin.program,
-          args: plugin.args,
-          cwd: Some(loaded.snapshot.root),
-          timeout_ms: plugin.timeout_ms,
-          max_output_bytes: plugin.max_output_bytes,
-          allowed_programs: plugin.allowed_programs,
-          environment,
-        },
-        {
-          schema_version: 1,
-          protocol_method: "generate",
-          payload: {
+      let key = context.unit_id + "\u0000" + context.version
+      if plugin.protocol == "line" {
+        let rendered_lines : Map[String, String] = Map([])
+        for line in context.lines {
+          let line_payload : Json = {
             "schemaVersion": 1,
             "generator": generator_name,
-            "context": context.to_json(),
+            "unitId": context.unit_id,
+            "version": context.version,
+            "changesetId": line.changeset_id,
+            "summary": line.summary,
+            "bump": line.bump.text(),
+            "oldVersion": line.old_version,
+            "newVersion": line.new_version,
+            "commit": match line.commit {
+              Some(c) => Json::string(c)
+              None => Json::null()
+            },
+            "pullRequest": match line.pull_request {
+              Some(p) => Json::string(p)
+              None => Json::null()
+            },
+            "authors": line.authors.map(Json::string),
+            "repository": match context.repository {
+              Some(r) => Json::string(r)
+              None => Json::null()
+            },
+            "serverUrl": context.server_url,
+          }
+          let resp = @adapters.run_jsonl(
+            spec,
+            {
+              schema_version: 1,
+              protocol_method: "getReleaseLine",
+              payload: line_payload,
+            },
+            host_allowed_programs?=host_allowlist,
+          )
+          let (line_text, _) = @adapters.generator_result(resp)
+          rendered_lines[line.changeset_id + "\u0000" + line.bump.text()] = line_text
+        }
+        let mut rendered_dep = ""
+        if !context.dependency_lines.is_empty() {
+          let dep_resp = @adapters.run_jsonl(
+            spec,
+            {
+              schema_version: 1,
+              protocol_method: "getDependencyReleaseLine",
+              payload: {
+                "schemaVersion": 1,
+                "generator": generator_name,
+                "unitId": context.unit_id,
+                "version": context.version,
+                "dependencyLines": context.dependency_lines.map(Json::string),
+                "repository": match context.repository {
+                  Some(r) => Json::string(r)
+                  None => Json::null()
+                },
+                "serverUrl": context.server_url,
+              },
+            },
+            host_allowed_programs?=host_allowlist,
+          )
+          let (dep_text, _) = @adapters.generator_result(dep_resp)
+          rendered_dep = dep_text
+        }
+        texts[key] = @changelog.render_with_line_hooks(context, {
+          get_release_line: (line, _ctx) => {
+            rendered_lines
+            .get(line.changeset_id + "\u0000" + line.bump.text())
+            .unwrap_or("")
           },
-        },
-      )
-      let (text, details) = @adapters.generator_result(response)
-      let key = context.unit_id + "\u0000" + context.version
-      texts[key] = text
-      metadata[key] = details
+          get_dependency_release_line: (_deps, _ctx) => rendered_dep,
+        })
+        metadata[key] = { "protocol": "line" }
+      } else {
+        let response = @adapters.run_jsonl(
+          spec,
+          {
+            schema_version: 1,
+            protocol_method: "generate",
+            payload: {
+              "schemaVersion": 1,
+              "generator": generator_name,
+              "context": context.to_json(),
+            },
+          },
+          host_allowed_programs?=host_allowlist,
+        )
+        let (text, details) = @adapters.generator_result(response)
+        texts[key] = text
+        metadata[key] = details
+      }
     }
     generators.register(generator_name, context => {
       texts.get(context.unit_id + "\u0000" + context.version).unwrap_or("")
@@ -266,6 +408,14 @@ async fn version_command(options : Options) -> Int32 {
       "generators": generator_fingerprints,
     })
     { ..raw_plan, changelogs, fingerprint, }
+  }
+  if options.pr_body_out is Some(pr_out) {
+    let body = @engine.render_release_pr_body(
+      loaded.snapshot,
+      enriched,
+      pre?=loaded.pre,
+    )
+    write_pr_body_file(options.cwd, pr_out, body)
   }
   if options.dry_run {
     if options.json {
@@ -318,9 +468,11 @@ async fn version_command(options : Options) -> Int32 {
     }
     return 0
   }
-  // Apply edits, format, and commit BEFORE printing JSON so stdout never contains
-  // a false success JSON followed by an error JSON envelope on failure!
-  ignore(@executor.apply_version_plan(loaded.snapshot.root, plan))
+  // Apply edits with journal retained across formatting so a formatter failure
+  // can still be rolled back via `moonset version --recover`.
+  ignore(
+    @executor.apply_version_plan(loaded.snapshot.root, plan, keep_journal=true),
+  )
   let written_paths = plan.edits
     .filter(e => e.after_text != "")
     .map(e => e.path)
@@ -332,6 +484,7 @@ async fn version_command(options : Options) -> Int32 {
       no_format=options.no_format,
     ),
   )
+  @executor.finalize_version_journal(loaded.snapshot.root)
   let mut committed = false
   if !options.no_commit &&
     !is_snapshot &&
@@ -339,10 +492,14 @@ async fn version_command(options : Options) -> Int32 {
       loaded.snapshot.config.commit.mode == @model.CommitMode::Version ||
       loaded.snapshot.config.commit.mode == @model.CommitMode::Both
     ) {
+    let commit_msg = build_version_commit_message(
+      loaded.snapshot.config.commit,
+      plan.analysis.releases,
+    )
     committed = @executor.commit_changes(
       loaded.snapshot.root,
       plan.edits.map(x => x.path),
-      loaded.snapshot.config.commit.version_message,
+      commit_msg,
     )
   }
   if options.json {

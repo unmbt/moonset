@@ -545,20 +545,27 @@ pub fn splice_changelog_entry(existing : String, entry : String) -> String {
 }
 
 ///|
-fn render_document(context : ChangelogContext, kind : String) -> String {
+/// Line-level rendering hooks compatible with Changesets-style changelog formatters.
+pub(all) struct ChangelogLineHooks {
+  get_release_line : (ReleaseLineContext, ChangelogContext) -> String
+  get_dependency_release_line : (Array[String], ChangelogContext) -> String
+}
+
+///|
+/// Render a complete changelog document using custom line-level hooks.
+pub fn render_with_line_hooks(
+  context : ChangelogContext,
+  hooks : ChangelogLineHooks,
+) -> String {
   let major_changes : Array[String] = []
   let minor_changes : Array[String] = []
   let patch_changes : Array[String] = []
   for line in context.lines {
     let section_name = section(line.bump)
-    let formatted = line_text(
-      line,
-      kind,
-      context.repository,
-      context.links,
-      context.thanks,
-      context.server_url,
-    )
+    let formatted = (hooks.get_release_line)(line, context).trim().to_owned()
+    if formatted == "" {
+      continue
+    }
     if section_name == "Major Changes" {
       major_changes.push(formatted)
     } else if section_name == "Minor Changes" {
@@ -568,20 +575,15 @@ fn render_document(context : ChangelogContext, kind : String) -> String {
     }
   }
   if !context.dependency_lines.is_empty() {
-    if context.dependency_lines.length() == 1 &&
-      context.dependency_lines[0].has_prefix("Updated dependencies") {
-      patch_changes.push("- " + context.dependency_lines[0])
-    } else {
-      patch_changes.push(
-        "- Updated dependencies:\n  - " +
-        context.dependency_lines.join("\n  - "),
+    let dep_rendered = (hooks.get_dependency_release_line)(
+        context.dependency_lines,
+        context,
       )
+      .trim()
+      .to_owned()
+    if dep_rendered != "" {
+      patch_changes.push(dep_rendered)
     }
-  }
-  if major_changes.is_empty() &&
-    minor_changes.is_empty() &&
-    patch_changes.is_empty() {
-    patch_changes.push("- No changes in this release.")
   }
   let sections : Array[String] = []
   if !major_changes.is_empty() {
@@ -593,13 +595,49 @@ fn render_document(context : ChangelogContext, kind : String) -> String {
   if !patch_changes.is_empty() {
     sections.push("### Patch Changes\n\n" + patch_changes.join("\n"))
   }
-  let entry = "## " +
+  let entry = if sections.is_empty() {
+    "## " + context.version + " - " + context.date
+  } else {
+    "## " +
     context.version +
     " - " +
     context.date +
     "\n\n" +
     sections.join("\n\n")
+  }
   splice_changelog_entry(context.existing, entry)
+}
+
+///|
+fn default_dependency_release_line(
+  dep_lines : Array[String],
+  _context : ChangelogContext,
+) -> String {
+  if dep_lines.is_empty() {
+    return ""
+  }
+  if dep_lines.length() == 1 && dep_lines[0].has_prefix("Updated dependencies") {
+    "- " + dep_lines[0]
+  } else {
+    "- Updated dependencies:\n  - " + dep_lines.join("\n  - ")
+  }
+}
+
+///|
+fn render_document(context : ChangelogContext, kind : String) -> String {
+  render_with_line_hooks(context, {
+    get_release_line: (line, ctx) => {
+      line_text(
+        line,
+        kind,
+        ctx.repository,
+        ctx.links,
+        ctx.thanks,
+        ctx.server_url,
+      )
+    },
+    get_dependency_release_line: default_dependency_release_line,
+  })
 }
 
 ///|

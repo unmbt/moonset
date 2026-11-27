@@ -93,7 +93,7 @@ test "render_document preserves # pkg title, preamble, empty-release fallback, a
       "# @acme/ui\n\nAll notable changes to this package.\n\n## 0.1.1 - 2026-11-20",
     ),
   )
-  assert_true(rendered.contains("- No changes in this release."))
+  assert_false(rendered.contains("- No changes in this release."))
   assert_false(rendered.has_suffix("\n\n"))
 }
 

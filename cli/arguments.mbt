@@ -56,6 +56,13 @@ priv struct Options {
   artifacts_dir : String?
   verify_artifacts : Bool
   commit_metadata_path : String?
+  snapshot_prerelease_template : String?
+  pr_body_out : String?
+  output_file : String?
+  marker_scope : String?
+  access : String?
+  ignore_scripts : Bool
+  from_manifests : Bool
 }
 
 ///|
@@ -149,7 +156,13 @@ fn is_always_value_flag(arg : String) -> Bool {
     | "--target"
     | "--manifest-out"
     | "--artifacts-dir"
-    | "--commit-metadata" => true
+    | "--commit-metadata"
+    | "--snapshot-prerelease-template"
+    | "--pr-body-out"
+    | "--output-file"
+    | "-o"
+    | "--marker-scope"
+    | "--access" => true
     _ => false
   }
 }
@@ -361,6 +374,13 @@ fn default_options(
     artifacts_dir: None,
     verify_artifacts: false,
     commit_metadata_path: None,
+    snapshot_prerelease_template: None,
+    pr_body_out: None,
+    output_file: None,
+    marker_scope: None,
+    access: None,
+    ignore_scripts: false,
+    from_manifests: false,
   }
 }
 
@@ -445,6 +465,16 @@ fn build_cli() -> @cac.CAC {
     option_type=String,
   )
   .option("--head-ref <ref>", "PR head branch ref", option_type=String)
+  .option(
+    "-o, --output-file <path>",
+    "Write JSON status output to file",
+    option_type=String,
+  )
+  .option(
+    "--marker-scope <scope>",
+    "Optional scope suffix for PR bot comment marker",
+    option_type=String,
+  )
   |> ignore
 
   cli
@@ -487,6 +517,16 @@ fn build_cli() -> @cac.CAC {
     option_type=String,
   )
   .option("--snapshot [tag]", "Create snapshot prerelease versions")
+  .option(
+    "--snapshot-prerelease-template <template>",
+    "Override snapshot.prereleaseTemplate for this run",
+    option_type=String,
+  )
+  .option(
+    "--pr-body-out <path>",
+    "Write rendered Release PR Markdown body to file",
+    option_type=String,
+  )
   .option("--recover", "Recover from interrupted version-journal.json")
   |> ignore
 
@@ -497,6 +537,9 @@ fn build_cli() -> @cac.CAC {
   .option("--push", "Push newly created tags to remote")
   .option("--force", "Overwrite existing tags (requires --yes)")
   .option("--yes", "Confirm non-interactive tag operations")
+  .option(
+    "--from-manifests", "Derive tags directly from workspace manifests when release-state.json is absent",
+  )
   .option(
     "--tag-format <template>",
     "Custom tag format template",
@@ -545,6 +588,12 @@ fn build_cli() -> @cac.CAC {
     "One-time password for registry auth",
     option_type=String,
   )
+  .option(
+    "--access <level>",
+    "Package registry access override (public|restricted)",
+    option_type=String,
+  )
+  .option("--ignore-scripts", "Pass --ignore-scripts to npm/pnpm/yarn publish")
   .option("--reconcile", "Reconcile durable publish state with registry")
   .option("--artifacts-dir <dir>", "Artifacts directory", option_type=String)
   .option("--retry <count>", "Maximum retry attempts", option_type=String)
@@ -810,6 +859,13 @@ fn arguments(raw_args : Array[String]) -> Options raise @model.MoonsetError {
         artifacts_dir: ctx.string("artifactsDir"),
         verify_artifacts: ctx.bool("verify"),
         commit_metadata_path: ctx.string("commitMetadata"),
+        snapshot_prerelease_template: ctx.string("snapshotPrereleaseTemplate"),
+        pr_body_out: ctx.string("prBodyOut"),
+        output_file: ctx.string("outputFile"),
+        marker_scope: ctx.string("markerScope"),
+        access: ctx.string("access"),
+        ignore_scripts: ctx.bool("ignoreScripts"),
+        from_manifests: ctx.bool("fromManifests"),
       }
     }
   }

@@ -24,9 +24,13 @@ pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.Release
 
 pub fn coexistence_json(@model.WorkspaceSnapshot, changeset_directory? : String) -> @json.Json?
 
+pub fn comment_marker(scope? : String) -> String
+
 pub fn comment_state(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> String
 
-pub fn error_markdown(@model.Diagnostic, max_length? : Int32) -> String
+pub fn detect_auto_formatter(Array[String]) -> String
+
+pub fn error_markdown(@model.Diagnostic, max_length? : Int32, marker_scope? : String) -> String
 
 pub fn format_changeset(@model.ChangesetDraft, allow_empty? : Bool) -> String raise @model.MoonsetError
 
@@ -134,6 +138,8 @@ pub(all) struct CommentOptions {
   head_ref : String?
   changeset_directory : String
   max_length : Int32
+  server_url : String
+  marker_scope : String?
 }
 pub fn CommentOptions::default() -> Self
 

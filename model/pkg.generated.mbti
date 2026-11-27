@@ -136,6 +136,7 @@ pub(all) struct CommitConfig {
   mode : CommitMode
   add_message : String
   version_message : String
+  skip_ci : Bool
 }
 pub fn CommitConfig::default() -> Self
 
@@ -160,6 +161,7 @@ pub(all) struct Config {
   update_dependents : UpdateDependents
   only_update_peer_dependents_when_out_of_range : Bool
   bump_versions_with_workspace_protocol_only : Bool
+  also_skip_dependents_of_skipped : Bool
   changed_patterns : Array[String]
   formatter : String
   format_mode : String
@@ -268,6 +270,7 @@ pub(all) struct GeneratorPluginConfig {
   environment : Array[String]
   timeout_ms : Int32
   max_output_bytes : Int32
+  protocol : String
 }
 
 pub(all) struct GithubConfig {
@@ -338,6 +341,7 @@ pub(all) enum PackageManager {
   Moon
   Npm
   Pnpm
+  Yarn
   Cargo
 }
 pub fn PackageManager::equal(Self, Self) -> Bool

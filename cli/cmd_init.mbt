@@ -8,6 +8,40 @@ priv struct InitAnswers {
 }
 
 ///|
+async fn detect_default_branch(cwd : String) -> String {
+  let sym = @process.Cmd(
+    "git",
+    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    cwd~,
+  ).run(stdin=Empty, stdout=Collect, stderr=Collect) catch {
+    _ => return "main"
+  }
+  if sym.exit_code == 0 {
+    let raw = @utf8.decode_lossy(sym.stdout_binary()).trim().to_owned()
+    if raw.has_prefix("origin/") && raw.length() > 7 {
+      return raw[7:].to_owned()
+    }
+    if raw != "" {
+      return raw
+    }
+  }
+  let cur = @process.Cmd("git", ["branch", "--show-current"], cwd~).run(
+    stdin=Empty,
+    stdout=Collect,
+    stderr=Collect,
+  ) catch {
+    _ => return "main"
+  }
+  if cur.exit_code == 0 {
+    let branch = @utf8.decode_lossy(cur.stdout_binary()).trim().to_owned()
+    if branch != "" {
+      return branch
+    }
+  }
+  "main"
+}
+
+///|
 fn build_init_config_json(answers : InitAnswers) -> String {
   let base_branch = if answers.base_branch.trim() == "" {
     "main"
@@ -157,12 +191,13 @@ async fn interactive_init(
     None => return 130
   }
   let access = if access_idx == 0 { "restricted" } else { "public" }
+  let detected_branch = detect_default_branch(options.cwd)
   let base_branch = match
     tui_ask_text(
       render_state,
       "Which base branch should be used?",
-      placeholder="main",
-      default_value="main",
+      placeholder=detected_branch,
+      default_value=detected_branch,
       with_guide=false,
       color~,
     ) {
@@ -244,7 +279,11 @@ async fn init_command(options : Options) -> Int32 {
   if !options.json && !options.yes && !options.quiet && !is_non_interactive() {
     return interactive_init(options, config_path, dir)
   }
-  let config = @executor.default_config_template()
+  let detected_branch = detect_default_branch(options.cwd)
+  let config = @executor.default_config_template().replace_all(
+    old="\"baseBranch\": \"main\"",
+    new="\"baseBranch\": " + Json::string(detected_branch).stringify(),
+  )
   let created : Array[String] = []
   let skipped : Array[String] = []
   let conflicts : Array[String] = []

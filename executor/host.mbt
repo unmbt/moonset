@@ -161,18 +161,35 @@ pub impl ExecutionHost for NativeHost with fn rmdir(_self, path) {
 }
 
 ///|
-pub impl ExecutionHost for NativeHost with fn run(_self, program, args, cwd) {
-  let output = @process.Cmd(program, args, cwd?=cwd.map(dir => dir[:])).run(
-    stdin=Empty,
-    stdout=Collect,
-    stderr=Collect,
-  ) catch {
-    error => raise @model.Io(error.to_string())
+fn default_command_timeout_ms() -> Int32 {
+  match @env.get_env_var("MOONSET_COMMAND_TIMEOUT_MS") {
+    Some(raw) => {
+      let trimmed = raw.trim().to_owned()
+      let mut acc : Int32 = 0
+      let mut valid = trimmed != ""
+      for ch in trimmed.to_array() {
+        if ch < '0' || ch > '9' {
+          valid = false
+          break
+        }
+        acc = acc * 10 + (ch.to_int() - '0'.to_int())
+      }
+      if valid && acc > 0 {
+        acc
+      } else {
+        300000
+      }
+    }
+    None => 300000
   }
-  {
-    exit_code: output.exit_code,
-    stdout: @utf8.decode_lossy(output.stdout_binary()),
-    stderr: @utf8.decode_lossy(output.stderr_binary()),
+}
+
+///|
+pub impl ExecutionHost for NativeHost with fn run(_self, program, args, cwd) {
+  let cmd = @process.Cmd(program, args, cwd?=cwd.map(dir => dir[:]))
+  let timeout_ms = default_command_timeout_ms()
+  @async.with_timeout(timeout_ms, () => run_cmd_capture(cmd, None)) catch {
+    error => raise @model.Io(error.to_string())
   }
 }
 
@@ -386,7 +403,8 @@ fn[H : ExecutionHost] package_manager_program(
   if is_windows_host(host) &&
     (
       manager == @model.PackageManager::Npm ||
-      manager == @model.PackageManager::Pnpm
+      manager == @model.PackageManager::Pnpm ||
+      manager == @model.PackageManager::Yarn
     ) {
     name + ".cmd"
   } else {

@@ -158,7 +158,7 @@ add_to_path() {
       return 1
     fi
   fi
-  if ! grep -Fq '$HOME/.unmbt' "$rc_file"; then
+  if ! grep -Fq "\$HOME/.unmbt" "$rc_file"; then
     echo "" >> "$rc_file"
     echo "$export_path_line" >> "$rc_file"
     echo "✅ Automatically added ~/.unmbt to $rc_file"

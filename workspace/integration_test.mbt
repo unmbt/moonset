@@ -35,15 +35,18 @@ async test "discover explicit workspace members and same-directory JS without wr
   write(
     root, "b/moon.mod", "name = \"acme/b\"\nversion = \"0.1.0\"\nimport { \"acme/a@0.1.0\" }",
   )
-  write(root, ".changeset/config.json", "{}")
+  write(
+    root, ".changeset/config.json", "{\"privatePackages\":{\"version\":true}}",
+  )
   write(root, ".changeset/change.md", "---\nacme/a: patch\n---\nSummary")
   let loaded = @workspace.discover(root)
   assert_eq(loaded.snapshot.units.length(), 2)
-  assert_eq(loaded.snapshot.units[0].visibility, @model.Restricted)
-  assert_true(loaded.snapshot.units[0].publish)
+  assert_eq(loaded.snapshot.units[0].visibility, @model.Private)
+  assert_false(loaded.snapshot.units[0].publish)
   assert_eq(loaded.snapshot.unmanaged, ["a/package.json"])
   let plan = @engine.build_plan(loaded.snapshot, loaded.changesets)
   assert_eq(plan.releases.length(), 1)
+  assert_false(plan.releases[0].publish)
   assert_eq(
     @fs.read_text(@path.Path(root).join(@path.Path("a/moon.mod")).to_string()),
     a,

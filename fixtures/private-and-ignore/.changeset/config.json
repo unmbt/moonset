@@ -1,4 +1,9 @@
 {
   "schemaVersion": 1,
-  "ignore": ["acme/ignored"]
+  "ignore": ["acme/ignored"],
+  "privatePackages": {
+    "version": true,
+    "tag": false,
+    "publish": false
+  }
 }

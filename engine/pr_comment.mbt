@@ -2,11 +2,58 @@
 let bot_marker : String = "<!-- moonset-bot:changeset-check -->"
 
 ///|
+fn sanitize_marker_scope(scope : String) -> String {
+  let out : Array[Char] = []
+  for ch in scope.trim().to_array() {
+    let ok = (ch >= 'a' && ch <= 'z') ||
+      (ch >= 'A' && ch <= 'Z') ||
+      (ch >= '0' && ch <= '9') ||
+      ch == '-' ||
+      ch == '_' ||
+      ch == '.' ||
+      ch == '/'
+    if ok {
+      out.push(ch)
+    }
+  }
+  String::from_array(out)
+}
+
+///|
+pub fn comment_marker(scope? : String) -> String {
+  match scope {
+    Some(raw) => {
+      let clean = sanitize_marker_scope(raw)
+      if clean == "" || clean == "." {
+        bot_marker
+      } else {
+        "<!-- moonset-bot:changeset-check:" + clean + " -->"
+      }
+    }
+    None => bot_marker
+  }
+}
+
+///|
+fn clean_comment_server_url(server_url : String) -> String {
+  let trimmed = server_url.trim().to_owned()
+  if trimmed == "" {
+    "https://github.com"
+  } else if trimmed.has_suffix("/") {
+    trimmed[:trimmed.length() - 1].to_owned()
+  } else {
+    trimmed
+  }
+}
+
+///|
 pub(all) struct CommentOptions {
   head_repo : String?
   head_ref : String?
   changeset_directory : String
   max_length : Int32
+  server_url : String
+  marker_scope : String?
 }
 
 ///|
@@ -16,6 +63,8 @@ pub fn CommentOptions::default() -> CommentOptions {
     head_ref: None,
     changeset_directory: ".changeset",
     max_length: 60000,
+    server_url: "https://github.com",
+    marker_scope: None,
   }
 }
 
@@ -290,7 +339,7 @@ pub fn status_markdown(
   let dir = options.changeset_directory
   let changed = relevant_changes(snapshot, changeset_directory=dir)
   let state = comment_state(snapshot, plan, changeset_directory=dir)
-  let lines : Array[String] = [bot_marker]
+  let lines : Array[String] = [comment_marker(scope?=options.marker_scope)]
   match state {
     "release" => {
       lines.push("### ✅ Changeset detected — release preview")
@@ -397,7 +446,8 @@ pub fn status_markdown(
         template_lines.push("")
         let template = template_lines.join("\n")
         let rel_dir = if dir == "" || dir == "." { ".changeset" } else { dir }
-        let url = "https://github.com/" +
+        let url = clean_comment_server_url(options.server_url) +
+          "/" +
           repo +
           "/new/" +
           encode_ref_path(branch) +
@@ -436,6 +486,7 @@ pub fn status_markdown(
 pub fn error_markdown(
   diagnostic : @model.Diagnostic,
   max_length~ : Int32 = 60000,
+  marker_scope? : String,
 ) -> String {
   let loc = if diagnostic.path == "" {
     "(workspace)"
@@ -447,7 +498,7 @@ pub fn error_markdown(
     diagnostic.column.to_string()
   }
   let lines = [
-    bot_marker,
+    comment_marker(scope?=marker_scope),
     "### ❌ Failed to inspect changesets",
     "",
     "- **Code**: `" + sanitize_code_text(diagnostic.code) + "`",

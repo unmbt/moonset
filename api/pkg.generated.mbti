@@ -14,9 +14,9 @@ import {
 // Values
 pub let api_version : String
 
-pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResult
+pub async fn apply_version_plan(String, @model.VersionPlan, keep_journal? : Bool) -> @model.ApplyResult
 
-pub async fn[H : @executor.ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
+pub async fn[H : @executor.ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan, keep_journal? : Bool) -> @model.ApplyResult
 
 pub fn build_execution_dag(@model.WorkspaceSnapshot, @model.ReleasePlan, release_versions_override? : Map[String, String]) -> @engine.ExecutionDag raise @model.MoonsetError
 
@@ -30,6 +30,8 @@ pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.Release
 
 pub fn coexistence_json(@model.WorkspaceSnapshot, changeset_directory? : String) -> @json.Json?
 
+pub fn comment_marker(scope? : String) -> String
+
 pub async fn commit_changes(String, Array[String], String) -> Bool
 
 pub async fn[H : @executor.ExecutionHost] commit_changes_with(H, String, Array[String], String) -> Bool
@@ -38,13 +40,21 @@ pub async fn create_tags(@workspace.LoadedWorkspace, @executor.TagOptions) -> @e
 
 pub async fn[H : @executor.ExecutionHost] create_tags_with(H, @workspace.LoadedWorkspace, @executor.TagOptions) -> @executor.TagResult
 
+pub fn detect_auto_formatter(Array[String]) -> String
+
+pub async fn[H : @executor.ExecutionHost] detect_workspace_formatter_with(H, String, @model.Config, no_format? : Bool) -> String
+
 pub async fn discover(String, config_path? : String, since? : String, include_commits? : Bool) -> @workspace.LoadedWorkspace
 
-pub fn error_markdown(@model.Diagnostic, max_length? : Int32) -> String
+pub fn error_markdown(@model.Diagnostic, max_length? : Int32, marker_scope? : String) -> String
 
 pub fn extract_release_notes(String, String) -> String?
 
 pub fn extract_unit_release_notes(String, String, String) -> String?
+
+pub async fn finalize_version_journal(String) -> Unit
+
+pub async fn[H : @executor.ExecutionHost] finalize_version_journal_with(H, String) -> Unit
 
 pub fn format_changeset(@model.ChangesetDraft, allow_empty? : Bool) -> String raise @model.MoonsetError
 
@@ -106,6 +116,8 @@ pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre?
 
 pub fn render_snapshot_version(String, String, @model.SnapshotConfig, generated_at? : String, timestamp_ms? : String, git_head? : String) -> String raise @model.MoonsetError
 
+pub fn render_with_line_hooks(@changelog.ChangelogContext, @changelog.ChangelogLineHooks) -> String
+
 pub fn require_capability(@adapters.CapabilityReport, @adapters.Capability) -> Unit raise @model.MoonsetError
 
 pub fn resolve_formatter(@model.Config, no_format? : Bool) -> String
@@ -116,7 +128,7 @@ pub fn rewrite_ecosystem_range(@model.Ecosystem, String, String, exact_pin? : Bo
 
 pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
 
-pub async fn[H : @executor.ExecutionHost] run_doctor_with(H, String, config_path? : String, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
+pub async fn[H : @executor.ExecutionHost] run_doctor_with(H, String, config_path? : String, loaded? : @workspace.LoadedWorkspace, check_registry? : Bool, fix? : Bool) -> @executor.DoctorReport
 
 pub async fn run_jsonl(@adapters.PluginSpec, @adapters.JsonlRequest, host_allowed_programs? : Array[String]) -> @adapters.JsonlResponse raise @model.MoonsetError
 
@@ -180,6 +192,8 @@ pub using @model {type ChangelogConfig}
 pub using @changelog {type ChangelogContext}
 
 pub using @model {type ChangelogEntry}
+
+pub using @changelog {type ChangelogLineHooks}
 
 pub using @model {type Changeset}
 

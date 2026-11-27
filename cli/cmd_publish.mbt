@@ -10,6 +10,7 @@ async fn tag_command(options : Options) -> Int32 {
       force=options.tag_force,
       yes=options.yes,
       format=options.tag_format,
+      from_manifests=options.from_manifests,
     ),
   )
   if options.json {
@@ -102,9 +103,66 @@ async fn pack_command(options : Options) -> Int32 {
 }
 
 ///|
+async fn write_publish_output_env(
+  cwd : String,
+  loaded : @workspace.LoadedWorkspace,
+  result : @model.PublishResult,
+) -> Unit {
+  let out_path = match @env.get_env_var("CHANGESETS_OUTPUT") {
+    Some(v) if v.trim() != "" => Some(v.trim().to_owned())
+    _ =>
+      match @env.get_env_var("MOONSET_OUTPUT") {
+        Some(v) if v.trim() != "" => Some(v.trim().to_owned())
+        _ => None
+      }
+  }
+  guard out_path is Some(raw_path) else { return }
+  let native_names : Map[String, String] = Map([])
+  for unit in loaded.snapshot.units {
+    native_names[unit.id] = unit.native_name
+  }
+  let published_packages : Array[Json] = []
+  for st in result.statuses {
+    if st.state == @model.Published {
+      let row : Json = {
+        "name": native_names.get(st.unit_id).unwrap_or(st.unit_id),
+        "unitId": st.unit_id,
+        "version": st.version,
+        "registry": st.registry,
+      }
+      published_packages.push(row)
+    }
+  }
+  let payload : Json = {
+    "schemaVersion": 1,
+    "published": !published_packages.is_empty(),
+    "complete": result.complete,
+    "publishedPackages": published_packages,
+  }
+  let resolved = resolve_cli_path(cwd, raw_path)
+  @fs.mkdir(
+    @path.Path(resolved).dirname().to_string(),
+    recursive=true,
+    allow_existing=true,
+  )
+  @fs.write_text(resolved, payload.stringify(indent=2) + "\n")
+}
+
+///|
 /// Publish versioned units with durable per-target status.
 async fn publish_command(options : Options) -> Int32 {
   let color = terminal_color_enabled(options.no_color, false)
+  let cli_access : @model.Access? = match options.access {
+    Some(raw) =>
+      match @model.Access::parse(raw.trim().to_owned()) {
+        Some(a) => Some(a)
+        None => {
+          usage_error("--access expects public or restricted")
+          None
+        }
+      }
+    None => None
+  }
   let loaded = @workspace.discover(options.cwd, config_path?=options.config)
   let result = @executor.publish_release(
     loaded,
@@ -114,6 +172,8 @@ async fn publish_command(options : Options) -> Int32 {
       registry?=options.registry,
       tag?=options.dist_tag,
       otp?=options.otp,
+      access?=cli_access,
+      ignore_scripts=options.ignore_scripts,
       yes=options.yes,
       allow_uncommitted=options.allow_uncommitted,
       retry=options.retry,
@@ -122,6 +182,9 @@ async fn publish_command(options : Options) -> Int32 {
       artifacts_dir?=options.artifacts_dir,
     ),
   )
+  if !options.dry_run {
+    write_publish_output_env(options.cwd, loaded, result)
+  }
   if options.json {
     print_json(result.to_json(), options.pretty)
   } else if !options.quiet {

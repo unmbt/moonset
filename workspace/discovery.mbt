@@ -305,9 +305,10 @@ pub async fn discover(
           end: dep.span.end,
           target_condition: None,
         })
+      let is_private = document.is_private()
       let publish = match overrides.get(id) {
         Some({ publish: Some(flag), .. }) => flag
-        _ => true
+        _ => !is_private
       }
       let version_span : @model.TextSpan? = match
         document.string_field("version") {
@@ -325,8 +326,8 @@ pub async fn discover(
         version_field: "version",
         version: document.version(),
         version_span,
-        visibility: if document.is_private() {
-          @model.Restricted
+        visibility: if is_private {
+          @model.Private
         } else {
           @model.Public
         },
@@ -372,7 +373,8 @@ pub async fn discover(
       } else {
         match unit.ecosystem {
           @model.MoonBit => publisher == "moon"
-          @model.Npm => publisher == "npm" || publisher == "pnpm"
+          @model.Npm =>
+            publisher == "npm" || publisher == "pnpm" || publisher == "yarn"
           @model.Cargo => publisher == "cargo"
         }
       }
@@ -447,11 +449,22 @@ pub async fn discover(
     Some(source) => Some(@engine.parse_pre_state(source, path=pre_file))
     None => None
   }
-  let raw_pre_dir = slash(config.pre.directory).trim().to_owned()
+  let raw_pre_dir_cfg = if config.pre.directory == ".changeset/pre" &&
+    changeset_directory != ".changeset" &&
+    changeset_directory != "" {
+    slash(join(changeset_directory, "pre"))
+  } else {
+    config.pre.directory
+  }
+  let raw_pre_dir = slash(raw_pre_dir_cfg).trim().to_owned()
   let pre_dir = if raw_pre_dir.has_suffix("/") {
     raw_pre_dir[:raw_pre_dir.length() - 1].to_owned()
   } else {
     raw_pre_dir
+  }
+  let effective_config : @model.Config = {
+    ..config,
+    pre: { file: pre_file, directory: pre_dir, },
   }
   let changeset_dirs : Array[(String, Bool)] = [(changeset_directory, false)]
   if pre is Some(_) &&
@@ -574,7 +587,7 @@ pub async fn discover(
       units,
       ownership,
       unmanaged,
-      config,
+      config: effective_config,
       sources: reader.sources,
       changed_files,
       warnings,

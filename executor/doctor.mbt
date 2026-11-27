@@ -96,6 +96,7 @@ pub async fn[H : ExecutionHost] run_doctor_with(
   host : H,
   cwd : String,
   config_path? : String,
+  loaded? : @workspace.LoadedWorkspace,
   check_registry~ : Bool = false,
   fix~ : Bool = false,
 ) -> DoctorReport {
@@ -147,10 +148,12 @@ pub async fn[H : ExecutionHost] run_doctor_with(
       Some("Install MoonBit toolchain and verify `moon version`")
     },
   })
-  let discovered : Result[@workspace.LoadedWorkspace, Error] = Ok(
-    @workspace.discover(cwd, config_path?, include_commits=false),
-  ) catch {
-    error => Err(error)
+  let discovered : Result[@workspace.LoadedWorkspace, Error] = match loaded {
+    Some(preloaded) => Ok(preloaded)
+    None =>
+      Ok(@workspace.discover(cwd, config_path?, include_commits=false)) catch {
+        error => Err(error)
+      }
   }
   match discovered {
     Ok(loaded) => {
@@ -206,7 +209,11 @@ pub async fn[H : ExecutionHost] run_doctor_with(
           Some("Commit or stash changes before running publish or tag")
         },
       })
-      let resolved_fmt = @engine.resolve_formatter(loaded.snapshot.config)
+      let resolved_fmt = detect_workspace_formatter_with(
+        host,
+        loaded.snapshot.root,
+        loaded.snapshot.config,
+      )
       if resolved_fmt != "builtin" && resolved_fmt != "none" {
         let fmt_program = resolve_formatter_program(
           host,

@@ -10,7 +10,11 @@ pub fn fixture_adapter_registry() -> Bool raise @model.MoonsetError
 
 pub fn fixture_api_version() -> String
 
+pub fn fixture_plan_and_markdown() -> (String, String) raise @model.MoonsetError
+
 pub fn fixture_render() -> String
+
+pub fn fixture_root_and_core_versions() -> (String, String)
 
 // Errors
 

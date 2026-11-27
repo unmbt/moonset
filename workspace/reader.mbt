@@ -6,7 +6,7 @@ priv struct Reader {
   use_git_tree : Bool
   tree : Map[String, String]
   sources : Map[String, String]
-  visited_dirs : Map[String, Bool]
+  dir_cache : Map[String, Array[String]]
 }
 
 ///|
@@ -292,13 +292,12 @@ async fn Reader::dirs(self : Reader, directory : String) -> Array[String] {
     if @fs.exists(absolute) {
       let canonical_dir = @fs.realpath(absolute)
       ignore(relative(self.root, canonical_dir))
-      if self.visited_dirs.contains(canonical_dir) {
-        return result
+      if self.dir_cache.get(canonical_dir) is Some(cached) {
+        return cached.copy()
       }
-      self.visited_dirs[canonical_dir] = true
       for entry in @fs.readdir(absolute) {
         let child = join(absolute, entry)
-        // Guard against broken symlinks and symlink loops
+        // Guard against broken symlinks and symlink loops by not following symlinks
         let is_dir = (@fs.kind(child, follow_symlink=false) catch {
             _ => @fs.Regular
           }) ==
@@ -307,6 +306,9 @@ async fn Reader::dirs(self : Reader, directory : String) -> Array[String] {
           result.push(entry)
         }
       }
+      result.sort()
+      self.dir_cache[canonical_dir] = result.copy()
+      return result
     }
   }
   result.sort()
@@ -359,7 +361,7 @@ async fn make_reader(
         use_git_tree: false,
         tree,
         sources,
-        visited_dirs: Map([]),
+        dir_cache: Map([]),
       },
       changed,
       warnings,
@@ -444,7 +446,7 @@ async fn make_reader(
       use_git_tree: true,
       tree,
       sources,
-      visited_dirs: Map([]),
+      dir_cache: Map([]),
     },
     changed,
     warnings,

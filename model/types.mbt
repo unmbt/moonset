@@ -55,6 +55,7 @@ pub(all) enum PackageManager {
   Moon
   Npm
   Pnpm
+  Yarn
   Cargo
 }
 
@@ -70,6 +71,7 @@ pub fn PackageManager::text(self : PackageManager) -> String {
     Moon => "moon"
     Npm => "npm"
     Pnpm => "pnpm"
+    Yarn => "yarn"
     Cargo => "cargo"
   }
 }
@@ -80,6 +82,7 @@ pub fn PackageManager::parse(value : String) -> PackageManager? {
     "moon" => Some(Moon)
     "npm" => Some(Npm)
     "pnpm" => Some(Pnpm)
+    "yarn" => Some(Yarn)
     "cargo" => Some(Cargo)
     _ => None
   }
@@ -515,6 +518,7 @@ pub(all) struct CommitConfig {
   mode : CommitMode
   add_message : String
   version_message : String
+  skip_ci : Bool
 }
 
 ///|
@@ -523,6 +527,7 @@ pub fn CommitConfig::default() -> CommitConfig {
     mode: Never,
     add_message: "chore: add changeset",
     version_message: "chore: release",
+    skip_ci: false,
   }
 }
 
@@ -644,6 +649,7 @@ pub(all) struct Config {
   update_dependents : UpdateDependents
   only_update_peer_dependents_when_out_of_range : Bool
   bump_versions_with_workspace_protocol_only : Bool
+  also_skip_dependents_of_skipped : Bool
   changed_patterns : Array[String]
   formatter : String
   format_mode : String
@@ -670,6 +676,7 @@ pub(all) struct GeneratorPluginConfig {
   environment : Array[String]
   timeout_ms : Int32
   max_output_bytes : Int32
+  protocol : String
 }
 
 ///|
@@ -682,6 +689,7 @@ pub fn Config::default() -> Config {
     update_dependents: OutOfRange,
     only_update_peer_dependents_when_out_of_range: false,
     bump_versions_with_workspace_protocol_only: false,
+    also_skip_dependents_of_skipped: false,
     changed_patterns: ["**"],
     formatter: "builtin",
     format_mode: "auto",

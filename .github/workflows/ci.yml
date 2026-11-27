@@ -51,6 +51,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Lint shell scripts with shellcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck -x setup/install.sh scripts/install.sh
       - name: Install and run actionlint
         shell: bash
         env:

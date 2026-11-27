@@ -207,7 +207,7 @@ pub fn build_plan(
         is_workspace_protocol(dep.requirement) &&
         mgr == Some(@model.Npm) {
         invalid(
-          "workspace: protocol is not supported by manager 'npm' (use 'pnpm'): " +
+          "workspace: protocol is not supported by manager 'npm' (use 'pnpm' or 'yarn'): " +
           dep.requirement,
           path=dep.path,
           code="unsupported-capability",
@@ -242,6 +242,48 @@ pub fn build_plan(
   let resolved_fixed = resolve_unit_groups(config.fixed, snapshot.units)
   let resolved_linked = resolve_unit_groups(config.linked, snapshot.units)
   let resolved_ignore = resolve_ignored_units(config, snapshot.units)
+  let warnings = snapshot.warnings.copy()
+  if config.also_skip_dependents_of_skipped {
+    let skipped_set : Map[String, Bool] = Map([])
+    for id in resolved_ignore {
+      skipped_set[id] = true
+    }
+    for id in ids {
+      if should_skip_versioning(units[id], config, resolved_ignore) {
+        skipped_set[id] = true
+      }
+    }
+    let mut expanded = true
+    while expanded {
+      expanded = false
+      for id in ids {
+        if skipped_set.contains(id) {
+          continue
+        }
+        let unit = units[id]
+        let depends_on_skipped = unit.dependencies.any(dep => {
+            dep.kind != @model.Development && skipped_set.contains(dep.producer)
+          }) ||
+          bridges.any(b => b.consumer == id && skipped_set.contains(b.producer))
+        if depends_on_skipped {
+          skipped_set[id] = true
+          if !resolved_ignore.contains(id) {
+            resolved_ignore.push(id)
+          }
+          warnings.push(
+            @model.diagnostic(
+              "skipped-dependent",
+              "Skipping dependent unit because it depends on a skipped package: " +
+              id,
+              path=unit.manifest,
+            ),
+          )
+          expanded = true
+        }
+      }
+    }
+    resolved_ignore.sort()
+  }
   let occupied_groups : Map[String, Bool] = Map([])
   for group in resolved_fixed + resolved_linked {
     for id in group {
@@ -299,7 +341,6 @@ pub fn build_plan(
   let direct : Map[String, Array[String]] = Map([])
   let seen_changesets : Map[String, Bool] = Map([])
   let relevant_changesets : Array[@model.Changeset] = []
-  let warnings = snapshot.warnings.copy()
   for cs in ordered {
     if seen_changesets.contains(cs.id) {
       invalid("Duplicate changeset ID: " + cs.id, path=cs.path)

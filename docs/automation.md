@@ -57,14 +57,15 @@
 ### 双 Job 行为
 
 1. **Job 1（`pr-check`）**：
-   - 使用 `actions/checkout` 拉取 `github.event.pull_request.head.sha`（`fetch-depth: 0`、`persist-credentials: false`）。
+   - 使用 `actions/checkout` 拉取 `refs/pull/${{ github.event.pull_request.number }}/head`（`fetch-depth: 0`、`persist-credentials: false`）。
+   - 内置跳过 Release PR 分支（默认匹配 `release-branch-prefix: moonset-release/`，直接输出 `state=none`、`should-comment=false`、`exit-code=0`）。
    - 调用 `setup` 获取可信预编译 `moonset` 二进制（或使用 `binary-path` 指定的受信任本地二进制）。
-   - 执行 `moonset status --since "$BASE_SHA" --output markdown --head-repo "$HEAD_REPO" --head-ref "$HEAD_REF"`（容忍退出码 `1`/`2` 不中断 Job，以便把错误或缺失提示传给 Job 2）。
-   - 同时查询 `moonset status --since "$BASE_SHA" --output json` 归类状态：`release`、`missing`、`empty`、`none`、`error`。
+   - 执行 `moonset status --since "$BASE_SHA" --output markdown --head-repo "$HEAD_REPO" --head-ref "$HEAD_REF"`（多 `coexist` 分区或非根 `working-directory` 自动附加 `--marker-scope`，容忍退出码 `1`/`2` 不中断 Job，以便把错误或缺失提示传给 Job 2）。
+   - 同时查询 `moonset status --since "$BASE_SHA" --output json` 归类状态：`release`、`missing`、`empty`、`none`、`error`，并导出对应 `marker`。
 2. **Job 2（`pr-comment`）**：
    - 不 checkout 仓库。
-   - 在输出评论第一行埋入固定标记：`<!-- moonset-bot:changeset-check -->`。
-   - 调用 `gh api --paginate repos/$REPO/issues/$PR/comments` 搜索**作者 login 匹配 `bot-login`（默认 `github-actions[bot]`）且正文包含 marker** 的已有评论（防止其他用户通过粘贴 marker 劫持更新）。
+   - 在输出评论第一行埋入隐藏标记（默认 `<!-- moonset-bot:changeset-check -->`，多分区时通过 `marker` 输入透传带 scope 的独立 marker）。
+   - 调用 `gh api --paginate repos/$REPO/issues/$PR/comments` 搜索**作者 login 匹配 `bot-login`（默认 `github-actions[bot]`）且正文包含 `marker`** 的已有评论（防止其他用户通过粘贴 marker 劫持更新）。
    - 找到则 `PATCH` 更新该评论；未找到且 `should-comment == "true"` 则 `POST` 新建评论；未找到且 `should-comment == "false"` 则跳过。
    - 若配置了 `label`（如 `moonset/missing-changeset`），在 `state == "missing"` 时添加标签，在其他状态时幂等移除标签。
    - 若设置了 `fail-on-missing: true` 且 `state` 为 `missing` 或 `error`，最后以退出码 `1` 失败，阻断合并。

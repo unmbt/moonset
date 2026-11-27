@@ -248,7 +248,7 @@ pub fn render_snapshot_version(
 }
 
 ///|
-/// Resolve the effective formatter name (`"none"`, `"builtin"`, `"prettier"`, `"oxfmt"`, `"biome"`, `"dprint"`).
+/// Resolve the effective formatter name (`"none"`, `"builtin"`, `"prettier"`, `"oxfmt"`, `"biome"`, `"dprint"`, `"deno"`).
 pub fn resolve_formatter(
   config : @model.Config,
   no_format~ : Bool = false,
@@ -256,11 +256,46 @@ pub fn resolve_formatter(
   if no_format || config.format_mode == "false" {
     return "none"
   }
-  if ["prettier", "oxfmt", "biome", "dprint"].contains(config.format_mode) {
+  if ["prettier", "oxfmt", "biome", "dprint", "deno"].contains(
+      config.format_mode,
+    ) {
     return config.format_mode
   }
-  if ["prettier", "oxfmt", "biome", "dprint"].contains(config.formatter) {
+  if ["prettier", "oxfmt", "biome", "dprint", "deno"].contains(config.formatter) {
     return config.formatter
+  }
+  "builtin"
+}
+
+///|
+/// Detect an external formatter from workspace root filenames when `format: "auto"`.
+pub fn detect_auto_formatter(present_files : Array[String]) -> String {
+  let has = fn(name : String) -> Bool {
+    present_files.any(f => f.to_lower() == name.to_lower())
+  }
+  if has("biome.json") || has("biome.jsonc") {
+    return "biome"
+  }
+  if has("dprint.json") || has(".dprint.json") {
+    return "dprint"
+  }
+  if has(".oxfmtrc.json") || has("oxfmt.json") {
+    return "oxfmt"
+  }
+  if has(".prettierrc") ||
+    has(".prettierrc.json") ||
+    has(".prettierrc.yml") ||
+    has(".prettierrc.yaml") ||
+    has(".prettierrc.js") ||
+    has(".prettierrc.cjs") ||
+    has(".prettierrc.mjs") ||
+    has("prettier.config.js") ||
+    has("prettier.config.cjs") ||
+    has("prettier.config.mjs") {
+    return "prettier"
+  }
+  if has("deno.json") || has("deno.jsonc") {
+    return "deno"
   }
   "builtin"
 }
@@ -286,6 +321,10 @@ pub fn formatter_supports_path(formatter : String, path : String) -> Bool {
       lower.has_suffix(".md") ||
       lower.has_suffix(".json") ||
       lower.has_suffix(".toml")
+    "deno" =>
+      lower.has_suffix(".md") ||
+      lower.has_suffix(".json") ||
+      lower.has_suffix(".jsonc")
     _ => false
   }
 }
@@ -305,6 +344,7 @@ pub fn formatter_command(
     "oxfmt" => Some(("oxfmt", ["--write", "--"] + paths))
     "biome" => Some(("biome", ["format", "--write", "--"] + paths))
     "dprint" => Some(("dprint", ["fmt", "--"] + paths))
+    "deno" => Some(("deno", ["fmt", "--"] + paths))
     _ => None
   }
 }

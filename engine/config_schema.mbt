@@ -28,7 +28,7 @@ let config_schema_text : String =
   #|    },
   #|    "commit": {
   #|      "oneOf": [
-  #|        { "type": "boolean", "const": false },
+  #|        { "type": "boolean" },
   #|        {
   #|          "type": "object",
   #|          "additionalProperties": false,
@@ -36,18 +36,20 @@ let config_schema_text : String =
   #|          "properties": {
   #|            "mode": { "enum": ["never", "add", "version", "both"] },
   #|            "addMessage": { "type": "string" },
-  #|            "versionMessage": { "type": "string" }
+  #|            "versionMessage": { "type": "string" },
+  #|            "skipCI": { "type": "boolean" }
   #|          }
   #|        }
   #|      ]
   #|    },
   #|    "baseBranch": { "type": "string", "minLength": 1 },
   #|    "access": { "enum": ["public", "restricted"] },
-  #|    "formatter": { "enum": ["builtin", "prettier", "oxfmt", "biome", "dprint"] },
+  #|    "formatter": { "enum": ["builtin", "prettier", "oxfmt", "biome", "dprint", "deno"] },
   #|    "updateInternalDependencies": { "enum": ["patch", "minor"] },
   #|    "updateInternalDependents": { "enum": ["out-of-range", "always"] },
   #|    "onlyUpdatePeerDependentsWhenOutOfRange": { "type": "boolean" },
   #|    "bumpVersionsWithWorkspaceProtocolOnly": { "type": "boolean" },
+  #|    "alsoSkipDependentsOfSkipped": { "type": "boolean" },
   #|    "changedFilePatterns": { "type": "array", "items": { "type": "string", "minLength": 1 } },
   #|    "fixed": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
   #|    "linked": { "type": "array", "items": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 } },
@@ -104,7 +106,7 @@ let config_schema_text : String =
   #|        "tokenEnv": { "type": "string", "minLength": 1 }
   #|      }
   #|    },
-  #|    "format": { "oneOf": [{ "type": "boolean", "const": false }, { "enum": ["auto", "prettier", "oxfmt", "biome", "dprint"] }] },
+  #|    "format": { "oneOf": [{ "type": "boolean", "const": false }, { "enum": ["auto", "prettier", "oxfmt", "biome", "dprint", "deno"] }] },
   #|    "github": {
   #|      "type": "object",
   #|      "additionalProperties": false,
@@ -130,7 +132,8 @@ let config_schema_text : String =
   #|              "allowedPrograms": { "type": "array", "items": { "type": "string" } },
   #|              "environment": { "type": "array", "items": { "type": "string" } },
   #|              "timeoutMs": { "type": "integer", "minimum": 1 },
-  #|              "maxOutputBytes": { "type": "integer", "minimum": 1 }
+  #|              "maxOutputBytes": { "type": "integer", "minimum": 1 },
+  #|              "protocol": { "enum": ["document", "line"] }
   #|            }
   #|          }
   #|        }
@@ -213,7 +216,7 @@ let config_schema_text : String =
   #|        "id": { "type": "string", "minLength": 1 },
   #|        "ecosystem": { "enum": ["moonbit", "npm", "cargo"] },
   #|        "root": { "type": "string", "minLength": 1 },
-  #|        "manager": { "enum": ["moon", "npm", "pnpm", "cargo"] },
+  #|        "manager": { "enum": ["moon", "npm", "pnpm", "yarn", "cargo"] },
   #|        "includeRoot": { "type": "boolean" }
   #|      },
   #|      "allOf": [
@@ -223,7 +226,7 @@ let config_schema_text : String =
   #|        },
   #|        {
   #|          "if": { "properties": { "ecosystem": { "const": "npm" } } },
-  #|          "then": { "properties": { "manager": { "enum": ["npm", "pnpm"] } } }
+  #|          "then": { "properties": { "manager": { "enum": ["npm", "pnpm", "yarn"] } } }
   #|        },
   #|        {
   #|          "if": { "properties": { "ecosystem": { "const": "cargo" } } },

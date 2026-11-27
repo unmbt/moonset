@@ -49,6 +49,18 @@ inputs:
     description: Optional space-separated extra flags passed to `moonset publish` (e.g. `--retry 2 --reconcile`)
     required: false
     default: ''
+  commit-mode:
+    description: How release PR commits are created ('git-cli' or 'github-api' for GitHub-signed commits)
+    required: false
+    default: 'git-cli'
+  version-command:
+    description: Optional custom command to run instead of default `moonset version` in version-pr mode
+    required: false
+    default: ''
+  publish-command:
+    description: Optional custom command to run instead of default `moonset publish` in publish mode
+    required: false
+    default: ''
 outputs:
   has-changesets:
     description: Whether pending changesets/releases were found (version-pr mode)
@@ -59,6 +71,9 @@ outputs:
   published:
     description: Whether packages were published (publish mode)
     value: ${{ steps.run.outputs.published }}
+  published-packages:
+    description: JSON array of published packages ([{name, version, unitId, registry}])
+    value: ${{ steps.run.outputs.published-packages }}
   tags:
     description: Space-separated list of created/planned tags
     value: ${{ steps.run.outputs.tags }}
@@ -114,6 +129,9 @@ runs:
         CREATE_GITHUB_RELEASES: ${{ inputs.create-github-releases }}
         VERSION_ARGS: ${{ inputs.version-args }}
         PUBLISH_ARGS: ${{ inputs.publish-args }}
+        COMMIT_MODE: ${{ inputs.commit-mode }}
+        VERSION_COMMAND: ${{ inputs.version-command }}
+        PUBLISH_COMMAND: ${{ inputs.publish-command }}
         REPO: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -282,8 +300,12 @@ runs:
             read -r -a extra_version_args <<< "$VERSION_ARGS"
           fi
 
-          "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --commit-metadata "$tmp_dir/commit-meta.json" --output markdown "${extra_version_args[@]}" > "$tmp_dir/pr-body.md"
-          "$MOONSET_BIN" --cwd "$WORK_DIR" version --no-commit --commit-metadata "$tmp_dir/commit-meta.json" --json "${extra_version_args[@]}" > "$tmp_dir/applied.json"
+          if [ -n "$VERSION_COMMAND" ]; then
+            "$MOONSET_BIN" --cwd "$WORK_DIR" version --dry-run --commit-metadata "$tmp_dir/commit-meta.json" --pr-body-out "$tmp_dir/pr-body.md" --json "${extra_version_args[@]}" > "$tmp_dir/applied.json"
+            (cd "$WORK_DIR" && bash -c "$VERSION_COMMAND")
+          else
+            "$MOONSET_BIN" --cwd "$WORK_DIR" version --no-commit --commit-metadata "$tmp_dir/commit-meta.json" --pr-body-out "$tmp_dir/pr-body.md" --json "${extra_version_args[@]}" > "$tmp_dir/applied.json"
+          fi
           plan_fp="$(jq -r '.fingerprint // empty' "$tmp_dir/applied.json" | tr -d '\r')"
 
           branch="${INPUT_BRANCH:-moonset-release/${BASE_REF}}"
@@ -297,13 +319,61 @@ runs:
             staged_paths+=("$edit_path")
           done < <(jq -r '.edits[]?.path // empty' "$tmp_dir/applied.json")
 
-          if [ "${#staged_paths[@]}" -gt 0 ]; then
+          if [ -n "$VERSION_COMMAND" ]; then
+            git -C "$WORK_DIR" add -A
+          elif [ "${#staged_paths[@]}" -gt 0 ]; then
             git -C "$WORK_DIR" add -A -- "${staged_paths[@]}"
           fi
-          if ! git -C "$WORK_DIR" diff --cached --quiet; then
-            git -C "$WORK_DIR" commit -m "$COMMIT_MSG"
+
+          if git -C "$WORK_DIR" diff --cached --quiet; then
+            echo "No release file changes to commit; skipping push and PR creation."
+            echo "has-changesets=false" >> "$GITHUB_OUTPUT"
+            echo "pull-request-number=" >> "$GITHUB_OUTPUT"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "published-packages=[]" >> "$GITHUB_OUTPUT"
+            echo "tags=" >> "$GITHUB_OUTPUT"
+            echo "releases=" >> "$GITHUB_OUTPUT"
+            emit_audit "release-version-pr" "$plan_fp" "no-diff" ""
+            exit 0
           fi
-          git -C "$WORK_DIR" push -f origin "HEAD:${branch}"
+
+          if [ "$COMMIT_MODE" = "github-api" ]; then
+            base_head_oid="$(git -C "$WORK_DIR" rev-parse HEAD | tr -d '\r')"
+            if gh api "repos/${REPO}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/${REPO}/git/refs/heads/${branch}" -f "sha=${base_head_oid}" -F force=true >/dev/null
+            else
+              gh api -X POST "repos/${REPO}/git/refs" -f "ref=refs/heads/${branch}" -f "sha=${base_head_oid}" >/dev/null
+            fi
+            additions_json="[]"
+            deletions_json="[]"
+            repo_top="$(git -C "$WORK_DIR" rev-parse --show-toplevel | tr -d '\r')"
+            while IFS= read -r status_line; do
+              status_line="$(printf '%s' "$status_line" | tr -d '\r')"
+              [ -n "$status_line" ] || continue
+              st_code="${status_line:0:1}"
+              rel_path="${status_line:2}"
+              if [ "$st_code" = "D" ]; then
+                deletions_json="$(jq -c --arg p "$rel_path" '. + [{path: $p}]' <<< "$deletions_json")"
+              else
+                b64_content="$(base64 < "${repo_top}/${rel_path}" | tr -d '\r\n')"
+                additions_json="$(jq -c --arg p "$rel_path" --arg c "$b64_content" '. + [{path: $p, contents: $c}]' <<< "$additions_json")"
+              fi
+            done < <(git -C "$WORK_DIR" diff --cached --name-status | awk '{print $1 " " $NF}')
+            gql_query='mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }'
+            gql_payload="$(jq -nc \
+              --arg query "$gql_query" \
+              --arg repo "$REPO" \
+              --arg branch "$branch" \
+              --arg oid "$base_head_oid" \
+              --arg msg "$COMMIT_MSG" \
+              --argjson additions "$additions_json" \
+              --argjson deletions "$deletions_json" \
+              '{query: $query, variables: {input: {branch: {repositoryNameWithOwner: $repo, branchName: $branch}, expectedHeadOid: $oid, message: {headline: $msg}, fileChanges: {additions: $additions, deletions: $deletions}}}}')"
+            gh api graphql --input - <<< "$gql_payload" >/dev/null
+          else
+            git -C "$WORK_DIR" commit -m "$COMMIT_MSG"
+            git -C "$WORK_DIR" push -f origin "HEAD:${branch}"
+          fi
 
           existing_pr="$(gh pr list -R "$REPO" --head "$branch" --state open --json number --jq '.[0].number // empty' | tr -d '\r')"
           if [ -n "$existing_pr" ]; then
@@ -317,6 +387,7 @@ runs:
           echo "has-changesets=true" >> "$GITHUB_OUTPUT"
           echo "pull-request-number=$pr_number" >> "$GITHUB_OUTPUT"
           echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "published-packages=[]" >> "$GITHUB_OUTPUT"
           echo "tags=" >> "$GITHUB_OUTPUT"
           echo "releases=" >> "$GITHUB_OUTPUT"
           emit_audit "release-version-pr" "$plan_fp" "pr-ready" ""
@@ -327,6 +398,7 @@ runs:
             echo "has-changesets=false" >> "$GITHUB_OUTPUT"
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
             echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "published-packages=[]" >> "$GITHUB_OUTPUT"
             echo "tags=" >> "$GITHUB_OUTPUT"
             echo "releases=" >> "$GITHUB_OUTPUT"
             emit_audit "release-publish" "" "no-release-state" ""
@@ -359,6 +431,7 @@ runs:
             echo "has-changesets=false" >> "$GITHUB_OUTPUT"
             echo "pull-request-number=" >> "$GITHUB_OUTPUT"
             echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "published-packages=[]" >> "$GITHUB_OUTPUT"
             echo "tags=$tags_summary" >> "$GITHUB_OUTPUT"
             echo "releases=$created_releases" >> "$GITHUB_OUTPUT"
             emit_audit "release-publish" "$plan_fp" "already-tagged" ""
@@ -377,7 +450,18 @@ runs:
             read -r -a extra_publish_args <<< "$PUBLISH_ARGS"
           fi
 
-          "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json "${extra_publish_args[@]}" > "$tmp_dir/publish.json"
+          export CHANGESETS_OUTPUT="$tmp_dir/changesets-output.json"
+          if [ -n "$PUBLISH_COMMAND" ]; then
+            (cd "$WORK_DIR" && bash -c "$PUBLISH_COMMAND")
+          else
+            "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json "${extra_publish_args[@]}" > "$tmp_dir/publish.json"
+          fi
+          published_pkgs_json="[]"
+          if [ -s "$tmp_dir/changesets-output.json" ]; then
+            published_pkgs_json="$(jq -c '.publishedPackages // []' "$tmp_dir/changesets-output.json" 2>/dev/null | tr -d '\r' || echo '[]')"
+          elif [ -s "$tmp_dir/publish.json" ]; then
+            published_pkgs_json="$(jq -c '[.statuses[]? | select(.state == "published") | {name: (.unitId | split(":")[1] // .unitId), unitId: .unitId, version: .version, registry: .registry}]' "$tmp_dir/publish.json" 2>/dev/null | tr -d '\r' || echo '[]')"
+          fi
           ensure_git_identity
           "$MOONSET_BIN" --cwd "$WORK_DIR" tag --push --yes --json > "$tmp_dir/pushed-tags.json"
           pushed_list="$(jq -r '(.pushed // .created // []) | join(" ")' "$tmp_dir/pushed-tags.json" | tr -d '\r')"
@@ -386,6 +470,7 @@ runs:
           echo "has-changesets=false" >> "$GITHUB_OUTPUT"
           echo "pull-request-number=" >> "$GITHUB_OUTPUT"
           echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "published-packages=$published_pkgs_json" >> "$GITHUB_OUTPUT"
           echo "tags=$pushed_list" >> "$GITHUB_OUTPUT"
           echo "releases=$created_releases" >> "$GITHUB_OUTPUT"
           emit_audit "release-publish" "$plan_fp" "published" ""

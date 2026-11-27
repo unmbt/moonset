@@ -76,6 +76,58 @@ async fn write_plan(
 }
 
 ///|
+async fn write_status_file(
+  path : String,
+  text : String,
+  snapshot : @model.WorkspaceSnapshot,
+  changeset_directory : String,
+) -> Unit {
+  let absolute = @path.Path(path).resolve().to_string()
+  let directory = @fs.realpath(@path.Path(absolute).dirname().to_string())
+  let resolved = if @fs.exists(absolute) {
+    @fs.realpath(absolute)
+  } else {
+    @path.Path(directory)
+    .join(@path.Path(@path.Path(absolute).basename().to_owned()))
+    .to_string()
+  }
+  for source in snapshot.sources.keys() {
+    let input = @path.Path(snapshot.root)
+      .join(@path.Path(source))
+      .normalize()
+      .to_string()
+    let canonical = if @fs.exists(input) { @fs.realpath(input) } else { input }
+    if @path.Path(resolved) == @path.Path(canonical) {
+      usage_error("Status output cannot overwrite an input file: " + source)
+    }
+  }
+  let basename = @path.Path(absolute).basename().to_owned()
+  if ["moon.mod", "moon.pkg", "moon.work", "package.json", "Cargo.toml"].contains(
+      basename,
+    ) {
+    usage_error("Status output cannot overwrite a manifest")
+  }
+  let relative = @path.Path(resolved)
+    .relative(base=@path.Path(snapshot.root))
+    .to_string()
+    .replace_all(old="\\", new="/")
+  if relative.split("/").any(x => x == ".git") ||
+    relative.has_prefix(changeset_directory + "/") {
+    usage_error("Status output cannot overwrite release or Git inputs")
+  }
+  let temporary = @path.Path(directory)
+    .join(@path.Path(".moonset-status-\{@env.now()}.tmp"))
+    .to_string()
+  let file = @fs.create(temporary, allow_existing=false)
+  defer (@fs.remove(temporary, allow_missing=true) catch { _ => () })
+  {
+    defer file.close()
+    file.write(@utf8.encode(text + "\n"))
+  }
+  @fs.rename(temporary, absolute, replace=true)
+}
+
+///|
 async fn status_or_plan_command(options : Options) -> Int32 {
   let loaded = @workspace.discover(
     options.cwd,
@@ -123,22 +175,49 @@ async fn status_or_plan_command(options : Options) -> Int32 {
   for warning in plan.warnings {
     stderr(style_warn(warning.code, warning_color) + ": " + warning.message)
   }
+  if options.command == "status" && options.since is Some(_) {
+    let is_shallow = try {
+      let res = @process.Cmd(
+        "git",
+        ["rev-parse", "--is-shallow-repository"],
+        cwd=loaded.snapshot.root,
+      ).run(stdin=Empty, stdout=Collect, stderr=Collect)
+      res.exit_code == 0 &&
+      @utf8.decode_lossy(res.stdout_binary()).trim().to_owned() == "true"
+    } catch {
+      _ => false
+    }
+    if is_shallow {
+      stderr(
+        style_warn("shallow-repository", warning_color) +
+        ": Git clone is shallow; --since diff may be incomplete (run `git fetch --unshallow` or set fetch-depth: 0 in CI)",
+      )
+    }
+  }
   let text = if options.pretty {
     result.stringify(indent=2)
   } else {
     @model.canonical_json(result)
   }
-  if options.command == "publish-plan" &&
+  if options.command == "status" && options.output_file is Some(out_file) {
+    let path = resolve_cli_path(options.cwd, out_file)
+    write_status_file(path, text, loaded.snapshot, loaded.changeset_directory)
+  } else if options.command == "publish-plan" &&
     options.output != "" &&
     options.output != "-" {
     let path = resolve_cli_path(options.cwd, options.output)
     write_plan(path, text, loaded.snapshot, loaded.changeset_directory)
   } else if options.command == "status" && options.markdown {
+    let server_url = @env.get_env_var("GITHUB_SERVER_URL").unwrap_or(
+      "https://github.com",
+    )
     let md = @engine.status_markdown(loaded.snapshot, plan, options={
       ..@engine.CommentOptions::default(),
       head_repo: options.head_repo,
       head_ref: options.head_ref,
       changeset_directory: loaded.changeset_directory,
+      server_url,
+      marker_scope: options.marker_scope,
     })
     @stdio.stdout.write(@utf8.encode(md))
   } else if options.json {

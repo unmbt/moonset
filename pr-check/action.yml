@@ -28,6 +28,14 @@ inputs:
     description: Whether a comment should be created when no managed unit changed ('true' or 'false')
     required: false
     default: 'true'
+  release-branch-prefix:
+    description: Branch prefix treated as a moonset release PR and skipped automatically
+    required: false
+    default: 'moonset-release/'
+  marker-scope:
+    description: Optional scope suffix for PR comment marker (prevents collisions in multi-partition coexist repos)
+    required: false
+    default: ''
   github-token:
     description: GitHub token used to download release assets
     required: false
@@ -36,6 +44,9 @@ outputs:
   comment:
     description: Rendered Markdown comment body
     value: ${{ steps.inspect.outputs.comment }}
+  marker:
+    description: Hidden HTML marker embedded at the top of the comment
+    value: ${{ steps.inspect.outputs.marker }}
   state:
     description: Check state (release, missing, empty, none, or error)
     value: ${{ steps.inspect.outputs.state }}
@@ -71,6 +82,8 @@ runs:
         HEAD_REF: ${{ inputs.head-ref }}
         WORK_DIR: ${{ inputs.working-directory }}
         COMMENT_ON_NO_CHANGES: ${{ inputs.comment-on-no-changes }}
+        RELEASE_BRANCH_PREFIX: ${{ inputs.release-branch-prefix }}
+        MARKER_SCOPE: ${{ inputs.marker-scope }}
         REPO: ${{ github.repository }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -96,12 +109,54 @@ runs:
         tmp_dir="$(mktemp -d)"
         trap 'rm -rf "$tmp_dir"' EXIT
 
+        effective_scope="$MARKER_SCOPE"
+        if [ -z "$effective_scope" ] && [ -n "$WORK_DIR" ] && [ "$WORK_DIR" != "." ] && [ "$WORK_DIR" != "./" ]; then
+          effective_scope="${WORK_DIR#./}"
+          effective_scope="${effective_scope%/}"
+        fi
+        clean_scope="$(printf '%s' "$effective_scope" | tr -cd 'A-Za-z0-9._/-')"
+        if [ -n "$clean_scope" ] && [ "$clean_scope" != "." ]; then
+          comment_marker="<!-- moonset-bot:changeset-check:${clean_scope} -->"
+        else
+          comment_marker="<!-- moonset-bot:changeset-check -->"
+        fi
+
+        if [ -n "$RELEASE_BRANCH_PREFIX" ] && [ -n "$HEAD_REF" ]; then
+          case "$HEAD_REF" in
+            "${RELEASE_BRANCH_PREFIX}"*)
+              end_ms="$(now_ms)"
+              duration=$((end_ms - start_ms))
+              if [ "$duration" -lt 0 ]; then duration=0; fi
+              audit_json="$(jq -nc \
+                --arg repo "$REPO" \
+                --arg runId "$RUN_ID" \
+                --arg runAttempt "$RUN_ATTEMPT" \
+                --arg cmd "pr-check" \
+                --arg res "skipped-release-pr" \
+                --argjson duration "$duration" \
+                '{schemaVersion:1,repository:$repo,runId:$runId,runAttempt:$runAttempt,command:$cmd,planFingerprint:null,result:$res,durationMs:$duration,errorCode:null}' | tr -d '\r')"
+              {
+                echo "state=none"
+                echo "exit-code=0"
+                echo "should-comment=false"
+                echo "marker=$comment_marker"
+                echo "audit-event=$audit_json"
+                echo "comment="
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+        fi
+
         md_args=(--cwd "$WORK_DIR" status --since "$BASE_SHA" --output markdown)
         if [ -n "$HEAD_REPO" ]; then
           md_args+=(--head-repo "$HEAD_REPO")
         fi
         if [ -n "$HEAD_REF" ]; then
           md_args+=(--head-ref "$HEAD_REF")
+        fi
+        if [ -n "$clean_scope" ] && [ "$clean_scope" != "." ]; then
+          md_args+=(--marker-scope "$clean_scope")
         fi
 
         set +e
@@ -166,6 +221,7 @@ runs:
           echo "state=$state"
           echo "exit-code=$exit_code"
           echo "should-comment=$should_comment"
+          echo "marker=$comment_marker"
           echo "audit-event=$audit_json"
           echo "comment<<$delimiter"
           cat "$tmp_dir/comment.md"

@@ -39,7 +39,7 @@ if [ -n "${INPUT_BINARY_PATH:-}" ]; then
   abs_bin="$(cd "$(dirname "$INPUT_BINARY_PATH")" && pwd)/$(basename "$INPUT_BINARY_PATH")"
   bin_dir="$(dirname "$abs_bin")"
   if [ -n "${GITHUB_PATH:-}" ]; then
-    echo "$(to_runner_path "$bin_dir")" >> "$GITHUB_PATH"
+    printf '%s\n' "$(to_runner_path "$bin_dir")" >> "$GITHUB_PATH"
   fi
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "path=$(to_runner_path "$abs_bin")" >> "$GITHUB_OUTPUT"
@@ -134,7 +134,7 @@ cp "$tmp_dir/$asset" "$cache_root/$bin_name"
 chmod +x "$cache_root/$bin_name"
 
 if [ -n "${GITHUB_PATH:-}" ]; then
-  echo "$(to_runner_path "$cache_root")" >> "$GITHUB_PATH"
+  printf '%s\n' "$(to_runner_path "$cache_root")" >> "$GITHUB_PATH"
 fi
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   echo "path=$(to_runner_path "$cache_root/$bin_name")" >> "$GITHUB_OUTPUT"

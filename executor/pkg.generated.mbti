@@ -10,9 +10,9 @@ import {
 }
 
 // Values
-pub async fn apply_version_plan(String, @model.VersionPlan) -> @model.ApplyResult
+pub async fn apply_version_plan(String, @model.VersionPlan, keep_journal? : Bool) -> @model.ApplyResult
 
-pub async fn[H : ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan) -> @model.ApplyResult
+pub async fn[H : ExecutionHost] apply_version_plan_with(H, String, @model.VersionPlan, keep_journal? : Bool) -> @model.ApplyResult
 
 pub async fn commit_changes(String, Array[String], String) -> Bool
 
@@ -28,7 +28,13 @@ pub fn default_config_template() -> String
 
 pub fn default_moonset_gitignore() -> String
 
+pub async fn[H : ExecutionHost] detect_workspace_formatter_with(H, String, @model.Config, no_format? : Bool) -> String
+
 pub async fn[H : ExecutionHost] ensure_init_files_with(H, String, String?) -> Array[String]
+
+pub async fn finalize_version_journal(String) -> Unit
+
+pub async fn[H : ExecutionHost] finalize_version_journal_with(H, String) -> Unit
 
 pub async fn format_files(String, @model.Config, Array[String], no_format? : Bool) -> FormatResult
 
@@ -50,7 +56,7 @@ pub async fn[H : ExecutionHost] recover_version_with(H, String) -> Array[String]
 
 pub async fn run_doctor(String, config_path? : String, check_registry? : Bool, fix? : Bool) -> DoctorReport
 
-pub async fn[H : ExecutionHost] run_doctor_with(H, String, config_path? : String, check_registry? : Bool, fix? : Bool) -> DoctorReport
+pub async fn[H : ExecutionHost] run_doctor_with(H, String, config_path? : String, loaded? : @workspace.LoadedWorkspace, check_registry? : Bool, fix? : Bool) -> DoctorReport
 
 pub async fn stage_lockfiles(String, @workspace.LoadedWorkspace, @model.VersionPlan) -> @model.VersionPlan
 
@@ -137,6 +143,8 @@ pub(all) struct PublishOptions {
   registry : String?
   tag : String?
   otp : String?
+  access : @model.Access?
+  ignore_scripts : Bool
   yes : Bool
   allow_uncommitted : Bool
   retry : Int32
@@ -145,7 +153,7 @@ pub(all) struct PublishOptions {
   artifacts_dir : String?
   api_publishers : ApiPublisherRegistry?
 }
-pub fn PublishOptions::new(dry_run? : Bool, only? : Array[String], registry? : String, tag? : String, otp? : String, yes? : Bool, allow_uncommitted? : Bool, retry? : Int32, no_tag? : Bool, reconcile? : Bool, artifacts_dir? : String, api_publishers? : ApiPublisherRegistry) -> Self
+pub fn PublishOptions::new(dry_run? : Bool, only? : Array[String], registry? : String, tag? : String, otp? : String, access? : @model.Access, ignore_scripts? : Bool, yes? : Bool, allow_uncommitted? : Bool, retry? : Int32, no_tag? : Bool, reconcile? : Bool, artifacts_dir? : String, api_publishers? : ApiPublisherRegistry) -> Self
 
 pub(all) struct TagOptions {
   dry_run : Bool
@@ -154,8 +162,9 @@ pub(all) struct TagOptions {
   yes : Bool
   format : String
   only_units : Array[String]
+  from_manifests : Bool
 }
-pub fn TagOptions::new(dry_run? : Bool, push? : Bool, force? : Bool, yes? : Bool, format? : String, only_units? : Array[String]) -> Self
+pub fn TagOptions::new(dry_run? : Bool, push? : Bool, force? : Bool, yes? : Bool, format? : String, only_units? : Array[String], from_manifests? : Bool) -> Self
 
 pub(all) struct TagResult {
   head : String

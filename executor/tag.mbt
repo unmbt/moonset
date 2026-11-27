@@ -6,6 +6,7 @@ pub(all) struct TagOptions {
   yes : Bool
   format : String
   only_units : Array[String]
+  from_manifests : Bool
 }
 
 ///|
@@ -16,8 +17,9 @@ pub fn TagOptions::new(
   yes~ : Bool = false,
   format~ : String = "",
   only_units~ : Array[String] = [],
+  from_manifests~ : Bool = false,
 ) -> TagOptions {
-  { dry_run, push, force, yes, format, only_units, }
+  { dry_run, push, force, yes, format, only_units, from_manifests, }
 }
 
 ///|
@@ -75,37 +77,81 @@ fn parse_remote_tags(ls_remote_stdout : String) -> Map[String, Bool] {
 }
 
 ///|
+fn build_manifest_tag_intents(
+  loaded : @workspace.LoadedWorkspace,
+) -> Array[@model.TagIntent] raise @model.MoonsetError {
+  let config = loaded.snapshot.config
+  let ignored = @engine.resolve_ignored_units(config, loaded.snapshot.units)
+  let single_unit = loaded.snapshot.units.length() == 1
+  let intents : Array[@model.TagIntent] = []
+  for unit in loaded.snapshot.units {
+    if ignored.contains(unit.id) {
+      continue
+    }
+    if unit.visibility == @model.Private && !config.private_packages.tag {
+      continue
+    }
+    guard unit.version is Some(version) else { continue }
+    let default_name = if single_unit {
+      "v" + version
+    } else {
+      unit.native_name + "@" + version
+    }
+    intents.push({ unit_id: unit.id, version, name: default_name, })
+  }
+  intents
+}
+
+///|
 pub async fn[H : ExecutionHost] create_tags_with(
   host : H,
   loaded : @workspace.LoadedWorkspace,
   options : TagOptions,
 ) -> TagResult {
-  let (release_state, _raw) = load_release_state(host, loaded.snapshot.root)
-  if release_state.is_snapshot {
-    return {
-      head: loaded.snapshot.git_head.unwrap_or(""),
-      tags: [],
-      created: [],
-      skipped: [],
-      pushed: [],
-      dry_run: options.dry_run,
-    }
-  }
+  let state_path = absolute_path(
+    loaded.snapshot.root,
+    ".moonset/release-state.json",
+  )
+  let use_manifests = options.from_manifests || !host.exists(state_path)
   let planned_versions : Map[String, String] = Map([])
-  for rel in release_state.releases {
-    planned_versions[rel.unit_id] = rel.new_version
+  let publish_statuses : Map[String, @model.PublishStatus] = Map([])
+  let all_intents : Array[@model.TagIntent] = if use_manifests {
+    if !options.from_manifests && !host.exists(state_path) {
+      // Stateless fallback: derive tags directly from current workspace manifests
+      build_manifest_tag_intents(loaded)
+    } else {
+      build_manifest_tag_intents(loaded)
+    }
+  } else {
+    let (release_state, _raw) = load_release_state(host, loaded.snapshot.root)
+    if release_state.is_snapshot {
+      return {
+        head: loaded.snapshot.git_head.unwrap_or(""),
+        tags: [],
+        created: [],
+        skipped: [],
+        pushed: [],
+        dry_run: options.dry_run,
+      }
+    }
+    for rel in release_state.releases {
+      planned_versions[rel.unit_id] = rel.new_version
+    }
+    for
+      k, v in load_publish_state(
+        host,
+        loaded.snapshot.root,
+        release_state.plan_fingerprint,
+      ) {
+      publish_statuses[k] = v
+    }
+    release_state.tags
   }
   let intents = if options.only_units.is_empty() {
-    release_state.tags
+    all_intents
   } else {
-    release_state.tags.filter(t => options.only_units.contains(t.unit_id))
+    all_intents.filter(t => options.only_units.contains(t.unit_id))
   }
-  // Check publish-state.json when present: refuse tagging failed/blocked/unknown units unless --force.
-  let publish_statuses = load_publish_state(
-    host,
-    loaded.snapshot.root,
-    release_state.plan_fingerprint,
-  )
   let names : Array[String] = []
   let seen_names : Map[String, Bool] = Map([])
   for intent in intents {

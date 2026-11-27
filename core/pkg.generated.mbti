@@ -1,0 +1,229 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "unmbt/moonset/core"
+
+import {
+  "moonbitlang/core/json",
+  "unmbt/moonset/changelog",
+  "unmbt/moonset/engine",
+  "unmbt/moonset/model",
+}
+
+// Values
+pub let api_version : String
+
+pub fn build_execution_dag(@model.WorkspaceSnapshot, @model.ReleasePlan, release_versions_override? : Map[String, String]) -> @engine.ExecutionDag raise @model.MoonsetError
+
+pub fn build_plan(@model.WorkspaceSnapshot, Array[@model.Changeset], pre? : @model.PreState, generated_at? : String, snapshot_mode? : Bool, snapshot_tag? : String, timestamp_ms? : String) -> @model.ReleasePlan raise @model.MoonsetError
+
+pub fn build_version_plan(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String]) -> @model.VersionPlan raise @model.MoonsetError
+
+pub fn build_version_plan_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, generators? : @changelog.GeneratorRegistry, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)], server_url? : String) -> @model.VersionPlan raise @model.MoonsetError
+
+pub fn changelog_contexts_with_metadata(@model.WorkspaceSnapshot, @model.ReleasePlan, @model.VersionOptions, generated_at? : String, changeset_commits? : Map[String, String], commit_metadata? : Map[String, (String?, String?)], server_url? : String) -> Array[@changelog.ChangelogContext]
+
+pub fn coexistence_json(@model.WorkspaceSnapshot, changeset_directory? : String) -> @json.Json?
+
+pub fn comment_marker(scope? : String) -> String
+
+pub fn detect_auto_formatter(Array[String]) -> String
+
+pub fn error_markdown(@model.Diagnostic, max_length? : Int32, marker_scope? : String) -> String
+
+pub fn extract_release_notes(String, String) -> String?
+
+pub fn extract_unit_release_notes(String, String, String) -> String?
+
+pub fn format_changeset(@model.ChangesetDraft, allow_empty? : Bool) -> String raise @model.MoonsetError
+
+pub fn formatter_command(String, Array[String]) -> (String, Array[String])?
+
+pub fn formatter_supports_path(String, String) -> Bool
+
+pub fn generator_kind(String) -> @changelog.GeneratorKind
+
+pub fn matches_changed_patterns(String, Array[String]) -> Bool
+
+pub fn matches_ecosystem_range(@model.Ecosystem, String, String, producer_current_version? : String) -> Bool raise @model.MoonsetError
+
+pub fn matches_unit_pattern(String, String) -> Bool
+
+pub fn parse_artifact_specs(@model.Config) -> Map[String, Array[@model.ArtifactTargetSpec]]
+
+pub fn parse_changeset(String, id~ : String, path~ : String, mixed? : Bool, in_pre_dir? : Bool) -> @model.Changeset raise @model.MoonsetError
+
+pub fn parse_config(String, path? : String) -> @model.Config raise @model.MoonsetError
+
+pub fn parse_pre_state(String, path? : String) -> @model.PreState raise @model.MoonsetError
+
+pub fn parse_snapshot_config(@model.Config) -> @model.SnapshotConfig
+
+pub fn parse_target_mapping(String?) -> @engine.PublishTargetOverride raise @model.MoonsetError
+
+pub fn release_pr_title(String, pre? : @model.PreState) -> String
+
+pub fn render(@changelog.GeneratorKind, @changelog.ChangelogContext) -> String
+
+pub fn render_builtin_changelog(String, String, String, Array[@model.Changeset], Array[@model.DependencyIntent], String) -> String
+
+pub fn render_release_pr_body(@model.WorkspaceSnapshot, @model.VersionPlan, pre? : @model.PreState, max_chars? : Int32) -> String
+
+pub fn render_snapshot_version(String, String, @model.SnapshotConfig, generated_at? : String, timestamp_ms? : String, git_head? : String) -> String raise @model.MoonsetError
+
+pub fn render_with_line_hooks(@changelog.ChangelogContext, @changelog.ChangelogLineHooks) -> String
+
+pub fn resolve_formatter(@model.Config, no_format? : Bool) -> String
+
+pub fn resolve_target_override(@engine.PublishTargetOverride, String, @model.Ecosystem) -> String?
+
+pub fn rewrite_ecosystem_range(@model.Ecosystem, String, String, exact_pin? : Bool) -> String raise @model.MoonsetError
+
+pub fn status_json(@model.WorkspaceSnapshot, @model.ReleasePlan, changeset_directory? : String) -> @json.Json
+
+pub fn status_markdown(@model.WorkspaceSnapshot, @model.ReleasePlan, options? : @engine.CommentOptions) -> String
+
+pub fn verify_artifact_matrix(Array[@model.ArtifactIntent], Array[@model.PackResult], expected_head? : String, owners_by_package? : Map[String, Array[String]]) -> @engine.ArtifactVerificationReport
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+pub using @model {type Access}
+
+pub using @model {type ApplyResult}
+
+pub using @model {type ArtifactIntent}
+
+pub using @engine {type ArtifactIssue}
+
+pub using @model {type ArtifactTargetSpec}
+
+pub using @engine {type ArtifactVerificationReport}
+
+pub using @model {type Bridge}
+
+pub using @model {type BridgeWaitFor}
+
+pub using @model {type Bump}
+
+pub using @model {type Change}
+
+pub using @model {type ChangelogConfig}
+
+pub using @changelog {type ChangelogContext}
+
+pub using @model {type ChangelogEntry}
+
+pub using @changelog {type ChangelogLineHooks}
+
+pub using @model {type Changeset}
+
+pub using @model {type ChangesetDraft}
+
+pub using @engine {type CommentOptions}
+
+pub using @model {type CommitConfig}
+
+pub using @model {type CommitMode}
+
+pub using @model {type Config}
+
+pub using @model {type DependencyEdge}
+
+pub using @model {type DependencyIntent}
+
+pub using @model {type DependencyKind}
+
+pub using @model {type Diagnostic}
+
+pub using @model {type Ecosystem}
+
+pub using @model {type EcosystemWorkspace}
+
+pub using @engine {type ExecutionDag}
+
+pub using @engine {type ExecutionNode}
+
+pub using @model {type FileEdit}
+
+pub using @changelog {type GeneratorKind}
+
+pub using @model {type GeneratorPluginConfig}
+
+pub using @changelog {type GeneratorRegistry}
+
+pub using @model {type GithubConfig}
+
+pub using @model {type LockfileMode}
+
+pub using @model {type MixedMode}
+
+pub using @model {type MixedWorkspaceSpec}
+
+pub using @model {type MixedWorkspacesConfig}
+
+pub using @model {type MoonsetError}
+
+pub using @model {type Ownership}
+
+pub using @model {type PackResult}
+
+pub using @model {type PackageManager}
+
+pub using @model {type PreConfig}
+
+pub using @model {type PreMode}
+
+pub using @model {type PreState}
+
+pub using @model {type PrivatePackagesConfig}
+
+pub using @model {type PublishConfig}
+
+pub using @model {type PublishResult}
+
+pub using @model {type PublishState}
+
+pub using @model {type PublishStatus}
+
+pub using @model {type PublishTarget}
+
+pub using @engine {type PublishTargetOverride}
+
+pub using @model {type PublisherConfig}
+
+pub using @model {type Release}
+
+pub using @changelog {type ReleaseLineContext}
+
+pub using @model {type ReleasePlan}
+
+pub using @model {type ReleaseState}
+
+pub using @model {type ReleaseUnit}
+
+pub using @model {type SnapshotConfig}
+
+pub using @model {type TagConfig}
+
+pub using @model {type TagIntent}
+
+pub using @model {type TextSpan}
+
+pub type UnitId = String
+
+pub using @model {type UnitOverride}
+
+pub using @model {type UpdateDependents}
+
+pub using @model {type VersionOptions}
+
+pub using @model {type VersionPlan}
+
+pub using @model {type Visibility}
+
+pub using @model {type WorkspaceSnapshot}
+
+pub using @changelog {trait ChangelogGenerator}
+
+// Traits

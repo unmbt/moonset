@@ -31,6 +31,10 @@ inputs:
     description: Fail the job when state is missing or error
     required: false
     default: 'false'
+  marker:
+    description: Hidden HTML comment marker to match when updating an existing bot comment
+    required: false
+    default: '<!-- moonset-bot:changeset-check -->'
 outputs:
   comment-id:
     description: Created or updated comment ID (empty when skipped)
@@ -59,6 +63,7 @@ runs:
         BOT_LOGIN: ${{ inputs.bot-login }}
         LABEL_NAME: ${{ inputs.label }}
         FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        COMMENT_MARKER: ${{ inputs.marker }}
       run: |
         set -euo pipefail
         now_ms() {
@@ -90,7 +95,7 @@ runs:
 
         existing_id="$(
           gh api --paginate "repos/${REPO}/issues/${pr_num}/comments" \
-            | jq -s -r '[.[][] | select(.user.login == env.BOT_LOGIN and ((.body // "") | contains("<!-- moonset-bot:changeset-check -->")))][0].id // empty' \
+            | jq -s -r '[.[][] | select(.user.login == env.BOT_LOGIN and ((.body // "") | contains(env.COMMENT_MARKER)))][0].id // empty' \
             | tr -d '\r'
         )"
 

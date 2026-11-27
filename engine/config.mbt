@@ -164,6 +164,10 @@ fn plugin_specs(value : Json) -> Map[String, @model.GeneratorPluginConfig] {
               Number(value, ..) => value.to_int()
               _ => 1048576
             }
+            let protocol = match property(item, "protocol") {
+              String(p) if p == "line" || p == "document" => p
+              _ => "document"
+            }
             result[name] = {
               program,
               args: argv,
@@ -171,6 +175,7 @@ fn plugin_specs(value : Json) -> Map[String, @model.GeneratorPluginConfig] {
               environment: env,
               timeout_ms,
               max_output_bytes,
+              protocol,
             }
           }
           _ => ()
@@ -429,7 +434,9 @@ pub fn parse_config(
     String(s) => s
     _ => defaults.formatter
   }
-  if !["builtin", "prettier", "oxfmt", "biome", "dprint"].contains(formatter) {
+  if !["builtin", "prettier", "oxfmt", "biome", "dprint", "deno"].contains(
+      formatter,
+    ) {
     invalid(
       "Unsupported formatter: " + formatter,
       path~,
@@ -441,7 +448,7 @@ pub fn parse_config(
     String(s) => s
     _ => defaults.format_mode
   }
-  if !["false", "auto", "prettier", "oxfmt", "biome", "dprint"].contains(
+  if !["false", "auto", "prettier", "oxfmt", "biome", "dprint", "deno"].contains(
       format_mode,
     ) {
     invalid(
@@ -502,6 +509,7 @@ pub fn parse_config(
   }
   let commit_raw = property(raw, "commit")
   let commit_mode = match commit_raw {
+    True => @model.Both
     False => @model.Never
     { "mode": String(m), .. } =>
       @model.CommitMode::parse(m).unwrap_or(defaults.commit.mode)
@@ -515,6 +523,7 @@ pub fn parse_config(
     String(msg) if msg.trim() != "" => msg
     _ => defaults.commit.version_message
   }
+  let commit_skip_ci = property(commit_raw, "skipCI") == Json::boolean(true)
   let publisher = property(raw, "publisher")
   let publisher_kind = match property(publisher, "kind") {
     String(kind) => kind
@@ -617,6 +626,8 @@ pub fn parse_config(
       raw, "bumpVersionsWithWorkspaceProtocolOnly",
     ) ==
     Json::boolean(true)
+  let also_skip_dependents = property(raw, "alsoSkipDependentsOfSkipped") ==
+    Json::boolean(true)
   {
     fixed,
     linked,
@@ -630,6 +641,7 @@ pub fn parse_config(
     update_dependents,
     only_update_peer_dependents_when_out_of_range: only_peer_out_of_range,
     bump_versions_with_workspace_protocol_only: workspace_protocol_only,
+    also_skip_dependents_of_skipped: also_skip_dependents,
     changed_patterns,
     formatter,
     format_mode,
@@ -644,6 +656,7 @@ pub fn parse_config(
       mode: commit_mode,
       add_message: commit_add_message,
       version_message: commit_version_message,
+      skip_ci: commit_skip_ci,
     },
     private_packages: {
       version: private_version,

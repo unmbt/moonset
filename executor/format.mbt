@@ -27,7 +27,51 @@ async fn[H : ExecutionHost] resolve_formatter_program(
 }
 
 ///|
-/// Execute the configured external formatter (prettier/oxfmt/biome/dprint)
+async fn[H : ExecutionHost] is_formatter_available(
+  host : H,
+  root : String,
+  formatter : String,
+) -> Bool {
+  let program = resolve_formatter_program(host, root, formatter)
+  let probe = host.run(program, ["--version"], Some(root)) catch {
+    _ =>
+      if is_windows_host(host) && !program.to_lower().has_suffix(".cmd") {
+        host.run(program + ".cmd", ["--version"], Some(root)) catch {
+          _ => { exit_code: 1, stdout: "", stderr: "", }
+        }
+      } else {
+        { exit_code: 1, stdout: "", stderr: "", }
+      }
+  }
+  probe.exit_code == 0
+}
+
+///|
+/// Resolve effective formatter with real workspace auto-detection when `format == "auto"`.
+pub async fn[H : ExecutionHost] detect_workspace_formatter_with(
+  host : H,
+  root : String,
+  config : @model.Config,
+  no_format~ : Bool = false,
+) -> String {
+  let explicit = @engine.resolve_formatter(config, no_format~)
+  if explicit != "builtin" || config.format_mode != "auto" {
+    return explicit
+  }
+  let entries = host.readdir(root) catch { _ => [] }
+  let detected = @engine.detect_auto_formatter(entries)
+  if detected == "builtin" {
+    return "builtin"
+  }
+  if is_formatter_available(host, root, detected) {
+    detected
+  } else {
+    "builtin"
+  }
+}
+
+///|
+/// Execute the configured external formatter (prettier/oxfmt/biome/dprint/deno)
 /// over supported written files using parameterized argv (never a shell).
 pub async fn[H : ExecutionHost] format_files_with(
   host : H,
@@ -36,7 +80,12 @@ pub async fn[H : ExecutionHost] format_files_with(
   paths : Array[String],
   no_format~ : Bool = false,
 ) -> FormatResult {
-  let formatter = @engine.resolve_formatter(config, no_format~)
+  let formatter = detect_workspace_formatter_with(
+    host,
+    root,
+    config,
+    no_format~,
+  )
   if formatter == "none" || formatter == "builtin" {
     return { formatter, formatted: [], skipped: true, }
   }

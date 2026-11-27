@@ -406,12 +406,13 @@ fn TomlParser::parse_value(self : TomlParser) -> TomlVal? {
 
 ///|
 fn parse_toml(source : String) -> TomlDoc {
-  let clean = if source.has_prefix("\uFEFF") {
-    source[1:].to_owned()
-  } else {
-    source
+  let parser = TomlParser::new(source)
+  if parser.bytes.length() >= 3 &&
+    parser.bytes[0] == b'\xEF' &&
+    parser.bytes[1] == b'\xBB' &&
+    parser.bytes[2] == b'\xBF' {
+    parser.pos = 3
   }
-  let parser = TomlParser::new(clean)
   let root : Map[String, TomlVal] = Map([])
   let mut current = root
   while !parser.eof() {
