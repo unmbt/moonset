@@ -241,6 +241,69 @@ async fn[H : ExecutionHost] query_unit_registry(
 }
 
 ///|
+/// Wait briefly for newly published same-batch MoonBit upstreams to become
+/// visible on mooncakes and refresh the local registry index via `moon update`
+/// so isolated `moon publish --dry-run` / `moon publish` checks can resolve them.
+async fn[H : ExecutionHost] sync_moonbit_upstream_registry(
+  host : H,
+  loaded : @workspace.LoadedWorkspace,
+  ctx : PublishPlanContext,
+  unit : @model.ReleaseUnit,
+  cwd : String,
+  unsynced_moonbit : Map[String, (@model.ReleaseUnit, String, String)],
+) -> Bool {
+  if unit.ecosystem != @model.MoonBit ||
+    ctx.use_command_publisher ||
+    ctx.unit_api_map.contains(unit.id) {
+    return false
+  }
+  let upstreams = upstream_producers(
+    unit.id,
+    ctx.units_map,
+    loaded.snapshot.config.bridges(),
+    ctx.specs_by_unit,
+  )
+  let pending_ids : Array[String] = []
+  for dep_id in upstreams {
+    if unsynced_moonbit.contains(dep_id) {
+      pending_ids.push(dep_id)
+    }
+  }
+  if pending_ids.is_empty() {
+    return false
+  }
+  let max_polls = 6
+  for dep_id in pending_ids {
+    if unsynced_moonbit.get(dep_id) is Some((dep_unit, dep_ver, dep_cwd)) {
+      let dep_mgr = resolve_unit_manager(loaded, dep_unit)
+      let mut poll = 0
+      while poll < max_polls {
+        if poll > 0 {
+          host.sleep_ms(1000 * poll)
+        }
+        match
+          driver_registry_lookup(
+            host,
+            dep_unit,
+            dep_mgr,
+            dep_ver,
+            dep_cwd,
+            None,
+          ) {
+          Present => break
+          Absent | LookupUnknown(_) => poll += 1
+        }
+      }
+    }
+  }
+  driver_refresh_moonbit_registry(host, cwd)
+  for dep_id in pending_ids {
+    ignore(unsynced_moonbit.remove(dep_id))
+  }
+  true
+}
+
+///|
 async fn[H : ExecutionHost] execute_publish_units(
   host : H,
   loaded : @workspace.LoadedWorkspace,
@@ -251,6 +314,9 @@ async fn[H : ExecutionHost] execute_publish_units(
   let max_attempts = if options.retry > 0 { options.retry + 1 } else { 1 }
   let published_unit_ids : Array[String] = []
   let failed_units = preflight.failed_units
+  let unsynced_moonbit : Map[String, (@model.ReleaseUnit, String, String)] = Map([],
+  )
+  let same_batch_published_moonbit : Map[String, Bool] = Map([])
   let mut failed = preflight.failed
   let mut step_idx = 0
   for item in preflight.to_publish {
@@ -268,12 +334,13 @@ async fn[H : ExecutionHost] execute_publish_units(
     let registry = effective_registry.unwrap_or(
       registry_for_ecosystem(unit.ecosystem),
     )
-    let blocked_by = upstream_producers(
+    let upstreams = upstream_producers(
       unit_id,
       ctx.units_map,
       loaded.snapshot.config.bridges(),
       ctx.specs_by_unit,
-    ).filter(p => failed_units.contains(p))
+    )
+    let blocked_by = upstreams.filter(p => failed_units.contains(p))
     if !blocked_by.is_empty() {
       failed = true
       failed_units[unit_id] = true
@@ -301,12 +368,50 @@ async fn[H : ExecutionHost] execute_publish_units(
       step_idx += 1
       continue
     }
+    let has_same_batch_moonbit_upstream = unit.ecosystem == @model.MoonBit &&
+      !ctx.use_command_publisher &&
+      !ctx.unit_api_map.contains(unit_id) &&
+      upstreams.any(p => same_batch_published_moonbit.contains(p))
+    ignore(
+      sync_moonbit_upstream_registry(
+        host, loaded, ctx, unit, cwd, unsynced_moonbit,
+      ),
+    )
     if preflight.deferred_preflight.contains(unit_id) &&
       loaded.snapshot.config.publisher.dry_run_first {
-      let (pf_ok, pf_dup, pf_detail) = preflight_single_unit(
-        host, loaded, options, ctx, unit, version, manager, cwd, registry, effective_registry,
-        unit_tag_override, unit_access, unit_archive,
-      )
+      let max_pf_attempts = if has_same_batch_moonbit_upstream {
+        if max_attempts > 5 {
+          max_attempts
+        } else {
+          5
+        }
+      } else {
+        1
+      }
+      let mut pf_attempt = 0
+      let mut pf_ok = false
+      let mut pf_dup = false
+      let mut pf_detail = ""
+      while pf_attempt < max_pf_attempts {
+        if pf_attempt > 0 {
+          host.sleep_ms(2000 * pf_attempt)
+          driver_refresh_moonbit_registry(host, cwd)
+        }
+        let (ok_i, dup_i, detail_i) = preflight_single_unit(
+          host, loaded, options, ctx, unit, version, manager, cwd, registry, effective_registry,
+          unit_tag_override, unit_access, unit_archive,
+        )
+        pf_ok = ok_i
+        pf_dup = dup_i
+        pf_detail = detail_i
+        if pf_ok ||
+          pf_dup ||
+          !has_same_batch_moonbit_upstream ||
+          !is_moonbit_registry_propagation_error(pf_detail) {
+          break
+        }
+        pf_attempt += 1
+      }
       if pf_dup {
         published_unit_ids.push(unit_id)
         ctx.status_map[key] = {
@@ -383,13 +488,29 @@ async fn[H : ExecutionHost] execute_publish_units(
       ),
     )
     let mut attempt = 0
+    let mut propagation_retries = 0
+    let max_propagation_retries = if has_same_batch_moonbit_upstream {
+      4
+    } else {
+      0
+    }
     let mut published_ok = false
     let mut external_id : String? = None
     let mut digest : String? = None
     let mut last_error = ""
-    while attempt < max_attempts && !published_ok {
-      if attempt > 0 {
-        host.sleep_ms(500 * attempt)
+    while (
+            attempt < max_attempts ||
+            propagation_retries < max_propagation_retries
+          ) &&
+          !published_ok {
+      if attempt > 0 || propagation_retries > 0 {
+        if propagation_retries > 0 &&
+          is_moonbit_registry_propagation_error(last_error) {
+          host.sleep_ms(2000 * propagation_retries)
+          driver_refresh_moonbit_registry(host, cwd)
+        } else {
+          host.sleep_ms(500 * attempt)
+        }
         match
           query_unit_registry(
             host, loaded, ctx, unit, version, manager, cwd, registry, effective_registry,
@@ -457,10 +578,27 @@ async fn[H : ExecutionHost] execute_publish_units(
             }
           }
       }
-      attempt += 1
+      if !published_ok {
+        if has_same_batch_moonbit_upstream &&
+          is_moonbit_registry_propagation_error(last_error) &&
+          propagation_retries < max_propagation_retries {
+          propagation_retries += 1
+        } else {
+          attempt += 1
+          if attempt >= max_attempts {
+            break
+          }
+        }
+      }
     }
     if published_ok {
       published_unit_ids.push(unit_id)
+      if unit.ecosystem == @model.MoonBit &&
+        !ctx.use_command_publisher &&
+        !ctx.unit_api_map.contains(unit_id) {
+        unsynced_moonbit[unit_id] = (unit, version, cwd)
+        same_batch_published_moonbit[unit_id] = true
+      }
       ctx.status_map[key] = {
         plan_id: ctx.plan_id,
         unit_id,

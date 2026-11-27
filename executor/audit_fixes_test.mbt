@@ -901,3 +901,289 @@ async test "apply_version_plan cleans stale pack artifacts and publish reports d
   assert_true(stale_msg.contains("0.1.2"))
   assert_true(stale_msg.contains("moonset pack"))
 }
+
+///|
+async test "moonbit publish syncs registry index after upstream publish and retries propagation misses" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "moon-sync-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/webstd",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "moonbit:acme/ciallo",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "moonbit:acme/sibling",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let webstd = mk_unit(
+    "moonbit:acme/webstd",
+    "acme/webstd",
+    @model.MoonBit,
+    "moon",
+    "packages/webstd",
+    "packages/webstd/moon.mod",
+    Some("0.1.1"),
+  )
+  let ciallo : @model.ReleaseUnit = {
+    ..mk_unit(
+      "moonbit:acme/ciallo",
+      "acme/ciallo",
+      @model.MoonBit,
+      "moon",
+      "packages/ciallo",
+      "packages/ciallo/moon.mod",
+      Some("0.1.1"),
+    ),
+    dependencies: [
+      {
+        producer: "moonbit:acme/webstd",
+        requirement: "0.1.1",
+        kind: @model.Runtime,
+        path: "packages/ciallo/moon.mod",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let sibling : @model.ReleaseUnit = {
+    ..mk_unit(
+      "moonbit:acme/sibling",
+      "acme/sibling",
+      @model.MoonBit,
+      "moon",
+      "packages/sibling",
+      "packages/sibling/moon.mod",
+      Some("0.1.1"),
+    ),
+    dependencies: [
+      {
+        producer: "moonbit:acme/webstd",
+        requirement: "0.1.1",
+        kind: @model.Runtime,
+        path: "packages/sibling/moon.mod",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let loaded = sample_loaded(units=[webstd, ciallo, sibling])
+  let events : Array[String] = []
+  let mut webstd_published = false
+  let mut webstd_post_publish_polls = 0
+  let mut ciallo_dry_runs = 0
+  let mut update_count = 0
+  host.runner = (program, args, cwd) => {
+    if program == "moon" && args.length() >= 2 && args[0] == "view" {
+      if args[1] == "acme/webstd@0.1.1" && webstd_published {
+        webstd_post_publish_polls += 1
+        events.push("view:webstd#" + webstd_post_publish_polls.to_string())
+        if webstd_post_publish_polls >= 2 {
+          return {
+            exit_code: 0,
+            stdout: "{\"status\":\"success\",\"result\":{\"name\":\"acme/webstd\"}}",
+            stderr: "",
+          }
+        }
+      }
+      return { exit_code: 1, stdout: "", stderr: "404 not found", }
+    }
+    if program == "moon" && args == ["update"] {
+      update_count += 1
+      events.push("moon:update#" + update_count.to_string())
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if program == "moon" && args.contains("publish") {
+      let dir = cwd.unwrap_or("")
+      let who = if dir.has_suffix("webstd") {
+        "webstd"
+      } else if dir.has_suffix("ciallo") {
+        "ciallo"
+      } else {
+        "sibling"
+      }
+      let is_dry = args.contains("--dry-run")
+      if who == "webstd" && !is_dry {
+        webstd_published = true
+      }
+      if who == "ciallo" && is_dry {
+        ciallo_dry_runs += 1
+        events.push("ciallo:preflight#" + ciallo_dry_runs.to_string())
+        if ciallo_dry_runs == 1 {
+          return {
+            exit_code: 1,
+            stdout: "",
+            stderr: "Failed to resolve registry dependency `acme/webstd` for module `acme/ciallo`: module was not found in the registry",
+          }
+        }
+        return { exit_code: 0, stdout: "", stderr: "", }
+      }
+      events.push(who + ":" + (if is_dry { "preflight" } else { "publish" }))
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
+  assert_true(res.complete)
+  // Expected sequence:
+  // 1. webstd preflight + publish
+  // 2. ciallo waits for webstd via moon view (2 polls), runs moon update#1
+  // 3. ciallo preflight#1 hits propagation miss -> moon update#2 -> preflight#2 passes -> ciallo publish
+  // 4. sibling depends only on already-synced webstd -> no redundant moon update!
+  assert_eq(events, [
+    "webstd:preflight", "webstd:publish", "view:webstd#1", "view:webstd#2", "moon:update#1",
+    "ciallo:preflight#1", "moon:update#2", "ciallo:preflight#2", "ciallo:publish",
+    "sibling:preflight", "sibling:publish",
+  ])
+  assert_eq(update_count, 2)
+}
+
+///|
+async test "moonbit publish with dryRunFirst=false still refreshes index and retries propagation misses" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "moon-sync-nodry-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "moonbit:acme/webstd",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "moonbit:acme/ciallo",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let webstd = mk_unit(
+    "moonbit:acme/webstd",
+    "acme/webstd",
+    @model.MoonBit,
+    "moon",
+    "packages/webstd",
+    "packages/webstd/moon.mod",
+    Some("0.1.1"),
+  )
+  let ciallo : @model.ReleaseUnit = {
+    ..mk_unit(
+      "moonbit:acme/ciallo",
+      "acme/ciallo",
+      @model.MoonBit,
+      "moon",
+      "packages/ciallo",
+      "packages/ciallo/moon.mod",
+      Some("0.1.1"),
+    ),
+    dependencies: [
+      {
+        producer: "moonbit:acme/webstd",
+        requirement: "0.1.1",
+        kind: @model.Runtime,
+        path: "packages/ciallo/moon.mod",
+        start: 0,
+        end: 0,
+        target_condition: None,
+      },
+    ],
+  }
+  let loaded = sample_loaded(
+    config_json="{\"publisher\":{\"dryRunFirst\":false}}",
+    units=[webstd, ciallo],
+  )
+  let events : Array[String] = []
+  let mut webstd_published = false
+  let mut ciallo_publishes = 0
+  let mut updates = 0
+  host.runner = (program, args, cwd) => {
+    if program == "moon" && args.length() >= 2 && args[0] == "view" {
+      if args[1] == "acme/webstd@0.1.1" && webstd_published {
+        return {
+          exit_code: 0,
+          stdout: "{\"status\":\"success\",\"result\":{\"name\":\"acme/webstd\"}}",
+          stderr: "",
+        }
+      }
+      return { exit_code: 1, stdout: "", stderr: "404 not found", }
+    }
+    if program == "moon" && args == ["update"] {
+      updates += 1
+      events.push("moon:update#" + updates.to_string())
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if program == "moon" && args == ["publish"] {
+      if cwd.unwrap_or("").has_suffix("webstd") {
+        webstd_published = true
+        events.push("webstd:publish")
+        return { exit_code: 0, stdout: "", stderr: "", }
+      }
+      ciallo_publishes += 1
+      events.push("ciallo:publish#" + ciallo_publishes.to_string())
+      if ciallo_publishes == 1 {
+        return {
+          exit_code: 1,
+          stdout: "",
+          stderr: "Error: Failed to resolve registry dependency `acme/webstd` for module `acme/ciallo`: module was not found in the registry",
+        }
+      }
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
+  assert_true(res.complete)
+  assert_eq(events, [
+    "webstd:publish", "moon:update#1", "ciallo:publish#1", "moon:update#2", "ciallo:publish#2",
+  ])
+}

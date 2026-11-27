@@ -565,6 +565,23 @@ async fn[H : ExecutionHost] npm_effective_cwd(
 }
 
 ///|
+fn is_moonbit_registry_propagation_error(detail : String) -> Bool {
+  let lower = detail.to_lower()
+  lower.contains("not found in the registry") ||
+  lower.contains("failed to resolve registry dependency") ||
+  lower.contains("no matching version") ||
+  lower.contains("you may need to run `moon update`")
+}
+
+///|
+async fn[H : ExecutionHost] driver_refresh_moonbit_registry(
+  host : H,
+  cwd : String,
+) -> Unit {
+  ignore(host.run("moon", ["update"], Some(cwd)))
+}
+
+///|
 /// Execute ecosystem registry preflight (`--dry-run`) and return `(ok, already_published, detail)`.
 async fn[H : ExecutionHost] driver_preflight(
   host : H,

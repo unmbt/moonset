@@ -454,7 +454,33 @@ runs:
           if [ -n "$PUBLISH_COMMAND" ]; then
             (cd "$WORK_DIR" && bash -c "$PUBLISH_COMMAND")
           else
-            "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json "${extra_publish_args[@]}" > "$tmp_dir/publish.json"
+            publish_rc=0
+            "$MOONSET_BIN" --cwd "$WORK_DIR" publish --yes --no-tag --json "${extra_publish_args[@]}" > "$tmp_dir/publish.json" || publish_rc=$?
+            if [ "$publish_rc" -ne 0 ]; then
+              if [ -s "$tmp_dir/publish.json" ]; then
+                echo "::group::moonset publish failure details" >&2
+                failed_summary="$(jq -r 'if (.statuses | type) == "array" then (.statuses[] | select(.state == "failed" or .state == "blocked" or .state == "unknown") | "[\(.state)] \(.unitId)@\(.version): \(.message // "no details")") elif .error? then "[\(.error.code // "error")] \(.error.message // "publish failed")" else empty end' "$tmp_dir/publish.json" 2>/dev/null || true)"
+                if [ -n "$failed_summary" ]; then
+                  printf '%s\n' "$failed_summary" >&2
+                else
+                  cat "$tmp_dir/publish.json" >&2
+                fi
+                echo "::endgroup::" >&2
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  failed_rows="$(jq -r 'if (.statuses | type) == "array" then (.statuses[] | select(.state == "failed" or .state == "blocked" or .state == "unknown") | "| `\(.unitId)` | `\(.version)` | `\(.state)` | \((.message // "") | gsub("[\r\n]+"; " ") | gsub("\\|"; "\\|") | .[0:300]) |") else empty end' "$tmp_dir/publish.json" 2>/dev/null || true)"
+                  if [ -n "$failed_rows" ]; then
+                    {
+                      echo "#### Failed / Blocked Publish Targets"
+                      echo ""
+                      echo "| Unit | Version | State | Message |"
+                      echo "|---|---|---|---|"
+                      printf '%s\n' "$failed_rows"
+                    } >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                fi
+              fi
+              exit "$publish_rc"
+            fi
           fi
           published_pkgs_json="[]"
           if [ -s "$tmp_dir/changesets-output.json" ]; then
