@@ -128,11 +128,11 @@ async fn[H : ExecutionHost] driver_registry_lookup(
       }
     }
     @model.Cargo => {
-      let args = ["info", name + "@" + version]
-      if registry_override is Some(reg) {
-        args.push("--registry")
-        args.push(reg)
+      let registry_name = match registry_override {
+        Some(reg) if reg.trim() != "" => reg.trim().to_owned()
+        _ => "crates-io"
       }
+      let args = ["info", name + "@" + version, "--registry", registry_name]
       let output = host.run("cargo", args, Some(cwd))
       if output.exit_code == 0 {
         return Present

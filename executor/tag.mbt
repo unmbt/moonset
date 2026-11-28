@@ -309,22 +309,38 @@ pub async fn[H : ExecutionHost] create_tags_with(
         Map([])
       }
     }
+    let to_push : Array[String] = []
     for name in names {
       if !options.force && remote_tags.contains(name) {
         continue
       }
-      let push_args = if options.force {
-        ["push", "-f", "origin", "refs/tags/" + name]
+      to_push.push(name)
+    }
+    if !to_push.is_empty() {
+      let push_args : Array[String] = if options.force {
+        ["push", "-f", "origin"]
       } else {
-        ["push", "origin", "refs/tags/" + name]
+        ["push", "origin"]
       }
-      let push_res = host.run("git", push_args, Some(loaded.snapshot.root))
+      for name in to_push {
+        push_args.push("refs/tags/" + name)
+      }
+      let mut push_res = host.run("git", push_args, Some(loaded.snapshot.root))
+      if push_res.exit_code != 0 {
+        host.sleep_ms(1000)
+        push_res = host.run("git", push_args, Some(loaded.snapshot.root))
+      }
       if push_res.exit_code != 0 {
         raise @model.Io(
-          "Failed pushing tag " + name + ": " + process_failure_detail(push_res),
+          "Failed pushing tags (" +
+          to_push.join(", ") +
+          "): " +
+          process_failure_detail(push_res),
         )
       }
-      pushed.push(name)
+      for name in to_push {
+        pushed.push(name)
+      }
     }
   }
   { head, tags: names, created, skipped, pushed, dry_run: false, }

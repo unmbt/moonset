@@ -1187,3 +1187,216 @@ async test "moonbit publish with dryRunFirst=false still refreshes index and ret
     "webstd:publish", "moon:update#1", "ciallo:publish#1", "moon:update#2", "ciallo:publish#2",
   ])
 }
+
+///|
+async test "cargo registry lookup always passes --registry crates-io to avoid matching local workspace crates" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "cargo-reg-lookup-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "cargo:acme-core",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let crate_unit = mk_unit(
+    "cargo:acme-core",
+    "acme-core",
+    @model.Cargo,
+    "rs",
+    "crates/core",
+    "crates/core/Cargo.toml",
+    Some("0.1.1"),
+  )
+  let base_loaded = sample_loaded(units=[crate_unit])
+  let loaded : @workspace.LoadedWorkspace = {
+    ..base_loaded,
+    snapshot: {
+      ..base_loaded.snapshot,
+      workspaces: [
+        { id: "rs", root: "", ecosystem: @model.Cargo, manager: @model.Cargo, },
+      ],
+    },
+  }
+  let info_calls : Array[Array[String]] = []
+  let mut published_called = false
+  host.runner = (program, args, _cwd) => {
+    if program == "cargo" && args.length() > 0 && args[0] == "info" {
+      info_calls.push(args)
+      // Simulate real Cargo behavior: without `--registry`, `cargo info` resolves the local workspace crate!
+      if !args.contains("--registry") {
+        return {
+          exit_code: 0,
+          stdout: "acme-core 0.1.1 (local)\n",
+          stderr: "",
+        }
+      }
+      return {
+        exit_code: 101,
+        stdout: "",
+        stderr: "error: could not find `acme-core@0.1.1` in registry `crates-io`",
+      }
+    }
+    if program == "cargo" && args == ["publish", "--allow-dirty"] {
+      published_called = true
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let res = @executor.publish_release_with(
+    host,
+    loaded,
+    @executor.PublishOptions::new(yes=true, no_tag=true),
+  )
+  assert_true(res.complete)
+  assert_true(published_called)
+  assert_eq(info_calls, [["info", "acme-core@0.1.1", "--registry", "crates-io"]])
+}
+
+///|
+async test "create_tags batches multiple tag pushes into one git push and retries once on transient failure" {
+  let host = fake_host()
+  host.files["/repo/.moonset/release-state.json"] = @utf8.encode(
+    (
+      {
+        "planFingerprint": "tag-batch-push-1",
+        "sourceHead": Json::null(),
+        "releases": [
+          {
+            "unitId": "npm:@acme/sdk",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.2.0",
+            "level": "minor",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "cargo:acme-core",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+          {
+            "unitId": "moonbit:acme/core",
+            "oldVersion": "0.1.0",
+            "newVersion": "0.1.1",
+            "level": "patch",
+            "reasons": [],
+            "changesets": [],
+            "publish": true,
+          },
+        ],
+        "tags": [
+          {
+            "name": "npm/@acme/sdk@0.2.0",
+            "unitId": "npm:@acme/sdk",
+            "version": "0.2.0",
+          },
+          {
+            "name": "cargo/acme-core@0.1.1",
+            "unitId": "cargo:acme-core",
+            "version": "0.1.1",
+          },
+          {
+            "name": "moon/acme/core@0.1.1",
+            "unitId": "moonbit:acme/core",
+            "version": "0.1.1",
+          },
+        ],
+        "consumedChangesets": [],
+      } : Json).stringify(),
+  )
+  let loaded = sample_loaded(units=[
+    mk_unit(
+      "npm:@acme/sdk",
+      "@acme/sdk",
+      @model.Npm,
+      "js",
+      "packages/sdk",
+      "packages/sdk/package.json",
+      Some("0.2.0"),
+    ),
+    mk_unit(
+      "cargo:acme-core",
+      "acme-core",
+      @model.Cargo,
+      "rs",
+      "crates/core",
+      "crates/core/Cargo.toml",
+      Some("0.1.1"),
+    ),
+    mk_unit(
+      "moonbit:acme/core",
+      "acme/core",
+      @model.MoonBit,
+      "moon",
+      "",
+      "moon.mod",
+      Some("0.1.1"),
+    ),
+  ])
+  let push_calls : Array[Array[String]] = []
+  let mut push_attempts = 0
+  host.runner = (_program, args, _cwd) => {
+    if args == ["rev-parse", "HEAD"] {
+      return { exit_code: 0, stdout: "release-sha\n", stderr: "", }
+    }
+    if args == ["status", "--porcelain"] {
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    if args.length() >= 2 && args[0] == "rev-parse" && args[1] == "--verify" {
+      return { exit_code: 1, stdout: "", stderr: "not found", }
+    }
+    if args == ["ls-remote", "--tags", "origin"] {
+      // Simulate first tag already on remote; only remaining two should be batch-pushed
+      return {
+        exit_code: 0,
+        stdout: "release-sha\trefs/tags/npm/@acme/sdk@0.2.0\n",
+        stderr: "",
+      }
+    }
+    if args.length() > 0 && args[0] == "push" {
+      push_attempts += 1
+      push_calls.push(args)
+      if push_attempts == 1 {
+        return {
+          exit_code: 1,
+          stdout: "",
+          stderr: "! [remote rejected] cargo/acme-core@0.1.1 (failed)",
+        }
+      }
+      return { exit_code: 0, stdout: "", stderr: "", }
+    }
+    { exit_code: 0, stdout: "", stderr: "", }
+  }
+  let res = @executor.create_tags_with(
+    host,
+    loaded,
+    @executor.TagOptions::new(push=true),
+  )
+  assert_eq(res.pushed, ["cargo/acme-core@0.1.1", "moon/acme/core@0.1.1"])
+  assert_eq(push_calls, [
+    [
+      "push", "origin", "refs/tags/cargo/acme-core@0.1.1", "refs/tags/moon/acme/core@0.1.1",
+    ],
+    [
+      "push", "origin", "refs/tags/cargo/acme-core@0.1.1", "refs/tags/moon/acme/core@0.1.1",
+    ],
+  ])
+}
