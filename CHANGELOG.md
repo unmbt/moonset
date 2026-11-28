@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 - 2026-11-28
+
+### Patch Changes
+
+- [`0a4dc59`](https://github.com/unmbt/moonset/commit/0a4dc593a1de848ca57ab34c6ad65402a6d0fb4c) Thanks [@Wyatex](https://github.com/Wyatex)! - Fix Cargo registry lookup matching local workspace crates by always passing --registry crates-io, and batch multi-tag git push with a transient retry.
+
 ## 0.4.0 - 2026-11-27
 
 ### Minor Changes
